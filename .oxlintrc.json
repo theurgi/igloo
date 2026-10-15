@@ -1,0 +1,60 @@
+{
+  "$schema": "./node_modules/@effect/tsgo/oxlint-schema.json",
+  "extends": ["./node_modules/@effect/tsgo/oxlint-presets/recommended.json"],
+  "plugins": ["typescript", "unicorn", "oxc", "import", "vitest", "promise", "node"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn"
+  },
+  "rules": {
+    "no-unused-vars": ["error", { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }],
+    "typescript/consistent-type-definitions": ["error", "interface"],
+    "typescript/no-confusing-void-expression": "off",
+    "typescript/consistent-return": "off",
+    "typescript/restrict-template-expressions": "off",
+    "require-yield": "off",
+    "effecttsgo/node-builtin-import": "off",
+    // `_tag` is Effect's discriminant, on every tagged error, Result and Option
+    // this code matches on. Any other leading underscore is still flagged.
+    "no-underscore-dangle": ["warn", { "allow": ["_tag"] }]
+  },
+  "overrides": [
+    {
+      "files": ["**/*.test.ts"],
+      "rules": {
+        "effecttsgo/strict-effect-provide": "off",
+        "typescript/no-explicit-any": "off",
+        "typescript/no-non-null-assertion": "off",
+        "typescript/no-unsafe-argument": "off",
+        "typescript/no-unsafe-assignment": "off",
+        "typescript/no-unsafe-call": "off",
+        "typescript/no-unsafe-member-access": "off",
+        "typescript/no-unsafe-return": "off",
+        // Tests start real units and processes, so they read the real PATH,
+        // HOME and XDG_RUNTIME_DIR as fixtures. Outside tests both rules stand,
+        // and `index.ts` is the only reader of the environment.
+        "effecttsgo/process-env": "off",
+        "effecttsgo/process-env-in-effect": "off",
+        // A helper beside the tests that use it reads better than one hoisted
+        // to the top of the file, and a `describe` body runs once.
+        "unicorn/consistent-function-scoping": "off"
+      }
+    },
+    {
+      // The broker is a standalone program that imports nothing, Effect
+      // included (see its header comment), so Effect's idioms do not apply to
+      // it, or to its tests, which drive it the same way.
+      "files": ["src/broker.ts", "src/broker.test.ts"],
+      "rules": {
+        "effecttsgo/async-function": "off",
+        "effecttsgo/global-console": "off",
+        "effecttsgo/global-date": "off",
+        "effecttsgo/global-fetch": "off",
+        "effecttsgo/global-timers": "off",
+        "effecttsgo/new-promise": "off",
+        "effecttsgo/process-env": "off"
+      }
+    }
+  ],
+  "ignorePatterns": ["dist", "node_modules"]
+}

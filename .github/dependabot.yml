@@ -1,0 +1,9 @@
+version: 2
+updates:
+  # Actions only. bun.lock and flake.lock are bumped by hand: effect,
+  # @effect/platform-bun and @effect/vitest move together, which Dependabot
+  # does not do.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

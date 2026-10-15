@@ -1,0 +1,25 @@
+name: Bug report
+description: Something igloo does that it shouldn't, or doesn't do that it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A guest reaching something its policy doesn't grant, or a credential showing up where it shouldn't, is a vulnerability. Report it [privately](https://github.com/theurgi/igloo/security/advisories/new), not here.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you ran, what it printed, and what you expected instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: report
+    attributes:
+      label: igloo report
+      description: |
+        Run `igloo report` in the project where it happened, and paste what it prints. For a launch before the latest, give it the boot id or the directory the error printed. It replaces what identifies you and your machine, but read it before you post: what it can't recognise is left as your guest printed it.
+    validations:
+      required: true

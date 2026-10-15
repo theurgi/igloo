@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    # The tests start transient units under a systemd user manager, and those
+    # units ask for PrivatePIDs=, which systemd has had since 257. Ubuntu 24.04
+    # has 255.
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+      # A runner has no login session, so nothing starts the user manager the
+      # tests' units run under. Lingering does. Ubuntu's AppArmor otherwise
+      # leaves an unprivileged user namespace without the capabilities a unit's
+      # PrivateUsers= and mount namespace need.
+      - name: Start a user manager
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          sudo loginctl enable-linger "$USER"
+          runtime=/run/user/$(id -u)
+          for _ in $(seq 50); do
+            [ -S "$runtime/systemd/private" ] && break
+            sleep 0.2
+          done
+          XDG_RUNTIME_DIR=$runtime systemctl --user show-environment >/dev/null
+          echo "XDG_RUNTIME_DIR=$runtime" >>"$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: nix develop --command bun install --frozen-lockfile
+      - name: nixfmt
+        run: nix fmt -- --ci
+      - name: shellcheck
+        run: nix develop --command shellcheck scripts/*.sh bin/igloo
+      - name: bun run check
+        run: nix develop --command bun run check
+
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+      # The checks build every package. testVm is a mkRunner call, so building
+      # it runs the pin comparison and checkBootFile, and the rest are testVm
+      # with a content module that has to be refused or change nothing.
+      # Building the CLI fetches its dependencies, which fails on a cliDeps
+      # outputHash that no longer matches bun.lock.
+      - name: nix flake check
+        run: nix flake check --print-build-logs

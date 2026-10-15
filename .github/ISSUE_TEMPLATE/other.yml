@@ -1,0 +1,9 @@
+name: Something else
+description: An idea, a question, or anything else that isn't a bug.
+body:
+  - type: textarea
+    id: details
+    attributes:
+      label: What it's about
+    validations:
+      required: true

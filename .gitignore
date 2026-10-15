@@ -1,0 +1,15 @@
+node_modules
+.bun
+dist
+*.log
+
+*.tsbuildinfo
+
+.direnv
+.envrc.local
+
+.DS_Store
+
+# nix build output links
+/result
+/result-*
