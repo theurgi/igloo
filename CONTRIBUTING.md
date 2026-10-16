@@ -45,7 +45,8 @@ This runs four steps in turn, and stops at the first that fails:
 - `lint`: oxlint, type-aware, with Effect's rules from `@effect/tsgo`, denying warnings. Run lint as
   `bun run lint`, which uses the patched copy in `node_modules`.
 - `typecheck`: `tsc --noEmit`, TypeScript 7 with Effect's language service.
-- `test`: vitest, over `src/**/*.test.ts`.
+- `test`: vitest, over `src/**/*.test.ts`. It runs on Bun even where `node` is on `PATH`, as
+  `bunfig.toml` sets, since the tests use Bun's own APIs.
 
 Lint denies warnings, so a new one fails the gate. Fix it in the code. Where a rule is wrong for
 this code, configure it in `.oxlintrc.json`, with a comment giving the reason. Where it is wrong for

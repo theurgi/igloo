@@ -1,0 +1,5 @@
+# Every `bun run` script runs on Bun, even where a `node` is on PATH. vitest's
+# entry point asks for node by its shebang, which Bun otherwise honours, and the
+# tests reach Bun's own APIs (`Bun`, `bun:ffi`), which node does not have.
+[run]
+bun = true
