@@ -1807,6 +1807,11 @@ EOF
 				echo
 				echo "=== a repository the grant does not name"
 				guest 'GIT_TERMINAL_PROMPT=0 git ls-remote https://github.com/torvalds/linux 2>&1 | head -5'
+				echo
+				# Copied here because the boot record was kept before any of the
+				# above ran.
+				echo "=== the tunnel's hand-offs to the broker, from its log"
+				grep '"answered":true' "$(boot_log broker.log)"
 			} >"$out/artifacts/github-git.txt" 2>&1
 
 			# Read from the guest rather than from the attribute set mkRunner
@@ -1820,10 +1825,10 @@ EOF
 
 			# The tunnel joined each connection to github.com to the broker's own
 			# TLS listener rather than to GitHub.
-			if grep -q '"answered":true,"event":"tunnel-open","id":[0-9]*,"target":"github.com:443"' "$(boot_log broker.log)"; then
+			if grep -q '"answered":true,"event":"tunnel-open","id":[0-9]*,"target":"github.com:443"' "$out/artifacts/github-git.txt"; then
 				verdict PASS github-git-answered "the guest's connections to github.com reached the broker's own TLS listener, not GitHub"
 			else
-				verdict FAIL github-git-answered "no connection to github.com was answered by the broker — read logs/up-broker/broker.log"
+				verdict FAIL github-git-answered "no connection to github.com was answered by the broker — read artifacts/github-git.txt"
 			fi
 
 			# What the project keeps for that listener: the authority the guest
@@ -2141,12 +2146,16 @@ EOF
 						echo
 						echo "=== and the guest still has no credential store of its own"
 						guest 'ls /run/credentials/@system/ 2>&1'
+						echo
+						# Copied for the reason the github-git section gives.
+						echo "=== the fetches the broker allowed, from its log"
+						grep '"event":"allow".*"operation":"fetch"' "$(boot_log broker.log)"
 					} >"$out/artifacts/github-git-clone.txt" 2>&1
 
 					# Through the broker, by its own log: the remote reads as the
 					# repository's URL either way.
 					if grep -qE '^[0-9a-f]{40}$' "$out/artifacts/github-git-clone.txt" &&
-						grep -q '"event":"allow","host":"github.com","id":[0-9]*,"operation":"fetch"' "$(boot_log broker.log)"; then
+						grep -q '"event":"allow","host":"github.com","id":[0-9]*,"operation":"fetch"' "$out/artifacts/github-git-clone.txt"; then
 						verdict PASS github-git-clone "a real token fetches a real repository, through the broker rather than past it"
 					else
 						verdict FAIL github-git-clone "the clone did not complete — read artifacts/github-git-clone.txt"
