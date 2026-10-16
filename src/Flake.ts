@@ -36,6 +36,11 @@ export interface RunnerSpec {
   /** Directory holding igloo's own `flake.nix`, taken as a `path:` input. */
   readonly iglooFlakePath: string
   /**
+   * The certificate authority the guest trusts for the names the broker
+   * answers, as PEM, or `undefined` for a VM whose broker answers none.
+   */
+  readonly brokerAuthority: string | undefined
+  /**
    * Environment the guest needs in order to reach the broker's inference
    * profiles — a base URL per provider, and a placeholder where each provider's
    * client expects a key. Empty for a VM with no such grant.
@@ -73,15 +78,10 @@ export interface RunnerSpec {
    */
   readonly contentModules: readonly string[]
   /**
-   * The hosts whose git URLs the guest rewrites to the broker's loopback port,
-   * or `undefined` for a VM with no git grant.
-   *
-   * The port is carried rather than agreed: the host opens the tether on it, so
-   * the host is what knows it, and a guest configured against a different number
-   * would fail as a connection refused inside the VM — a long way from the
-   * decision that set it.
+   * The hosts the broker answers git for, whose SSH remotes the guest rewrites
+   * to HTTPS, or `undefined` for a VM with no git grant.
    */
-  readonly gitBroker: { readonly hosts: readonly string[]; readonly port: number } | undefined
+  readonly gitBroker: { readonly hosts: readonly string[] } | undefined
   readonly hostName: string
   readonly mem: number
   /** The store share is added by `mkRunner` and must not appear here. */
@@ -178,9 +178,10 @@ const renderBrokerFiles = (files: readonly BrokerFile[]): string =>
 const renderGitBroker = (gitBroker: RunnerSpec['gitBroker']): string =>
   gitBroker === undefined
     ? 'null;'
-    : `{ hosts = [ ${gitBroker.hosts
-        .map(host => `"${nixString(host)}"`)
-        .join(' ')} ]; port = ${String(gitBroker.port)}; };`
+    : `{ hosts = [ ${gitBroker.hosts.map(host => `"${nixString(host)}"`).join(' ')} ]; };`
+
+const renderAuthority = (authority: string | undefined): string =>
+  authority === undefined ? 'null;' : `"${nixString(authority)}";`
 
 const renderContent = (modules: readonly string[]): string =>
   modules.length === 0
@@ -204,6 +205,7 @@ export const render = (spec: RunnerSpec): string =>
     { igloo, ... }:
     {
       packages.x86_64-linux.default = igloo.lib.mkRunner {
+        brokerAuthority = ${renderAuthority(spec.brokerAuthority)}
         brokerEnv = ${renderBrokerEnv(spec.brokerEnv)}
         brokerEtc = ${renderBrokerEtc(spec.brokerEtc)}
         brokerFiles = ${renderBrokerFiles(spec.brokerFiles)}

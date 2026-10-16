@@ -1572,6 +1572,7 @@ EOF
 		hidden=(
 			"QEMU's control socket" "$broker_runtime/control.socket"
 			'the staged credential' "$broker_runtime/broker-credentials/IGLOO_VERIFY_BROKERED"
+			'the TLS key where the project keeps it' "$project/.igloo/tls/key.pem"
 		)
 		for when in before after; do
 			hidden+=(
@@ -1586,6 +1587,7 @@ EOF
 			broker_pid=$(systemctl --user show -P MainPID "$broker_unit")
 			confinement "$broker_pid" \
 				'its credential' "$(credentials_of "$broker_pid")/IGLOO_VERIFY_BROKERED" \
+				'its TLS key' "$(credentials_of "$broker_pid")/broker.tls-key" \
 				'its socket' "$broker_runtime-broker/http.sock" \
 				'the home directory' "$HOME" \
 				"${hidden[@]}"
@@ -1603,14 +1605,15 @@ EOF
 			verdict FAIL broker-namespaces "read artifacts/broker-confinement.txt for the broker's PID and namespaces"
 		fi
 		expected=$(
-			printf '%s\n' 'its credential present' 'its socket present' 'the home directory absent'
+			printf '%s\n' 'its credential present' 'its TLS key present' 'its socket present' \
+				'the home directory absent'
 			for ((at = 0; at < ${#hidden[@]}; at += 2)); do echo "${hidden[at]} absent"; done
 		)
 		if [ "$(grep -E ' (present|absent)$' "$out/artifacts/broker-confinement.txt")" = "$expected" ] &&
 			[ "$(grep -c '^on the host: ' "$out/artifacts/broker-confinement.txt")" = $((${#hidden[@]} / 2)) ] &&
 			grep -qx 'sockets under /run in its root: 0' "$out/artifacts/broker-confinement.txt" &&
 			! grep -qx 'sockets under /run on the host: 0' "$out/artifacts/broker-confinement.txt"; then
-			verdict PASS broker-paths "the broker holds its credential and its socket, and finds the home directory, QEMU's control socket, the staged credential, two other VMs' credentials and sockets, the session's sockets and every other socket under /run missing, though all are on the host"
+			verdict PASS broker-paths "the broker holds its credential, its TLS key and its socket, and finds the home directory, QEMU's control socket, the staged credential, the project's copy of the TLS key, two other VMs' credentials and sockets, the session's sockets and every other socket under /run missing, though all are on the host"
 		else
 			verdict FAIL broker-paths "read artifacts/broker-confinement.txt for what the broker's root holds"
 		fi
@@ -1796,7 +1799,7 @@ EOF
 				echo "=== the rewrite the guest was given"
 				guest 'git config --list --system 2>&1 | grep -i insteadof'
 				echo
-				echo "=== a granted repository, over the rewritten https URL"
+				echo "=== a granted repository, over its own https URL"
 				guest 'GIT_TERMINAL_PROMPT=0 git ls-remote https://github.com/git/git 2>&1 | head -5'
 				echo
 				echo "=== the same repository written as an SSH remote"
@@ -1809,14 +1812,38 @@ EOF
 			# Read from the guest rather than from the attribute set mkRunner
 			# writes: what git reads is the INI `programs.git.config` renders it
 			# as.
-			if grep -qi 'url.http://127.0.0.1:3128/github.com/.insteadof' "$out/artifacts/github-git.txt"; then
-				verdict PASS guest-git-rewrite "the guest's system git config sends github.com at the broker"
+			if grep -qi 'url.https://github.com/.insteadof=git@github.com:' "$out/artifacts/github-git.txt"; then
+				verdict PASS guest-git-rewrite "the guest's system git config sends GitHub's SSH remotes to the https URL the broker answers"
 			else
 				verdict FAIL guest-git-rewrite "the rewrite is not in the guest's git config — read artifacts/github-git.txt"
 			fi
 
-			# The whole chain in one line: rewrite, tether, grant, credential
-			# injection, TLS to github.com, and the answer relayed back.
+			# The tunnel joined each connection to github.com to the broker's own
+			# TLS listener rather than to GitHub.
+			if grep -q '"answered":true,"event":"tunnel-open","id":[0-9]*,"target":"github.com:443"' "$(boot_log broker.log)"; then
+				verdict PASS github-git-answered "the guest's connections to github.com reached the broker's own TLS listener, not GitHub"
+			else
+				verdict FAIL github-git-answered "no connection to github.com was answered by the broker — read logs/up-broker/broker.log"
+			fi
+
+			# What the project keeps for that listener: the authority the guest
+			# trusts, the certificate and its key, and not the authority's key.
+			{
+				echo "=== .igloo/tls"
+				ls "$project/.igloo/tls"
+				echo "=== modes, of the directory and the key"
+				stat -c '%a' "$project/.igloo/tls" "$project/.igloo/tls/key.pem"
+			} >"$out/artifacts/broker-tls.txt" 2>&1
+			if [ "$(sed -n '2,4p' "$out/artifacts/broker-tls.txt")" = "$(printf '%s\n' authority.pem certificate.pem key.pem)" ] &&
+				[ "$(sed -n '6,7p' "$out/artifacts/broker-tls.txt")" = "$(printf '%s\n' 700 600)" ]; then
+				verdict PASS broker-tls-kept "the project keeps the authority, the certificate and its key, readable by its owner alone, and no key that signs"
+			else
+				verdict FAIL broker-tls-kept "read artifacts/broker-tls.txt"
+			fi
+
+			# The whole chain in one line: tunnel, the broker's TLS listener and
+			# the authority the guest trusts, grant, credential injection, TLS to
+			# github.com, and the answer relayed back.
 			if grep -q "refused IGLOO_VERIFY_BROKERED" "$out/artifacts/github-git.txt"; then
 				verdict PASS github-git-reaches-upstream "a guest clone reaches github.com through the broker, which reports its own credential being refused"
 			else
@@ -2116,8 +2143,10 @@ EOF
 						guest 'ls /run/credentials/@system/ 2>&1'
 					} >"$out/artifacts/github-git-clone.txt" 2>&1
 
+					# Through the broker, by its own log: the remote reads as the
+					# repository's URL either way.
 					if grep -qE '^[0-9a-f]{40}$' "$out/artifacts/github-git-clone.txt" &&
-						grep -q '127.0.0.1:3128' "$out/artifacts/github-git-clone.txt"; then
+						grep -q '"event":"allow","host":"github.com","id":[0-9]*,"operation":"fetch"' "$(boot_log broker.log)"; then
 						verdict PASS github-git-clone "a real token fetches a real repository, through the broker rather than past it"
 					else
 						verdict FAIL github-git-clone "the clone did not complete — read artifacts/github-git-clone.txt"

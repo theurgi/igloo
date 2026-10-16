@@ -10,6 +10,7 @@ import * as path from 'node:path'
 
 import packageJson from '../package.json' with { type: 'json' }
 import * as Binaries from './Binaries.ts'
+import * as Broker from './broker.ts'
 import * as Config from './Config.ts'
 import * as Evaluation from './Evaluation.ts'
 import * as Fallback from './Fallback.ts'
@@ -20,6 +21,7 @@ import * as Preflight from './Preflight.ts'
 import * as Project from './Project.ts'
 import * as Report from './Report.ts'
 import * as Spec from './Spec.ts'
+import * as Tls from './Tls.ts'
 import * as Vm from './Vm.ts'
 
 // The process edge. Everything below takes host facts from here rather than
@@ -167,6 +169,12 @@ const specFor = Effect.fnUntraced(function* (input: { readonly cid: Option.Optio
     userLayerDir,
   })
   const runtime = yield* runtimeDir(project.id)
+  // Made, or found, only for a broker that answers a name: its authority is
+  // built into the runner, so it has to exist before the plan does.
+  const tls =
+    Broker.tlsNames(Spec.grantsOf(config.policy)).length > 0
+      ? yield* Tls.ensure(project.tlsDir, Broker.tlsNamesCovered)
+      : undefined
   const plan = Spec.fromConfig(config, {
     iglooFlakePath,
     cid: project.cid,
@@ -175,6 +183,7 @@ const specFor = Effect.fnUntraced(function* (input: { readonly cid: Option.Optio
     publicKey: key.publicKey,
     root: project.root,
     runtimeDir: runtime,
+    tlsAuthority: tls?.authority,
     userLayerDir,
     workspaceDir: project.workspaceDir,
   })
@@ -223,6 +232,7 @@ const specFor = Effect.fnUntraced(function* (input: { readonly cid: Option.Optio
     broker: plan.broker,
     brokered: plan.brokered,
     brokerMem: config.policy.brokerMem,
+    brokerTls: tls === undefined ? undefined : { certificate: tls.certificate, key: tls.key },
     grants: plan.grants,
     tunnel: config.policy.tunnel,
     cid: project.cid,

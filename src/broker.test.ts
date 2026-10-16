@@ -1,8 +1,9 @@
 import { assert, describe, it, vi } from '@effect/vitest'
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { connect, createServer } from 'node:net'
 import { networkInterfaces, tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { connect as connectTls } from 'node:tls'
 
 import * as Broker from './broker.ts'
 
@@ -205,6 +206,91 @@ describe('Broker.decide, on what it refuses', () => {
       ),
       'allow',
     )
+  })
+})
+
+describe('Broker.tlsNames', () => {
+  it('answers each git grant’s host, once, and is covered by the certificate', () => {
+    const twice: readonly Broker.Grant[] = [
+      ...grants,
+      { credential: 'OTHER', profile: 'github-git', repos: ['you/web'] },
+    ]
+    assert.deepStrictEqual(Broker.tlsNames(twice), ['github.com'])
+    for (const name of Broker.tlsNames(twice)) assert.include(Broker.tlsNamesCovered, name)
+  })
+
+  it('answers nothing for a grant that is not a git one', () => {
+    assert.deepStrictEqual(Broker.tlsNames([...inference, ...servers]), [])
+  })
+})
+
+describe('Broker.decideAddressed', () => {
+  const addressed = (url: string, method = 'GET', granted = grants) =>
+    Broker.decideAddressed(granted, method, url)
+
+  it('decides a request addressed to a name it answers as the path form naming it', () => {
+    const decided = addressed('https://github.com/you/api/info/refs?service=git-upload-pack')
+    assert.deepStrictEqual(decided, advertise('/github.com/you/api/info/refs'))
+    assert.strictEqual(decided._tag, 'Git')
+    assert.deepStrictEqual(
+      addressed('https://github.com/you/api.git/git-upload-pack', 'POST'),
+      fetchPack('/github.com/you/api.git/git-upload-pack'),
+    )
+  })
+
+  it('reads one trailing dot, and any case, as the same name', () => {
+    for (const host of ['github.com.', 'GitHub.com']) {
+      assert.strictEqual(
+        outcome(addressed(`https://${host}/you/api/info/refs?service=git-upload-pack`)),
+        'allow',
+        host,
+      )
+    }
+  })
+
+  it('refuses a name no grant is answered at, naming it', () => {
+    const refused = addressed('https://api.github.com/repos/you/api')
+    assert.deepStrictEqual(refused, {
+      _tag: 'Deny',
+      asked: { host: 'api.github.com' },
+      reason: 'api.github.com is not answered here for this VM',
+      status: 421,
+    })
+    for (const granted of [[], inference]) {
+      assert.strictEqual(
+        outcome(
+          addressed('https://github.com/you/api/info/refs?service=git-upload-pack', 'GET', granted),
+        ),
+        421,
+      )
+    }
+  })
+
+  it('keeps every git refusal, a push among them', () => {
+    assert.strictEqual(
+      outcome(addressed('https://github.com/you/api/info/refs?service=git-receive-pack')),
+      403,
+    )
+    assert.strictEqual(
+      outcome(addressed('https://github.com/you/api/git-receive-pack', 'POST')),
+      403,
+    )
+    assert.strictEqual(
+      outcome(addressed('https://github.com/someone/else/info/refs?service=git-upload-pack')),
+      403,
+    )
+    assert.strictEqual(
+      outcome(addressed('https://github.com/you/api%2Fx/info/refs?service=git-upload-pack')),
+      400,
+    )
+  })
+
+  it('cannot reach another grant’s upstream through the path', () => {
+    const decided = addressed('https://github.com/api.anthropic.com/v1/messages', 'POST', [
+      ...grants,
+      ...inference,
+    ])
+    assert.strictEqual(decided._tag, 'Deny')
   })
 })
 
@@ -1666,6 +1752,218 @@ describe('Broker.serveTunnel', () => {
         listener.stop(true)
       }
     }))
+
+  it('joins a name the broker answers to its own listener, whatever the destinations', () =>
+    auditing(audited =>
+      withSocketDir(async dir => {
+        // Stands in for the TLS listener: whatever it is sent, it sends back.
+        const listenerPath = join(dir, 'tls.sock')
+        const echo = Bun.listen({
+          socket: {
+            data(socket, chunk) {
+              socket.write(chunk)
+            },
+          },
+          unix: listenerPath,
+        })
+        const socketPath = join(dir, 'proxy.sock')
+        const listener = Broker.serveTunnel(socketPath, [], Broker.publicDestinations, {
+          names: ['github.com'],
+          socket: listenerPath,
+        })
+        const answered = await dial(socketPath)
+        const other = await dial(socketPath)
+        try {
+          answered.socket.write('CONNECT github.com:443 HTTP/1.1\r\n\r\nhello')
+          for (let attempt = 0; attempt < 40 && !answered.received().endsWith('hello'); attempt++) {
+            await Bun.sleep(25)
+          }
+          assert.strictEqual(
+            answered.received(),
+            'HTTP/1.1 200 Connection Established\r\n\r\nhello',
+          )
+          const opened = audited.find(
+            (event): event is Record<string, unknown> =>
+              typeof event === 'object' &&
+              event !== null &&
+              'event' in event &&
+              event.event === 'tunnel-open',
+          )
+          assert.strictEqual(opened?.['answered'], true)
+          assert.strictEqual(opened?.['target'], 'github.com:443')
+          assert.notProperty(opened, 'address')
+
+          other.socket.write('CONNECT example.com:443 HTTP/1.1\r\n\r\n')
+          for (let attempt = 0; attempt < 40 && other.received() === ''; attempt++) {
+            await Bun.sleep(25)
+          }
+          assert.strictEqual(other.received().split('\r\n')[0], 'HTTP/1.1 403 Forbidden')
+        } finally {
+          answered.socket.end()
+          other.socket.end()
+          listener.stop(true)
+          echo.stop(true)
+        }
+      }),
+    ))
+})
+
+/**
+ * A certificate for github.com and its key, as PEM, made by openssl for this
+ * run: a key kept in the tree is one a secret scanner reports.
+ */
+const tlsIdentity = (dir: string): Broker.TlsIdentity => {
+  const cert = join(dir, 'certificate.pem')
+  const key = join(dir, 'key.pem')
+  const made = Bun.spawnSync(
+    [
+      'openssl',
+      'req',
+      '-x509',
+      '-newkey',
+      'ec',
+      '-pkeyopt',
+      'ec_paramgen_curve:P-256',
+      '-nodes',
+      '-days',
+      '1',
+      '-subj',
+      '/CN=github.com',
+      '-addext',
+      'subjectAltName=DNS:github.com',
+      '-keyout',
+      key,
+      '-out',
+      cert,
+    ],
+    { stderr: 'pipe', stdout: 'ignore' },
+  )
+  if (made.exitCode !== 0) {
+    throw new Error(`openssl exited ${String(made.exitCode)}: ${made.stderr.toString()}`)
+  }
+  return { cert: readFileSync(cert, 'utf8'), key: readFileSync(key, 'utf8') }
+}
+
+/**
+ * What git does to reach a host through the tunnel: CONNECT, then TLS to the
+ * host's name, trusting `ca`, then one request. Answers the whole response, or
+ * the tunnel's refusal.
+ */
+const overTunnel = async (
+  proxy: string,
+  host: string,
+  ca: string,
+  request: string,
+): Promise<string> => {
+  const raw = connect(proxy)
+  await new Promise<void>((resolve, reject) => {
+    raw.once('connect', resolve)
+    raw.once('error', reject)
+  })
+  raw.write(`CONNECT ${host}:443 HTTP/1.1\r\nHost: ${host}:443\r\n\r\n`)
+  const head = await new Promise<string>(resolve => {
+    raw.once('data', (chunk: Buffer) => {
+      resolve(chunk.toString())
+    })
+  })
+  if (!head.startsWith('HTTP/1.1 200 ')) {
+    raw.destroy()
+    return head
+  }
+  const secured = connectTls({ ca, servername: host, socket: raw })
+  await new Promise<void>((resolve, reject) => {
+    secured.once('secureConnect', resolve)
+    secured.once('error', reject)
+  })
+  let response = ''
+  secured.on('data', (chunk: Buffer) => {
+    response += chunk.toString()
+  })
+  const closed = new Promise<void>(resolve => {
+    secured.once('close', () => {
+      resolve()
+    })
+  })
+  secured.write(request)
+  await closed
+  return response
+}
+
+/** A request git would send, addressed to `host`, ending the connection after it. */
+const addressedTo = (host: string, path: string): string =>
+  `GET ${path} HTTP/1.1\r\nHost: ${host}\r\nAuthorization: Basic Z3Vlc3Q6\r\nConnection: close\r\n\r\n`
+
+describe('Broker.serveTls', () => {
+  it('serves a request addressed to a granted host, reached the way git reaches it', () =>
+    auditing(audited =>
+      withSocketDir(async dir => {
+        const identity = tlsIdentity(dir)
+        const sent: Array<{ readonly init: RequestInit; readonly url: string }> = []
+        const send = (url: string, init: RequestInit): Promise<Response> => {
+          sent.push({ init, url })
+          return Promise.resolve(new Response('refs'))
+        }
+        const ids = Broker.requestIds()
+        const tlsPath = join(dir, 'tls.sock')
+        const proxyPath = join(dir, 'proxy.sock')
+        const plain = Broker.serveRequests(join(dir, 'http.sock'), grants, held, send, ids)
+        const server = Broker.serveTls(tlsPath, grants, held, identity, send, ids)
+        const tunnel = Broker.serveTunnel(proxyPath, [], Broker.publicDestinations, {
+          names: ['github.com'],
+          socket: tlsPath,
+        })
+        try {
+          const served = await overTunnel(
+            proxyPath,
+            'github.com',
+            identity.cert,
+            addressedTo('github.com', '/you/api/info/refs?service=git-upload-pack'),
+          )
+          assert.strictEqual(served.split('\r\n')[0], 'HTTP/1.1 200 OK')
+          assert.isTrue(served.endsWith('refs'))
+          assert.strictEqual(
+            sent[0]?.url,
+            'https://github.com/you/api.git/info/refs?service=git-upload-pack',
+          )
+          assert.strictEqual(
+            new Headers(sent[0]?.init.headers).get('Authorization'),
+            `Basic ${btoa('x-access-token:ghp-test')}`,
+          )
+
+          // The name the request is addressed to decides, not the name the
+          // connection was made to.
+          const misdirected = await overTunnel(
+            proxyPath,
+            'github.com',
+            identity.cert,
+            addressedTo('api.github.com', '/repos/you/api'),
+          )
+          assert.match(misdirected.split('\r\n')[0] ?? '', /^HTTP\/1\.1 421 /)
+          assert.strictEqual(sent.length, 1)
+
+          // One count across both listeners, so that an id names one request.
+          await plain.fetch(new Request(refs('you/api')))
+          const numbered = audited
+            .filter(
+              (event): event is Record<string, unknown> =>
+                typeof event === 'object' &&
+                event !== null &&
+                'event' in event &&
+                (event.event === 'allow' || event.event === 'deny'),
+            )
+            .map(event => [event['event'], event['id']])
+          assert.deepStrictEqual(numbered, [
+            ['allow', 1],
+            ['deny', 2],
+            ['allow', 3],
+          ])
+        } finally {
+          tunnel.stop(true)
+          await server.stop(true)
+          await plain.stop(true)
+        }
+      }),
+    ))
 })
 
 /**
@@ -2853,6 +3151,104 @@ describe('Broker, run as a program', () => {
       } finally {
         broker.kill()
       }
+    }))
+
+  it('answers its git grants’ host over TLS through the tunnel, naming neither half of its identity as a credential', () =>
+    withSocketDir(async dir => {
+      const identity = tlsIdentity(dir)
+      const socket = join(dir, 'http.sock')
+      const proxy = join(dir, 'proxy.sock')
+      const tls = join(dir, 'tls.sock')
+      const broker = start(
+        dir,
+        [
+          socket,
+          '--grants',
+          JSON.stringify(grants),
+          '--proxy',
+          proxy,
+          '--tunnel',
+          '[]',
+          '--tls',
+          tls,
+        ],
+        {
+          GITHUB_TOKEN: 'ghp-never-written',
+          [Broker.tlsCertificateCredential]: identity.cert,
+          [Broker.tlsKeyCredential]: identity.key,
+        },
+      )
+      try {
+        for (
+          let attempt = 0;
+          attempt < 100 && ![socket, proxy, tls].every(path => existsSync(path));
+          attempt++
+        ) {
+          await Bun.sleep(50)
+        }
+        const response = await overTunnel(
+          proxy,
+          'github.com',
+          identity.cert,
+          addressedTo('github.com', '/someone/else/info/refs?service=git-upload-pack'),
+        )
+        assert.strictEqual(response.split('\r\n')[0], 'HTTP/1.1 403 Forbidden')
+        assert.include(response, 'not a repository this VM may fetch')
+
+        broker.kill('SIGTERM')
+        assert.strictEqual(await broker.exited, 0)
+        const stdout = await new Response(broker.stdout).text()
+        const output = stdout + (await new Response(broker.stderr).text())
+        const keyBody = identity.key.split('\n')[1] ?? identity.key
+        assert.notInclude(output, keyBody)
+        const events = stdout
+          .trim()
+          .split('\n')
+          .map((line): Record<string, unknown> => JSON.parse(line))
+        const { t: _tlsAt, ...listeningTls } = events.find(e => e['event'] === 'tls-listening')!
+        assert.deepStrictEqual(listeningTls, {
+          event: 'tls-listening',
+          names: ['github.com'],
+          socket: tls,
+        })
+        const listening = events.find(e => e['event'] === 'listening')
+        assert.deepStrictEqual(listening?.['credentials'], ['GITHUB_TOKEN'])
+      } finally {
+        broker.kill()
+      }
+    }))
+
+  it('refuses to answer TLS without its certificate and key, and lends neither to a grant', () =>
+    withSocketDir(async dir => {
+      const identity = tlsIdentity(dir)
+      const socket = join(dir, 'http.sock')
+      const tls = join(dir, 'tls.sock')
+
+      const withoutKey = start(dir, [socket, '--grants', JSON.stringify(grants), '--tls', tls], {
+        GITHUB_TOKEN: 'ghp-test',
+        [Broker.tlsCertificateCredential]: identity.cert,
+      })
+      assert.strictEqual(await withoutKey.exited, 78)
+      assert.include(await new Response(withoutKey.stderr).text(), Broker.tlsKeyCredential)
+
+      const lending = start(
+        dir,
+        [
+          socket,
+          '--grants',
+          JSON.stringify([
+            { credential: Broker.tlsKeyCredential, profile: 'github-git', repos: ['you/api'] },
+          ]),
+        ],
+        {
+          [Broker.tlsCertificateCredential]: identity.cert,
+          [Broker.tlsKeyCredential]: identity.key,
+        },
+      )
+      assert.strictEqual(await lending.exited, 78)
+      assert.include(await new Response(lending.stderr).text(), 'which was not loaded')
+      assert.isFalse(existsSync(socket))
+      assert.isFalse(existsSync(tls))
     }))
 })
 

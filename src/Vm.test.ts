@@ -10,6 +10,7 @@ import { basename, dirname } from 'node:path'
 import * as Binaries from './Binaries.ts'
 import * as BootLog from './BootLog.ts'
 import * as Systemd from './Systemd.ts'
+import * as Tls from './Tls.ts'
 import * as Vm from './Vm.ts'
 
 // A launch narrates itself on stderr for whoever started it. Here that is the
@@ -432,6 +433,7 @@ const specIn = (dir: string, label: string, cid = 42): VmSpec => ({
   broker: false,
   brokered: [],
   brokerMem: undefined,
+  brokerTls: undefined,
   tunnel: [],
   cid,
   credentials: [],
@@ -705,10 +707,23 @@ describe('Vm.brokerArgv', () => {
     ])
   })
 
-  it('starts no tunnel for a VM with nowhere to tunnel to', () => {
-    const argv = Vm.brokerArgv(bins, spec)
+  it('starts no tunnel and no TLS listener for a VM with nowhere to tunnel to and no name to answer', () => {
+    const argv = Vm.brokerArgv(bins, {
+      ...spec,
+      grants: [{ credential: 'ANTHROPIC_KEY', profile: 'anthropic-messages' }],
+    })
     assert.isFalse(argv.includes('--proxy'))
     assert.isFalse(argv.includes('--tunnel'))
+    assert.isFalse(argv.includes('--tls'))
+  })
+
+  it('answers a git grant’s host on a TLS socket of its own, reached through the tunnel', () => {
+    const argv = brokerOf(Vm.brokerArgv(bins, spec))
+    assert.strictEqual(argv[argv.indexOf('--tls') + 1], `${spec.runtimeDir}-broker/tls.sock`)
+    // With nowhere to tunnel to, the tunnel still runs: it is how the guest
+    // reaches the name.
+    assert.strictEqual(argv[argv.indexOf('--proxy') + 1], `${spec.runtimeDir}-broker/proxy.sock`)
+    assert.strictEqual(argv[argv.indexOf('--tunnel') + 1], '[]')
   })
 
   it('gives the tunnel its own socket, beside the broker’s and not instead of it', () => {
@@ -752,6 +767,15 @@ describe('Vm.tetherOptions, with a tunnel', () => {
 
   it('opens both when any name may be reached', () => {
     const args = Vm.tetherOptions({ ...spec, tunnel: 'any' })
+    assert.strictEqual(args.filter(arg => arg === '-R').length, 2)
+  })
+
+  it('opens both for a name the broker answers, with nowhere to tunnel to', () => {
+    const args = Vm.tetherOptions({
+      ...spec,
+      grants: [{ credential: 'GITHUB_TOKEN', profile: 'github-git', repos: ['you/api'] }],
+      tunnel: [],
+    })
     assert.strictEqual(args.filter(arg => arg === '-R').length, 2)
   })
 })
@@ -1345,9 +1369,13 @@ describe('Vm, when the broker is killed', () => {
         )
         const sourceFile = `${dir}/token-source`
         yield* fs.writeFileString(sourceFile, 'sk-the-actual-secret')
+        // A git grant's host is answered over TLS, so the broker is handed a
+        // certificate and its key beside the credential, as `up` hands them.
+        const tls = yield* Tls.ensure(`${dir}/tls`, ['github.com'])
         const spec = {
           ...specIn(dir, 'selftest-killed'),
           broker: true,
+          brokerTls: { certificate: tls.certificate, key: tls.key },
           brokered: [
             {
               cwd: dir,
@@ -1371,6 +1399,10 @@ describe('Vm, when the broker is killed', () => {
           restarts: 0,
           state: 'running',
         })
+        assert.isTrue(
+          yield* fs.exists(`${runtimeDir}-broker/tls.sock`),
+          'the broker answers no name over TLS',
+        )
 
         // Killed once: its unit starts it again where the last one left its
         // sockets, and it answers on the socket the tether forwards to.

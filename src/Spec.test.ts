@@ -12,6 +12,7 @@ const facts: Spec.Facts = {
   publicKey: 'ssh-ed25519 AAAA igloo',
   root: '/home/you/api',
   runtimeDir: '/run/user/1000/igloo/api-4d2',
+  tlsAuthority: '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n',
   userLayerDir: '/store/user-layer',
   workspaceDir: '/home/you/api/workspace',
 }
@@ -88,32 +89,49 @@ describe('Spec.fromConfig, on the rest of what it decides', () => {
     assert.strictEqual(cwd('user', { ...facts, userLayerDir: undefined }), '/')
   })
 
+  const gitGrant = (repos: readonly string[], name: string) =>
+    ({
+      grant: { profile: 'github-git', repos },
+      layer: 'project',
+      mode: 'broker',
+      name,
+      source: file(`/${name}`),
+    }) as const
+  const inferenceGrant = {
+    grant: { profile: 'anthropic-messages' },
+    layer: 'project',
+    mode: 'broker',
+    name: 'ANTHROPIC_KEY',
+    source: file('/key'),
+  } as const
+
   it('points git at the broker once per upstream, and not at all without a git grant', () => {
-    const broker = (repos: readonly string[], name: string) =>
-      ({
-        grant: { profile: 'github-git', repos },
-        layer: 'project',
-        mode: 'broker',
-        name,
-        source: file(`/${name}`),
-      }) as const
     assert.deepStrictEqual(
-      planFor({ secrets: [broker(['you/api'], 'ONE'), broker(['you/web'], 'TWO')] }).runner
+      planFor({ secrets: [gitGrant(['you/api'], 'ONE'), gitGrant(['you/web'], 'TWO')] }).runner
         .gitBroker,
-      { hosts: ['github.com'], port: 3128 },
+      { hosts: ['github.com'] },
     )
-    const inference = planFor({
-      secrets: [
-        {
-          grant: { profile: 'anthropic-messages' },
-          layer: 'project',
-          mode: 'broker',
-          name: 'ANTHROPIC_KEY',
-          source: file('/key'),
-        },
-      ],
-    })
-    assert.isUndefined(inference.runner.gitBroker)
+    assert.isUndefined(planFor({ secrets: [inferenceGrant] }).runner.gitBroker)
+  })
+
+  it('has the guest trust the broker’s authority only when the broker answers a name', () => {
+    const git = planFor({ secrets: [gitGrant(['you/api'], 'ONE')] }).runner
+    assert.strictEqual(git.brokerAuthority, facts.tlsAuthority)
+    assert.strictEqual(git.brokerEnv['NODE_EXTRA_CA_CERTS'], '/etc/ssl/certs/ca-certificates.crt')
+    for (const runner of [
+      planFor({ secrets: [inferenceGrant] }).runner,
+      planFor({ tunnel: 'any' }).runner,
+    ]) {
+      assert.isUndefined(runner.brokerAuthority)
+      assert.notProperty(runner.brokerEnv, 'NODE_EXTRA_CA_CERTS')
+    }
+  })
+
+  it('sets the proxy variables for a name the broker answers, with nowhere to tunnel to', () => {
+    const environment = planFor({ secrets: [gitGrant(['you/api'], 'ONE')], tunnel: [] }).runner
+      .brokerEnv
+    assert.strictEqual(environment['HTTPS_PROXY'], 'http://127.0.0.1:3129')
+    assert.notProperty(planFor({ secrets: [inferenceGrant] }).runner.brokerEnv, 'HTTPS_PROXY')
   })
 
   it('gives a VM a broker for a brokered credential or a tunnel, and none for neither', () => {

@@ -5,12 +5,12 @@ _mode_ that decides where the value goes.
 
 ## Broker or deliver
 
-|                       | `mode = "broker"`                                    | `mode = "deliver"`                                      |
-| --------------------- | ---------------------------------------------------- | ------------------------------------------------------- |
-| Where the value is    | On the host, in the VM's broker process.             | Inside the guest, at `/run/credentials/@system/<name>`. |
-| What the guest gets   | A base URL, or a git rewrite, and a placeholder key. | The value.                                              |
-| What the agent can do | Make the requests its grant allows.                  | Anything, anywhere the network allows.                  |
-| Needs a profile       | Yes.                                                 | No.                                                     |
+|                       | `mode = "broker"`                                                   | `mode = "deliver"`                                      |
+| --------------------- | ------------------------------------------------------------------- | ------------------------------------------------------- |
+| Where the value is    | On the host, in the VM's broker process.                            | Inside the guest, at `/run/credentials/@system/<name>`. |
+| What the guest gets   | A base URL and a placeholder key, or for git an authority to trust. | The value.                                              |
+| What the agent can do | Make the requests its grant allows.                                 | Anything, anywhere the network allows.                  |
+| Needs a profile       | Yes.                                                                | No.                                                     |
 
 **Reach for `broker`.** A brokered credential never enters the guest. The broker makes each request
 on the guest's behalf, building it from the grant: this provider, these repositories. Nothing the
@@ -72,7 +72,8 @@ itself, the launch is refused: a name holds one value.
 
 A credential's name is letters, digits, `_`, `.` and `-`, starting with a letter, digit or
 underscore. It is how messages and the broker's log refer to it, and for a delivered credential it
-is the file name in the guest.
+is the file name in the guest. `broker.tls-certificate` and `broker.tls-key` are refused: the broker
+holds its own TLS certificate and key under them.
 
 ### Fields
 
@@ -183,12 +184,32 @@ reachable there, never where "there" is. The one upstream policy places is a
 - **Operations:** fetching — `git clone`, `git fetch`, `git pull` — from the repositories listed.
   Pushing is refused.
 - **Grant:** `repos`, required: `owner/repo`, with or without `.git`, matched ignoring case.
-- **In the guest:** `git` is installed, and its system configuration sends `https://github.com/`,
-  `git@github.com:` and `ssh://git@github.com/` URLs to the broker at
-  `http://127.0.0.1:3128/github.com/`. An ordinary GitHub URL just works.
+- **In the guest:** `git` is installed. The broker answers `github.com` itself: a connection to it
+  through the [tunnel](network.md#the-tunnel) reaches the broker rather than GitHub, under every
+  network mode and with no `tunnel` entry. So an ordinary GitHub URL just works, and a remote reads
+  as the URL it was cloned from. Its system configuration rewrites `git@github.com:` and
+  `ssh://git@github.com/` URLs to `https://github.com/`.
 
 Scope the token itself to the same repositories, read-only. The grant bounds what the broker will
 ask for, and the token bounds what GitHub will give.
+
+### How the guest reaches GitHub
+
+The broker answers `github.com` over TLS with a certificate of its own, so the guest has to trust
+what issued it. On the first launch with a `github-git` grant, igloo makes a certificate authority
+for the project with `openssl`, and a certificate for `github.com` signed by it. It keeps both in
+`.igloo/tls/`, with the certificate's key, readable only by you. The guest is built trusting that
+authority beside the system's own, and `NODE_EXTRA_CA_CERTS` points Node and Bun at the same list.
+
+- The authority can sign for `github.com` and nothing else: its name constraints say so, and its own
+  key is deleted once it has signed the one certificate. What `.igloo/tls/` holds can answer
+  `github.com` to this project's guest, and sign nothing.
+- Every request the guest makes to `github.com` over HTTPS reaches the broker. Git's fetches for the
+  repositories listed are served; anything else, a release download included, is refused with the
+  reason.
+- `.igloo/tls/` is made again when it no longer covers the names the broker answers, or is within 30
+  days of expiring after ten years. Delete it to have it made again; the next launch rebuilds the
+  guest, since the authority is part of it.
 
 Pushing happens from the host, in a repository the agent has written. Before running `git` there,
 look at `.git/config` and `.git/hooks`: git runs what they name, as you.
@@ -321,7 +342,8 @@ On every brokered request:
   `Accept-Encoding` and `Content-Length`, which the broker sets itself. A model listing sends no
   body, so it carries no `Content-Type` or `Content-Encoding` either. On `github-git`, the broker
   builds the headers and carries over only git's protocol version and request-body encoding, each
-  checked first.
+  checked first. A `github-git` request arrives over TLS and names no host in its path, so the host
+  it was sent to is read instead, and only `github.com` is answered.
 - The response passes back with its status and body. On an inference profile or a model server its
   headers pass too, `retry-after`, rate limits and request ids included, except `Set-Cookie`,
   `WWW-Authenticate`, `Proxy-Authenticate`, `Alt-Svc`, `Content-Length`, `Content-Encoding` and the
@@ -431,4 +453,11 @@ that way, since it never enters the guest.
   carries, so there the guest's own client does the verifying, and a content module can give the
   guest the authority with `security.pki.certificates`.
 - `github-git` fetches from GitHub, and cannot push.
+- With a `github-git` grant, nothing in the guest reaches `github.com` but through the broker, which
+  serves git for the repositories listed: a release download from `github.com`, or a clone of a
+  repository the grant does not list, is refused, under `internet` too.
+- A client that verifies against a list of certificate authorities of its own, rather than the
+  system's, does not trust the broker's, and fails to reach `github.com` from the guest. Node and
+  Bun read `NODE_EXTRA_CA_CERTS`, which the guest sets; point any other at
+  `/etc/ssl/certs/ca-certificates.crt`.
 - A credential's value is read only when the VM boots.

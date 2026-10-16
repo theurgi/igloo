@@ -19,11 +19,14 @@ pkgs.mkShell {
   # units confined to the store, and bun will not start under those
   # units' `MemoryDenyWriteExecute=`. `util-linux` is the tests' too:
   # their probes inside those units run `ipcs` and `dmesg`, which have to
-  # come from the store rather than from whatever the host has.
+  # come from the store rather than from whatever the host has. `openssl`
+  # is the CLI's, which makes the broker's TLS certificate with it, as the
+  # installed package does.
   buildInputs = import ./core-packages.nix pkgs ++ [
     pkgs.bubblewrap
     pkgs.bun
     pkgs.openssh
+    pkgs.openssl
     pkgs.perl
     pkgs.shellcheck
     pkgs.util-linux

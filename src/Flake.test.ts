@@ -10,6 +10,7 @@ const provided = <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem | Scop
 
 const spec: Flake.RunnerSpec = {
   iglooFlakePath: '/home/you/src/igloo-next',
+  brokerAuthority: undefined,
   brokerEnv: {},
   brokerEtc: {},
   brokerFiles: [],
@@ -85,19 +86,22 @@ describe('Flake.render', () => {
     )
   })
 
-  it('names the hosts the guest sends git at, and the port they reach', () => {
-    // The host opens the tether, so the host is what knows the port; a guest
-    // configured against another number fails as a refused connection inside the
-    // VM, a long way from what set it.
-    const text = Flake.render({
-      ...spec,
-      gitBroker: { hosts: ['github.com'], port: 3128 },
-    })
-    assert.include(text, 'gitBroker = { hosts = [ "github.com" ]; port = 3128; };')
+  it('names the hosts the broker answers git for', () => {
+    const text = Flake.render({ ...spec, gitBroker: { hosts: ['github.com'] } })
+    assert.include(text, 'gitBroker = { hosts = [ "github.com" ]; };')
   })
 
   it('says so when no git grant exists, rather than leaving it out', () => {
     assert.include(Flake.render(spec), 'gitBroker = null;')
+  })
+
+  it('carries the authority the guest trusts whole, and says so when there is none', () => {
+    const authority = '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n'
+    assert.include(
+      Flake.render({ ...spec, brokerAuthority: authority }),
+      `brokerAuthority = "${authority}";`,
+    )
+    assert.include(Flake.render(spec), 'brokerAuthority = null;')
   })
 
   it('emits the environment that points a provider client at the broker', () => {

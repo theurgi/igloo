@@ -165,6 +165,7 @@ let
           lib.makeBinPath [
             pkgs.coreutils
             pkgs.openssh
+            pkgs.openssl
           ]
         }
       runHook postInstall

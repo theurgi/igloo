@@ -56,6 +56,8 @@ export interface Project {
   readonly runnerRootLink: string
   /** Holds the keypair the host connects to the guest with. */
   readonly sshDir: string
+  /** Holds the broker's TLS certificate and key, and the authority the guest trusts. */
+  readonly tlsDir: string
   /** Mounted into the guest at `/workspace`. */
   readonly workspaceDir: string
 }
@@ -89,6 +91,7 @@ export const forRoot = (root: string, cid?: number): Project => {
     // under a running VM. This name matches neither of its patterns.
     runnerRootLink: path.join(iglooDir, 'runners', 'current'),
     sshDir: path.join(iglooDir, 'ssh'),
+    tlsDir: path.join(iglooDir, 'tls'),
     workspaceDir: path.join(root, 'workspace'),
   }
 }
