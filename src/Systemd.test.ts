@@ -3,7 +3,7 @@ import { assert, describe, it } from '@effect/vitest'
 import { Effect, FileSystem } from 'effect'
 import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
 import { homedir } from 'node:os'
-import { dirname } from 'node:path'
+import { basename, dirname } from 'node:path'
 
 import * as Systemd from './Systemd.ts'
 
@@ -691,12 +691,17 @@ print "done\n";`
       yield* fs.writeFileString(`${writable}/own`, 'its own')
       yield* fs.writeFileString(`${hidden}/secret`, 'not for the unit')
       yield* fs.writeFileString(`${sibling}/secret`, 'not for the unit')
-      const home = homedir()
+      // A file of the user's, so the home directory has something to hide. The
+      // directory itself may be there, when `dir` is under it: systemd makes
+      // the path down to a bind in the unit's empty root, and nothing beside it.
+      const inHome = `${homedir()}/.igloo-selftest-${basename(dir)}`
+      yield* Effect.addFinalizer(() => fs.remove(inHome).pipe(Effect.ignore))
+      yield* fs.writeFileString(inHome, 'not for the unit')
       const probes = [
         `${writable}/own`,
         `${hidden}/secret`,
         `${sibling}/secret`,
-        home,
+        inHome,
         '/dev/pts',
         '/dev/kvm',
       ]
@@ -724,8 +729,8 @@ print "done\n";`
 
       assert.isTrue(yield* Systemd.isActive('systemctl', name), 'the confined unit is not running')
       // Its own directory, and the device if the host has one; not the hidden
-      // path inside that directory, not a sibling of it, not the home
-      // directory, and not the user's terminals.
+      // path inside that directory, not a sibling of it, not a file in the
+      // home directory, and not the user's terminals.
       const kvm = yield* fs.exists('/dev/kvm')
       assert.deepStrictEqual(
         (yield* fs.readFileString(`${writable}/sight`)).trim().split('\n'),
@@ -749,6 +754,11 @@ print "done\n";`
       yield* fs.writeFileString(`${readable}/own`, 'its own')
       yield* fs.writeFileString(`${sibling}/secret`, 'not for the unit')
       yield* fs.writeFileString(source, 'the-value')
+      // As for a hypervisor: a file in the home directory, which may itself be
+      // there as the path down to `readable`.
+      const inHome = `${homedir()}/.igloo-selftest-${basename(dir)}`
+      yield* Effect.addFinalizer(() => fs.remove(inHome).pipe(Effect.ignore))
+      yield* fs.writeFileString(inHome, 'not for the unit')
       // The credential it was handed, each path it can read, whether it can
       // write the first, the outcome of opening a socket of each family —
       // AF_INET, AF_INET6, AF_NETLINK, AF_VSOCK — and its network namespace.
@@ -762,7 +772,7 @@ for my $f ([2, 1], [10, 1], [16, 2], [40, 1]) {
   print "family $f->[0] ", (socket(my $s, $f->[0], $f->[1], 0) ? 'opened' : "$!"), "\n";
 }
 print 'net ', readlink('/proc/self/ns/net'), "\n";`
-      const paths = [`${readable}/own`, `${sibling}/secret`, source, homedir()]
+      const paths = [`${readable}/own`, `${sibling}/secret`, source, inHome]
       const plain = (yield* spawner.string(
         ChildProcess.make(perl, ['-e', probe, source, ...paths]),
       )).split('\n')
@@ -792,7 +802,7 @@ print 'net ', readlink('/proc/self/ns/net'), "\n";`
       const ours = `net ${yield* fs.readLink('/proc/self/ns/net')}`
 
       // What it was handed and what it may read, and nothing else: not a
-      // sibling, not the credential's source, not the home directory. It
+      // sibling, not the credential's source, not a file in the home. It
       // reaches its guest over vsock and nothing else, so no IP and no netlink.
       const own = yield* view(false)
       assert.deepStrictEqual(own.slice(0, -1), [

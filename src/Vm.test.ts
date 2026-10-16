@@ -5,7 +5,7 @@ import { afterAll, assert, beforeAll, describe, it, vi } from '@effect/vitest'
 import { Clock, Effect, FileSystem, Result, Schema } from 'effect'
 import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
 import { homedir } from 'node:os'
-import { dirname } from 'node:path'
+import { basename, dirname } from 'node:path'
 
 import * as Binaries from './Binaries.ts'
 import * as BootLog from './BootLog.ts'
@@ -137,7 +137,13 @@ const writeFakes = Effect.fnUntraced(function* (
   const bash = yield* fromStore('bash')
   const perl = yield* fromStore('perl')
   const shutdownHelperRan = `${dir}/shutdown-helper-ran`
-  const unreachable = [`${dir}/project`, homedir(), `${runtimeDir}/broker-credentials`]
+  // A file of the user's, so the home directory has something to hide. The
+  // directory itself may be there: where `dir` is under it, systemd makes the
+  // path down to each bind in a unit's empty root, and nothing beside it.
+  const inHome = `${homedir()}/.igloo-selftest-${basename(dir)}`
+  yield* Effect.addFinalizer(() => fs.remove(inHome).pipe(Effect.ignore))
+  yield* fs.writeFileString(inHome, 'not for the unit')
+  const unreachable = [`${dir}/project`, inHome, `${runtimeDir}/broker-credentials`]
   const buildCount = `${dir}/nix-build-count`
   const buildArgs = `${dir}/nix-build-args`
   const evalArgs = `${dir}/nix-eval-args`
@@ -780,7 +786,7 @@ describe('Vm.up', () => {
         }
         assert.isTrue(yield* Systemd.isActive('systemctl', `igloo-${spec.id}-qemu.service`))
         // QEMU's unit started confined, and from inside it neither the project
-        // nor the home directory was there.
+        // nor a file in the home directory was there.
         assert.strictEqual(yield* fs.readFileString(`${spec.runtimeDir}/sight`), '')
 
         // Only the store's daemon runs under the helper. The restricted view
@@ -927,8 +933,8 @@ describe('Vm.up', () => {
         assert.isTrue(yield* Systemd.isActive('systemctl', tether))
         // From inside its unit, the key it was handed and the broker's socket,
         // and nothing else it was looked for: not the key where the project
-        // keeps it, the project, the home directory, the VM's runtime directory
-        // or the brokered credential in it.
+        // keeps it, the project, a file in the home directory, the VM's runtime
+        // directory or the brokered credential in it.
         assert.deepStrictEqual(
           (yield* fs.readFileString(`${spec.logDir}/${BootLog.LATEST}/tether.log`))
             .trim()
