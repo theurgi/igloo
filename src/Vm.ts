@@ -6,7 +6,13 @@ import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
 import { dirname } from 'node:path'
 
 import * as BootLog from './BootLog.ts'
-import { connectPorts, tunnels } from './broker.ts'
+import {
+  connectPorts,
+  runsTunnel,
+  tlsCertificateCredential,
+  tlsKeyCredential,
+  tlsNames,
+} from './broker.ts'
 import * as BuildPlan from './BuildPlan.ts'
 import * as Evaluation from './Evaluation.ts'
 import * as LaunchInputs from './LaunchInputs.ts'
@@ -105,12 +111,19 @@ export interface VmSpec extends VmTarget {
    */
   readonly grants: readonly Grant[]
   /**
+   * The certificate and key the broker answers its TLS names with, as host
+   * paths, for a VM whose grants give it any. Each reaches the broker by
+   * `LoadCredential=`, as a brokered credential does.
+   */
+  readonly brokerTls: { readonly certificate: string; readonly key: string } | undefined
+  /**
    * Where the guest may tunnel to: the hosts listed, already bounded by the user
    * layer's ceiling, or any public name.
    *
-   * Names, not credentials: this decides whether the tunnel listener runs at
-   * all, whether the tether opens its second forward, and what `HTTPS_PROXY` in
-   * the guest points at. An empty list means none of the three.
+   * Names, not credentials. With the names the broker answers, this decides
+   * whether the tunnel listener runs at all, whether the tether opens its
+   * second forward, and what `HTTPS_PROXY` in the guest points at: an empty
+   * list and no such name means none of the three.
    */
   readonly tunnel: TunnelScope
   /**
@@ -340,10 +353,12 @@ export const tetherOptions = (spec: VmSpec): Array<string> => [
   '-R',
   `127.0.0.1:${brokerGuestPort}:${brokerSocket(spec)}`,
   // A second forward for the tunnel, on its own port, and only when the VM has
-  // somewhere to tunnel to. `ExitOnForwardFailure=yes` covers both: if either
-  // port is taken in the guest, the unit fails rather than coming up with one
-  // of the two silently missing.
-  ...(tunnels(spec.tunnel) ? ['-R', `127.0.0.1:${proxyGuestPort}:${proxySocket(spec)}`] : []),
+  // somewhere to tunnel to or a name the broker answers. `ExitOnForwardFailure=yes`
+  // covers both: if either port is taken in the guest, the unit fails rather
+  // than coming up with one of the two silently missing.
+  ...(runsTunnel(spec.grants, spec.tunnel)
+    ? ['-R', `127.0.0.1:${proxyGuestPort}:${proxySocket(spec)}`]
+    : []),
   ...forwardOptions,
 ]
 
@@ -662,6 +677,12 @@ const brokerSocket = (target: VmTarget): string => `${brokerDir(target)}/http.so
 const proxySocket = (target: VmTarget): string => `${brokerDir(target)}/proxy.sock`
 
 /**
+ * The TLS listener's socket. Nothing forwards to it: the tunnel hands it the
+ * connections to the names it answers, and nothing else reaches it.
+ */
+const tlsSocket = (target: VmTarget): string => `${brokerDir(target)}/tls.sock`
+
+/**
  * Where a brokered credential's value is written for systemd to read.
  *
  * Under the VM's runtime directory, which is exactly what the broker cannot
@@ -823,14 +844,17 @@ export const brokerArgv = (bins: Binaries, spec: VmSpec): [string, ...string[]] 
   brokerSocket(spec),
   '--grants',
   JSON.stringify(spec.grants),
-  // Only when there are destinations: no socket, no second forward, and no
-  // `HTTPS_PROXY` in the guest. The three are set together, so a client is
-  // never pointed at a port nothing is listening on — which would fail as a
-  // refused connection and read as a broken broker rather than as an empty
-  // allowlist.
-  ...(tunnels(spec.tunnel)
+  // Only when there are destinations or names the broker answers: otherwise no
+  // socket, no second forward, and no `HTTPS_PROXY` in the guest. The three are
+  // set together, so a client is never pointed at a port nothing is listening
+  // on — which would fail as a refused connection and read as a broken broker
+  // rather than as an empty allowlist.
+  ...(runsTunnel(spec.grants, spec.tunnel)
     ? ['--proxy', proxySocket(spec), '--tunnel', JSON.stringify(spec.tunnel)]
     : []),
+  // Decided by the grants rather than by whether a certificate was passed, so
+  // that a VM given none fails to start a broker, naming what is missing.
+  ...(tlsNames(spec.grants).length > 0 ? ['--tls', tlsSocket(spec)] : []),
 ]
 
 /**
@@ -849,13 +873,15 @@ const ensureBroker = Effect.fnUntraced(function* (
   if (!spec.broker) return false
   const fs = yield* FileSystem.FileSystem
 
-  // Both sockets, because the tether forwards to both and a forward opened
-  // before its socket exists gives the guest a port whose every connection is
-  // refused. The proxy's is bound first by the broker, but waiting on the pair
-  // is what makes that ordering not matter.
-  const wanted = tunnels(spec.tunnel)
-    ? [brokerSocket(spec), proxySocket(spec)]
-    : [brokerSocket(spec)]
+  // Every socket, because the tether forwards to two of them and the tunnel
+  // hands the third its connections, and one reached before it exists refuses
+  // every connection. The broker binds them in an order of its own, but waiting
+  // on them all is what makes that ordering not matter.
+  const wanted = [
+    brokerSocket(spec),
+    ...(runsTunnel(spec.grants, spec.tunnel) ? [proxySocket(spec)] : []),
+    ...(tlsNames(spec.grants).length > 0 ? [tlsSocket(spec)] : []),
+  ]
 
   // `activating` is a broker its unit is already starting again.
   const state = yield* Systemd.activeState(bins.systemctl, brokerUnit(spec.id))
@@ -886,10 +912,18 @@ const ensureBroker = Effect.fnUntraced(function* (
         ),
         writable: [brokerDir(spec)],
       },
-      credentials: spec.brokered.map(credential => ({
-        name: credential.name,
-        path: credential.hostPath,
-      })),
+      credentials: [
+        ...spec.brokered.map(credential => ({
+          name: credential.name,
+          path: credential.hostPath,
+        })),
+        ...(spec.brokerTls === undefined
+          ? []
+          : [
+              { name: tlsCertificateCredential, path: spec.brokerTls.certificate },
+              { name: tlsKeyCredential, path: spec.brokerTls.key },
+            ]),
+      ],
       env: spec.unitEnv,
       logFile: boot.file('broker.log'),
       name: brokerUnit(spec.id),

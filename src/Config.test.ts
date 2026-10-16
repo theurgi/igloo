@@ -1066,6 +1066,18 @@ describe('Config.compose: modelServers', () => {
     assert.include(message, '`secrets.model-server.llama-swap` takes the name')
   })
 
+  it('refuses a secret holding a name the broker’s TLS identity is held under', () => {
+    for (const [name, half] of [
+      ['broker.tls-certificate', 'certificate'],
+      ['broker.tls-key', 'key'],
+    ] as const) {
+      const message = refused({
+        project: { secrets: { [name]: { mode: 'deliver', source: { file: '/run/secrets/x' } } } },
+      })
+      assert.include(message, `\`secrets.${name}\` takes a name the broker holds its TLS ${half}`)
+    }
+  })
+
   it('refuses a server under none, and reaches it under restricted with nothing else', () => {
     const message = refused({ project: { ...ownServer(), network: 'none' } })
     assert.include(message, '`modelServers.llama-swap` is reached through the broker')

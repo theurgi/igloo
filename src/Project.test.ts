@@ -15,6 +15,7 @@ describe('Project.forRoot', () => {
     assert.strictEqual(project.iglooDir, '/home/you/projects/api/.igloo')
     assert.strictEqual(project.homeDir, '/home/you/projects/api/.igloo/home')
     assert.strictEqual(project.sshDir, '/home/you/projects/api/.igloo/ssh')
+    assert.strictEqual(project.tlsDir, '/home/you/projects/api/.igloo/tls')
     assert.strictEqual(project.logDir, '/home/you/projects/api/.igloo/logs')
     assert.strictEqual(project.workspaceDir, '/home/you/projects/api/workspace')
   })

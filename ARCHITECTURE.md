@@ -24,8 +24,10 @@ checked there, and a claim here that the code does not bear out is a bug in one 
   line, and `share/microvm/virtiofs/<tag>/` describes the shares.
 - **The broker**, `igloo-broker` (`src/broker.ts`). One process per VM that holds a grant or has a
   tunnel destination. It holds that VM's credentials, serves brokered requests on one Unix socket
-  and an HTTPS tunnel on another, and constructs every upstream request itself. It is packaged from
-  that one file and Bun, and imports nothing: not Effect, and nothing else in `src/`.
+  and an HTTPS tunnel on another, and constructs every upstream request itself. For the hosts its
+  git grants reach, it answers TLS on a third socket, which the tunnel hands those connections to.
+  It is packaged from that one file and Bun, and imports nothing: not Effect, and nothing else in
+  `src/`.
 - **`igloo-landlock`** (`src/landlock.c`). Runs a command under a Landlock ruleset: TCP connections
   only to the ports named, TCP binds only on the ports named, and no abstract Unix socket. The
   broker and the published ports run under it.
@@ -34,8 +36,8 @@ checked there, and a claim here that the code does not bear out is a bug in one 
 
 The CLI also runs programs igloo did not write: `nix`; `systemd-run` and `systemctl`, against the
 user's systemd manager; QEMU, through the runner's `microvm-run`; `virtiofsd`, one per share; `ssh`,
-reaching the guest's sshd over vsock through systemd's `systemd-ssh-proxy`; and `bwrap`, for
-`igloo fallback` only.
+reaching the guest's sshd over vsock through systemd's `systemd-ssh-proxy`; `ssh-keygen` and
+`openssl`, for the keys a project keeps; and `bwrap`, for `igloo fallback` only.
 
 ## A running VM
 
@@ -56,6 +58,9 @@ In the project, which is on disk:
 - `igloo.nix` and `igloo-policy.nix`, the project's layer: content and policy.
 - `workspace/`, the guest's `/workspace`, and `.igloo/home/`, the guest's `/root`.
 - `.igloo/ssh/id`, the key the host reaches the guest with. Its public half is built into the guest.
+- `.igloo/tls/`, for a project whose broker answers a name: `certificate.pem` and `key.pem`, what
+  the broker answers with, and `authority.pem`, the authority that issued them, which the guest
+  trusts. The authority's own key is deleted once it has signed.
 - `.igloo/runner/flake.nix`, the runner flake, and `.igloo/runners/current`, the gc-root that keeps
   the built runner.
 - `.igloo/logs/<boot id>/` and `.igloo/logs/latest`, a record per launch, and
@@ -66,7 +71,8 @@ In `$XDG_RUNTIME_DIR/igloo/`, a tmpfs:
 - `<id>/`, QEMU's working directory: the vhost-user sockets, QMP's `control.socket`, `store-paths`,
   and the credential values, `credentials/` for delivered ones and `broker-credentials/` for
   brokered ones.
-- `<id>-broker/`, the broker's: `http.sock` for brokered requests and `proxy.sock` for the tunnel.
+- `<id>-broker/`, the broker's: `http.sock` for brokered requests, `proxy.sock` for the tunnel, and
+  `tls.sock` for the names it answers.
 
 ## A launch
 
@@ -75,8 +81,10 @@ In `$XDG_RUNTIME_DIR/igloo/`, a tmpfs:
 1. `Project.find` walks up from the working directory to the marker. `Config.resolve` refuses a
    policy file in the workspace, reads the policy files in one confined `nix eval`, composes them
    (`Config.compose`) and lists the content layers that exist.
-2. `Spec.fromConfig` decides where each credential goes, the broker's grants, what the guest is told
-   about the broker, and the runner's arguments. `Flake.write` writes the runner flake.
+2. For a broker that answers a name, `Tls.ensure` makes or finds the project's certificate.
+   `Spec.fromConfig` decides where each credential goes, the broker's grants, what the guest is told
+   about the broker, and the runner's arguments, the authority the guest trusts among them.
+   `Flake.write` writes the runner flake.
 3. If the VM is already running, nothing is built: `up` says which of its inputs changed since it
    launched (`LaunchInputs`) and makes sure its broker, tether and ports are up. Otherwise:
 4. The slice is stopped and the runtime directory emptied.
@@ -114,6 +122,7 @@ Every module but `index.ts` has its tests beside it, in `src/<Module>.test.ts`.
 | `landlock.c`                   | `igloo-landlock`.                                                                             |
 | `Qmp.ts`                       | `down`'s power event, sent only to QEMU's own process.                                        |
 | `Secrets.ts`                   | Fetching credential values into files on the runtime tmpfs. No value is returned from it.     |
+| `Tls.ts`                       | The broker's TLS certificate and the authority the guest trusts, made with `openssl`.         |
 | `broker.ts`                    | The broker: brokered requests, the tunnel, and what the guest is told to reach them.          |
 | `Fallback.ts`                  | `igloo fallback`'s bubblewrap sandbox, for when a VM will not start.                          |
 | `Preflight.ts`                 | `igloo doctor`'s checks, each failure with a remedy.                                          |
@@ -201,13 +210,15 @@ store. The rest of the project, the host's key in `.igloo/ssh/` among it, is not
 ### The broker constructs every upstream request from its grants
 
 A request is authorized by its method and its path, with git's `service` parameter for a ref
-advertisement, and by nothing else it carries (`decide`). The upstream URL is built from the
-profile's fixed host and the grant's own copy of what it allows: a git request for the repository as
-the grant spells it (`routeGit`), a model provider's request for an endpoint its profile lists in
-`inferenceEndpoints` (`routeInference`), and a model server's on loopback, at the port its grant
-names (`routeModelServer`). Nothing the guest sends reaches the upstream URL but an OpenRouter model
-listing's query, rebuilt so that each name and value is encoded. A path holding a percent-escape is
-refused, and so is a push.
+advertisement, and by nothing else it carries (`decide`). On the TLS listener, the name a request
+was addressed to is read as well, and only as one of the hosts the broker's git grants reach: it
+stands where the path form puts the host, and the rest is `decide`'s (`decideAddressed`). The
+upstream URL is built from the profile's fixed host and the grant's own copy of what it allows: a
+git request for the repository as the grant spells it (`routeGit`), a model provider's request for
+an endpoint its profile lists in `inferenceEndpoints` (`routeInference`), and a model server's on
+loopback, at the port its grant names (`routeModelServer`). Nothing the guest sends reaches the
+upstream URL but an OpenRouter model listing's query, rebuilt so that each name and value is
+encoded. A path holding a percent-escape is refused, and so is a push.
 
 The credential is always the broker's. A git request's headers are built, carrying of the guest's
 only git's protocol version, checked against a pattern, and its body's gzip encoding
@@ -224,8 +235,8 @@ time, a body that never ends among them. What a provider does for a model, its h
 included, is the provider's, so under `restricted` workspace data can leave through one to any
 address.
 
-**Held by:** `broker.ts`: `decide`, `routeGit`, `routeInference`, `routeModelServer`,
-`upstreamHeaders`, `relay`, `responseHeaders`, `handle`.
+**Held by:** `broker.ts`: `decide`, `decideAddressed`, `routeGit`, `routeInference`,
+`routeModelServer`, `upstreamHeaders`, `relay`, `responseHeaders`, `handle`.
 
 ### The tunnel reaches only public addresses, on port 443
 
@@ -235,14 +246,23 @@ exactly, with no wildcard or suffix match (`allowTunnel`); under `internet`, any
 the name resolves to is then judged as an address: none in a loopback, private, link-local,
 carrier-grade NAT, benchmarking, multicast or reserved range (`isReachableAddress`), and none of
 this host's own (`isHostAddress`). The connection is made to an address that was checked, never to
-the name again (`publicDestinations`). What the tunnel carries is TLS the broker cannot read: there
-is no CA, and nothing is injected.
+the name again (`publicDestinations`). What the tunnel carries is TLS the broker cannot read, and
+nothing is injected.
 
 A listed name that resolves to a routable address private to a VPN this host is on passes every
 check here, and is reached.
 
+The one exception is a host the broker's git grants reach, `tlsNames`. A `CONNECT` to one is not
+tunnelled anywhere: whatever the destinations, it is joined to the broker's own TLS listener
+(`serveTunnel`), where each request is decided and constructed as on the broker's port (`serveTls`).
+That listener answers with a certificate for those hosts from an authority made for the project,
+which the guest trusts (`mkRunner`'s `brokerAuthority`). The authority's name constraints limit it
+to the hosts any profile's grant can reach (`tlsNamesCovered`), and its key is deleted once it has
+signed (`Tls.ensure`), so what the project keeps can answer those hosts to its own guest and sign
+nothing.
+
 **Held by:** `broker.ts`: `parseConnect`, `allowTunnel`, `isReachableAddress`, `isHostAddress`,
-`publicDestinations`, `serveTunnel`.
+`publicDestinations`, `serveTunnel`, `serveTls`; `Tls.ensure`.
 
 ### The broker reaches no other VM, no Unix socket but its own, and no TCP port but those it uses
 
@@ -327,8 +347,15 @@ by value (`audit`). A delivered value reaches the guest through QEMU's `fw_cfg` 
 given the file's path rather than the value (`mkRunner`'s `credentialArgs`), and lands on a tmpfs in
 the guest. From there it is the guest's.
 
+The broker's TLS key is not a credential's value but is held as one. `Tls.ensure` makes it on the
+host and keeps it in `.igloo/tls/`, mode 0600 in a 0700 directory, outside both shares, as the
+host's SSH key is kept in `.igloo/ssh/`. It reaches the broker by `LoadCredential=` under a name no
+secret may take (`Config.ts`'s `composeSecrets`), and the broker takes it out of the credentials its
+grants name before it serves anything, so no grant can send it upstream (`broker.ts`'s `main`).
+
 **Held by:** `Secrets.ts`, `Systemd.startArgs`, `Systemd.CredentialHolder`, `Vm.launch`, `Vm.ts`'s
-`ensureBroker`, `broker.ts`'s `upstreamHeaders` and `audit`, `mkRunner`'s `credentialArgs`.
+`ensureBroker`, `broker.ts`'s `upstreamHeaders`, `audit` and `main`, `mkRunner`'s `credentialArgs`,
+`Tls.ensure`.
 
 ### QEMU sees the store, its VM's runtime directory and two devices, and nothing else of the host
 

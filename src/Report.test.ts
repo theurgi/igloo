@@ -131,6 +131,13 @@ const record: Report.BootRecord = {
           t: '4',
           target: 'git.acme.example:443',
         }),
+        json({
+          event: 'tls-listening',
+          names: ['github.com'],
+          socket: `/run/user/1000/igloo/acme-widgets-${cidHex}-broker/tls.sock`,
+          t: '5',
+        }),
+        json({ answered: true, event: 'tunnel-open', id: 2, t: '6', target: 'github.com:443' }),
         '',
       ].join('\n'),
     },
@@ -213,7 +220,7 @@ describe('Report.render', () => {
     })
 
     // In the broker's fields, by what each field holds, the startup lines among them.
-    const [tunnel, listening, allow, error, opened] = brokerLines()
+    const [tunnel, listening, allow, error, opened, tls, answered] = brokerLines()
     assert.deepStrictEqual(tunnel?.['destinations'], [placeholder.destination, '<destination-2>'])
     assert.include(tunnel?.['socket'], `/${placeholder.label}-${placeholder.cidHex}-broker/`)
     assert.deepStrictEqual(listening?.['credentials'], [placeholder.credential])
@@ -229,6 +236,9 @@ describe('Report.render', () => {
     )
     assert.strictEqual(opened?.['address'], placeholder.address)
     assert.strictEqual(opened?.['target'], `${placeholder.destination}:443`)
+    // The names the broker answers are igloo's own, so they stay.
+    assert.deepStrictEqual(tls?.['names'], ['github.com'])
+    assert.strictEqual(answered?.['target'], 'github.com:443')
 
     // In text, inside a JSON string and out of one.
     assert.include(

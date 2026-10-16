@@ -15,6 +15,8 @@ import {
   isTcpPort,
   profileNames,
   profiles,
+  tlsCertificateCredential,
+  tlsKeyCredential,
 } from './broker.ts'
 import * as Evaluation from './Evaluation.ts'
 import { nixString } from './Flake.ts'
@@ -786,6 +788,15 @@ const composeSecrets = (
         )
       }
       calling.set(secret.grant.profile, secret)
+    }
+
+    // The broker holds its TLS certificate and key beside the credentials,
+    // under names of their own that a secret could also take.
+    for (const secret of secrets) {
+      if (secret.name !== tlsCertificateCredential && secret.name !== tlsKeyCredential) continue
+      return yield* bad(
+        `${fileOf(secret)}: \`secrets.${secret.name}\` takes a name the broker holds its TLS ${secret.name === tlsKeyCredential ? 'key' : 'certificate'} under, and a name holds one value. Rename the secret.`,
+      )
     }
     return secrets
   })

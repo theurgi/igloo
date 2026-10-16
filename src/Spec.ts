@@ -17,6 +17,11 @@ export interface Facts {
   readonly publicKey: string
   readonly root: string
   readonly runtimeDir: string
+  /**
+   * The certificate authority the guest trusts for the names the broker
+   * answers, as PEM, or `undefined` for a VM whose broker answers none.
+   */
+  readonly tlsAuthority: string | undefined
   readonly userLayerDir: string | undefined
   readonly workspaceDir: string
 }
@@ -35,6 +40,22 @@ export interface Plan {
   readonly hostSide: string
   readonly runner: Flake.RunnerSpec
 }
+
+/**
+ * What a project's broker is granted: one grant per brokered credential, and
+ * one per model server, its key held under a name of its own.
+ */
+export const grantsOf = (policy: Config.Policy): readonly Broker.Grant[] => [
+  ...policy.secrets
+    .filter(secret => secret.mode === 'broker')
+    .map(secret => ({ credential: secret.name, ...secret.grant })),
+  ...policy.modelServers.map(server => ({
+    ...(server.key === undefined ? {} : { credential: Config.modelServerKeyName(server.name) }),
+    name: server.name,
+    port: server.port,
+    profile: 'model-server' as const,
+  })),
+]
 
 /**
  * Decide, from the composed layers and the host's facts, where each credential
@@ -89,21 +110,14 @@ export const fromConfig = (
     name,
     source: secret.source,
   }))
-  const grants: readonly Broker.Grant[] = [
-    ...toBroker.map(secret => ({ credential: secret.name, ...secret.grant })),
-    ...servers.map(server => ({
-      ...(server.key === undefined ? {} : { credential: Config.modelServerKeyName(server.name) }),
-      name: server.name,
-      port: server.port,
-      profile: 'model-server' as const,
-    })),
-  ]
-  // The hosts the guest should send git at, deduplicated: two grants for the
-  // same upstream are one rewrite, and a repeated `insteadOf` would be a
-  // conflicting definition rather than a second chance.
+  const grants = grantsOf(config.policy)
+  // The hosts the guest's git reaches the broker at, deduplicated: two grants
+  // for the same upstream are one rewrite, and a repeated `insteadOf` would be
+  // a conflicting definition rather than a second chance.
   const gitHosts = [
     ...new Set(grants.filter(Broker.isGitGrant).map(grant => Broker.profiles[grant.profile].host)),
   ]
+  const answered = Broker.tlsNames(grants).length > 0
   const tunnel = config.policy.tunnel
   // A broker exists for a project that holds a grant, a credential's or a
   // model server's, or that has somewhere to tunnel to, and for no other. The
@@ -115,13 +129,15 @@ export const fromConfig = (
     ...Broker.guestEnvironment(grants, Vm.brokerGuestPort),
     // Both spellings, because half the ecosystem reads one and half the other,
     // and `NODE_USE_ENV_PROXY` because Node's own `fetch` ignores the variables
-    // without it — which is most of what an agent's tooling is built on.
+    // without it — which is most of what an agent's tooling is built on. Set
+    // for a name the broker answers as well as for a destination, since the
+    // tunnel is how a client reaches both.
     //
     // `NO_PROXY` keeps loopback direct. Some clients send a plain `http://`
     // loopback URL to the proxy as well, which refuses anything but `CONNECT`,
     // and loopback is where the broker's own port and every server the guest
     // runs for itself — a local MCP server, say — are listening.
-    ...(!Broker.tunnels(tunnel)
+    ...(!Broker.runsTunnel(grants, tunnel)
       ? {}
       : {
           HTTPS_PROXY: `http://127.0.0.1:${String(Vm.proxyGuestPort)}`,
@@ -130,16 +146,20 @@ export const fromConfig = (
           NO_PROXY: '127.0.0.1,localhost,::1',
           no_proxy: '127.0.0.1,localhost,::1',
         }),
+    // Node and Bun verify against the authorities they carry rather than the
+    // system's, which is where the guest trusts the broker's.
+    ...(answered ? { NODE_EXTRA_CA_CERTS: '/etc/ssl/certs/ca-certificates.crt' } : {}),
   }
 
   const runner: Flake.RunnerSpec = {
     iglooFlakePath: facts.iglooFlakePath,
+    brokerAuthority: answered ? facts.tlsAuthority : undefined,
     brokerEnv,
     brokerEtc: Broker.guestEtcFiles(grants, Vm.brokerGuestPort),
     brokerFiles: Broker.guestClientFiles(grants, Vm.brokerGuestPort),
     contentModules: config.content.map(({ file }) => file),
     credentials: credentials.map(({ hostPath, name }) => ({ hostPath, name })),
-    gitBroker: gitHosts.length === 0 ? undefined : { hosts: gitHosts, port: Vm.brokerGuestPort },
+    gitBroker: gitHosts.length === 0 ? undefined : { hosts: gitHosts },
     hostName: Flake.hostNameFrom(facts.label),
     mem: config.policy.mem,
     shares: [

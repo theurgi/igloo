@@ -20,9 +20,11 @@
  * targets, a `Host` that disagrees with the URL and a colliding `Authorization`
  * into consequences of the shape rather than checks that could be forgotten.
  *
- * A request is authorized by its path alone. Its body is streamed upstream as it
- * arrives and never read: what a provider does with it, the tools it runs on a
- * model's behalf included, is the provider's.
+ * A request is authorized by its path alone, and on the TLS listener by the name
+ * it was addressed to as well, which stands where the path form puts the host.
+ * Its body is streamed upstream as it arrives and never read: what a provider
+ * does with it, the tools it runs on a model's behalf included, is the
+ * provider's.
  *
  * Deliberately free of dependencies. It is packaged from this file alone, so its
  * closure is the runtime and nothing else, and a compromise reaches no library
@@ -38,7 +40,7 @@ import { createSocket } from 'node:dgram'
 import { lstatSync, readdirSync, readFileSync, unlinkSync } from 'node:fs'
 
 const usage =
-  'usage: broker <socket-path> [--grants <json>] [--proxy <socket-path>] [--tunnel <json>]'
+  'usage: broker <socket-path> [--grants <json>] [--proxy <socket-path>] [--tunnel <json>] [--tls <socket-path>]'
 
 /**
  * The upstream each profile reaches, and what kind of policy applies there.
@@ -89,6 +91,23 @@ export const isInferenceProfile = (name: ProfileName): name is InferenceProfile 
 
 /** Every profile there is, for a message that has to list them. */
 export const profileNames: readonly string[] = Object.keys(profiles)
+
+/**
+ * Every name a broker may answer TLS for: each git profile's host. A guest's
+ * git reaches such a host by its own name, through the tunnel, which hands the
+ * connection to the broker's TLS listener rather than to the host. A remote
+ * then reads as the repository's own URL, which is how a client that reads
+ * remotes recognises one.
+ *
+ * What the broker's certificate covers, whichever of them its grants use.
+ */
+export const tlsNamesCovered: readonly string[] = [
+  ...new Set(
+    Object.values(profiles)
+      .filter(profile => profile.kind === 'git')
+      .map(profile => profile.host),
+  ),
+]
 
 /**
  * Fetch over git's smart HTTP, from a fixed set of repositories.
@@ -151,6 +170,19 @@ export const isInferenceGrant = (grant: Grant): grant is InferenceGrant =>
 
 export const isGitGrant = (grant: Grant): grant is GitGrant =>
   !isModelServerGrant(grant) && profiles[grant.profile].kind === 'git'
+
+/** The names a broker holding `grants` answers TLS for: each git grant's host, once. */
+export const tlsNames = (grants: readonly Grant[]): readonly string[] => [
+  ...new Set(grants.filter(isGitGrant).map(grant => profiles[grant.profile].host)),
+]
+
+/**
+ * The names the broker's TLS certificate and key are loaded under, beside the
+ * credentials. Taken out of the credentials it serves before it serves any, so
+ * no grant can send either upstream.
+ */
+export const tlsCertificateCredential = 'broker.tls-certificate'
+export const tlsKeyCredential = 'broker.tls-key'
 
 /**
  * What a model server may be called: lowercase letters, digits and `-`, as one
@@ -786,6 +818,38 @@ export const decide = (grants: readonly Grant[], method: string, target: string)
 }
 
 /**
+ * Whether a request the TLS listener received is one the grants permit.
+ *
+ * The listener is reached by a client that connected to a host by its own
+ * name, so its paths carry no host: the name it was addressed to is read
+ * instead, and stands where the path form puts one. Only a name the grants are
+ * answered at is read as one, so a guest choosing the name chooses among those
+ * and nothing else; the rest is `decide`'s, unchanged.
+ *
+ * `url` is the request URL as received, whose authority is the request's
+ * `Host`.
+ */
+export const decideAddressed = (
+  grants: readonly Grant[],
+  method: string,
+  url: string,
+): Decision => {
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return deny(400, 'unparseable request target')
+  }
+  // One trailing dot is the same name, as it is to the tunnel.
+  const host = parsed.hostname.toLowerCase()
+  const name = host.endsWith('.') ? host.slice(0, -1) : host
+  if (!tlsNames(grants).includes(name)) {
+    return deny(421, `${name} is not answered here for this VM`, { host: name })
+  }
+  return decide(grants, method, `/${name}${parsed.pathname}${parsed.search}`)
+}
+
+/**
  * Headers that describe one connection rather than the request or response it
  * carries, so they stop at this broker in either direction.
  */
@@ -1093,8 +1157,16 @@ export const splitHead = (
  */
 export type TunnelScope = readonly string[] | 'any'
 
-/** Whether a scope reaches anything at all, which decides whether the tunnel runs. */
+/** Whether a scope reaches anything at all. */
 export const tunnels = (scope: TunnelScope): boolean => scope === 'any' || scope.length > 0
+
+/**
+ * Whether a broker holding `grants` runs the tunnel: when there is somewhere to
+ * tunnel to, or a name the broker answers, which a client reaches through the
+ * tunnel too.
+ */
+export const runsTunnel = (grants: readonly Grant[], scope: TunnelScope): boolean =>
+  tunnels(scope) || tlsNames(grants).length > 0
 
 /**
  * Whether the allowlist covers this destination.
@@ -1465,8 +1537,10 @@ type Fact = boolean | number | string | readonly Fact[] | { readonly [key: strin
  * A field means the same on every line it is on: `credential` and `credentials`
  * name credentials, `host` is the host a request was for, `scope` and `repos`
  * are repositories, `server` is a model server's name, `target` and
- * `destinations` are tunnel destinations, and `address` is the address a
- * destination resolved to.
+ * `destinations` are tunnel destinations, `address` is the address a
+ * destination resolved to, `answered` marks a tunnel the broker's TLS listener
+ * took rather than a destination, and `names` are the names that listener
+ * answers.
  */
 const audit = (event: Readonly<Record<string, Fact>>): void => {
   console.log(JSON.stringify({ t: new Date().toISOString(), ...event }))
@@ -1496,19 +1570,19 @@ const transient = (status: number, message: string): Response =>
 type Upstream = (url: string, init: RequestInit) => Promise<Response>
 
 /**
- * Serve one request: decide, then construct.
+ * Serve one request: decide, by its listener's rule, then construct.
  *
  * The decision is logged before the credential is read, so the audit point never
  * observes the injected value.
  */
 const handle = async (
   request: Request,
-  grants: readonly Grant[],
+  decideFor: (request: Request) => Decision,
   credentials: ReadonlyMap<string, string>,
   id: number,
   send: Upstream,
 ): Promise<Response> => {
-  const decision = decide(grants, request.method, request.url)
+  const decision = decideFor(request)
   if (decision._tag === 'Deny') {
     audit({
       ...decision.asked,
@@ -1733,11 +1807,17 @@ const endWhenWritten = (socket: import('bun').Socket<unknown>, side: Side): void
  * parallel opens dozens, and from the host would be bounded by nothing but the
  * machine. `destinations` is a parameter so that a tunnel can be asserted
  * against a destination a test runs.
+ *
+ * `answered` names the hosts the broker answers itself, and the socket of the
+ * TLS listener that does: a CONNECT to one of them is joined to that listener
+ * rather than to the host, whatever `hosts` says, so that what reaches the
+ * host is a request the broker constructed.
  */
 export const serveTunnel = (
   socketPath: string,
   hosts: TunnelScope,
   destinations: Destinations = publicDestinations,
+  answered?: { readonly names: readonly string[]; readonly socket: string },
 ): import('bun').UnixSocketListener<TunnelState> => {
   let opened = 0
   // Learned rather than configured: which families a host can actually use
@@ -1782,10 +1862,20 @@ export const serveTunnel = (
     client: import('bun').Socket<TunnelState>,
     decided: Extract<Tunnel, { _tag: 'Open' }>,
   ): Promise<void> => {
-    const found = await destinations(decided.host, decided.port)
-    if ('_tag' in found) {
-      refuseClient(client, found.status, found.reason)
-      return
+    // A name the broker answers is joined to its TLS listener, which nothing
+    // has to resolve. Any other is connected to the addresses it resolves to.
+    let candidates: ReadonlyArray<string | { readonly unix: string }>
+    let port = decided.port
+    if (answered?.names.includes(decided.host) === true) {
+      candidates = [{ unix: answered.socket }]
+    } else {
+      const found = await destinations(decided.host, decided.port)
+      if ('_tag' in found) {
+        refuseClient(client, found.status, found.reason)
+        return
+      }
+      candidates = preferAddressFamily(found.addresses, preferredFamily)
+      port = found.port
     }
 
     // One deadline for the whole sequence below, not one per attempt: a name
@@ -1795,50 +1885,50 @@ export const serveTunnel = (
         refuseClient(client, 504, `${decided.host} did not answer`)
     }, tunnelConnectTimeoutMs)
 
+    const handlers: import('bun').SocketHandler = {
+      close() {
+        finish(client.data, 'destination closed')
+        endWhenWritten(client, client.data.client)
+      },
+      data(socket, chunk) {
+        // The guest has gone, so there is nowhere for it to go.
+        if (client.data.phase === 'done') return
+        client.data.bytesIn += chunk.byteLength
+        push(client, client.data.client, chunk, socket)
+      },
+      drain(socket) {
+        flush(socket, client.data.upstream, client)
+      },
+      error() {
+        finish(client.data, 'destination error')
+        client.end()
+      },
+      open() {
+        /* nothing: the 200 is written below, once this resolves */
+      },
+    }
+
     // Each candidate in turn. The first address is not necessarily one this
     // host can reach — a host holding an IPv6 address but no IPv6 route is
     // given the AAAA answers first and can connect to none of them — so
     // stopping at the first failure reports a reachable destination as dead.
-    for (const address of preferAddressFamily(found.addresses, preferredFamily)) {
+    for (const candidate of candidates) {
       if (client.data.phase !== 'opening') break
       try {
-        const upstream = await Bun.connect({
-          hostname: address,
-          port: found.port,
-          socket: {
-            close() {
-              finish(client.data, 'destination closed')
-              endWhenWritten(client, client.data.client)
-            },
-            data(socket, chunk) {
-              // The guest has gone, so there is nowhere for it to go.
-              if (client.data.phase === 'done') return
-              client.data.bytesIn += chunk.byteLength
-              push(client, client.data.client, chunk, socket)
-            },
-            drain(socket) {
-              flush(socket, client.data.upstream, client)
-            },
-            error() {
-              finish(client.data, 'destination error')
-              client.end()
-            },
-            open() {
-              /* nothing: the 200 is written below, once this resolves */
-            },
-          },
-        })
+        const upstream = await (typeof candidate === 'string'
+          ? Bun.connect({ hostname: candidate, port, socket: handlers })
+          : Bun.connect({ socket: handlers, unix: candidate.unix }))
         clearTimeout(timer)
         if (client.data.phase !== 'opening') {
           upstream.end()
           return
         }
-        preferredFamily = addressFamily(address)
+        if (typeof candidate === 'string') preferredFamily = addressFamily(candidate)
         client.data.upstreamSocket = upstream
         client.data.phase = 'piping'
         client.write('HTTP/1.1 200 Connection Established\r\n\r\n')
         audit({
-          address,
+          ...(typeof candidate === 'string' ? { address: candidate } : { answered: true }),
           event: 'tunnel-open',
           id: client.data.id,
           target: client.data.target,
@@ -1862,7 +1952,9 @@ export const serveTunnel = (
       refuseClient(
         client,
         502,
-        `${decided.host} refused a connection on every address it resolves to`,
+        typeof candidates[0] === 'string'
+          ? `${decided.host} refused a connection on every address it resolves to`
+          : `the broker's own listener for ${decided.host} refused the connection`,
       )
     }
   }
@@ -1904,7 +1996,12 @@ export const serveTunnel = (
         // Before it is judged, so that a refusal records which destination it
         // refused.
         if (asked._tag === 'Open') state.target = `${asked.host}:${String(asked.port)}`
-        const decided = allowTunnel(hosts, asked)
+        // A name the broker answers goes to its own listener whatever the
+        // destinations are: what reaches that host is what a grant allows.
+        const decided =
+          asked._tag === 'Open' && answered?.names.includes(asked.host) === true
+            ? asked
+            : allowTunnel(hosts, asked)
         if (decided._tag === 'Refuse') {
           refuseClient(client, decided.status, decided.reason)
           return
@@ -1944,6 +2041,21 @@ export const serveTunnel = (
 }
 
 /**
+ * Numbers the requests a broker serves. One is shared by both of a broker's
+ * listeners, so that an id in the log names one request.
+ */
+export const requestIds = (): (() => number) => {
+  let last = 0
+  return () => ++last
+}
+
+/** A TLS listener's certificate and key, as PEM. */
+export interface TlsIdentity {
+  readonly cert: string
+  readonly key: string
+}
+
+/**
  * Serve brokered requests: one HTTP listener, deciding and constructing each
  * request in turn.
  *
@@ -1959,17 +2071,56 @@ export const serveRequests = (
   grants: readonly Grant[],
   credentials: ReadonlyMap<string, string>,
   send: Upstream = fetch,
+  ids: () => number = requestIds(),
+): import('bun').Server<undefined> =>
+  listen(socketPath, request => decide(grants, request.method, request.url), {
+    credentials,
+    ids,
+    send,
+  })
+
+/**
+ * Serve brokered requests over TLS, for the names `tlsNames` gives: the
+ * listener the tunnel hands a connection to one of them to. Decided by
+ * `decideAddressed`, and served as `serveRequests` serves.
+ *
+ * Nothing in the guest reaches it but through the tunnel, so it is the tunnel
+ * that decides a connection gets here at all.
+ */
+export const serveTls = (
+  socketPath: string,
+  grants: readonly Grant[],
+  credentials: ReadonlyMap<string, string>,
+  tls: TlsIdentity,
+  send: Upstream = fetch,
+  ids: () => number = requestIds(),
+): import('bun').Server<undefined> =>
+  listen(socketPath, request => decideAddressed(grants, request.method, request.url), {
+    credentials,
+    ids,
+    send,
+    tls,
+  })
+
+const listen = (
+  socketPath: string,
+  decideFor: (request: Request) => Decision,
+  options: {
+    readonly credentials: ReadonlyMap<string, string>
+    readonly ids: () => number
+    readonly send: Upstream
+    readonly tls?: TlsIdentity
+  },
 ): import('bun').Server<undefined> => {
-  let requests = 0
+  const { credentials, ids, send, tls } = options
   clearStaleSocket(socketPath)
 
   // @ts-expect-error Bun's types declare `idleTimeout` only for a TCP listener.
   // It applies to a unix socket as well, which the tests of this function assert.
   return Bun.serve({
     fetch(request) {
-      requests++
-      const id = requests
-      return handle(request, grants, credentials, id, send).catch(error => {
+      const id = ids()
+      return handle(request, decideFor, credentials, id, send).catch(error => {
         audit({ event: 'error', id, reason: String(error) })
         return text(500, 'the request could not be completed')
       })
@@ -1983,6 +2134,7 @@ export const serveRequests = (
     // `profiles` says. Bun's default would refuse a body past 128 MiB with a
     // bare 413, before any of this file runs.
     maxRequestBodySize: Number.MAX_SAFE_INTEGER,
+    ...(tls === undefined ? {} : { tls }),
     unix: socketPath,
   })
 }
@@ -2010,6 +2162,7 @@ const main = (): void => {
 
   let grants: readonly Grant[] = []
   let proxyPath: string | undefined
+  let tlsPath: string | undefined
   let tunnelHosts: TunnelScope = []
   for (let at = 1; at < argv.length; at += 2) {
     const flag = argv[at]
@@ -2027,6 +2180,8 @@ const main = (): void => {
       grants = parsed.grants
     } else if (flag === '--proxy') {
       proxyPath = value
+    } else if (flag === '--tls') {
+      tlsPath = value
     } else if (flag === '--tunnel') {
       const parsed = parseTunnelHosts(value)
       if ('message' in parsed) {
@@ -2053,6 +2208,19 @@ const main = (): void => {
     }
   }
 
+  // The TLS listener's own identity, out of the map the grants name
+  // credentials from before anything is served.
+  const cert = credentials.get(tlsCertificateCredential)
+  const key = credentials.get(tlsKeyCredential)
+  credentials.delete(tlsCertificateCredential)
+  credentials.delete(tlsKeyCredential)
+  if (tlsPath !== undefined && (cert === undefined || key === undefined)) {
+    console.error(
+      `broker: --tls needs ${tlsCertificateCredential} and ${tlsKeyCredential}, which were not loaded`,
+    )
+    process.exit(78)
+  }
+
   for (const grant of grants) {
     if (grant.credential === undefined || credentials.has(grant.credential)) continue
     console.error(
@@ -2061,10 +2229,24 @@ const main = (): void => {
     process.exit(78)
   }
 
-  const server = serveRequests(socketPath, grants, credentials)
+  const ids = requestIds()
+  const server = serveRequests(socketPath, grants, credentials, fetch, ids)
+
+  // Before the tunnel, which hands it connections.
+  const answered =
+    tlsPath === undefined || cert === undefined || key === undefined
+      ? undefined
+      : {
+          names: tlsNames(grants),
+          server: serveTls(tlsPath, grants, credentials, { cert, key }, fetch, ids),
+          socket: tlsPath,
+        }
+  if (answered !== undefined) {
+    audit({ event: 'tls-listening', names: answered.names, socket: answered.socket })
+  }
 
   if (proxyPath !== undefined && proxyPath !== '') {
-    serveTunnel(proxyPath, tunnelHosts)
+    serveTunnel(proxyPath, tunnelHosts, publicDestinations, answered)
     audit({ destinations: tunnelHosts, event: 'tunnel-listening', socket: proxyPath })
   }
 
@@ -2079,6 +2261,7 @@ const main = (): void => {
   for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     process.on(signal, () => {
       void server.stop(true)
+      void answered?.server.stop(true)
       process.exit(0)
     })
   }

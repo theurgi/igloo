@@ -156,6 +156,7 @@ const fieldsOf: ReadonlyMap<string, ReadonlyMap<string, Kind>> = new Map([
       ['credentials', 'credential'],
       ['destinations', 'destination'],
       ['host', 'host'],
+      ['names', 'host'],
       ['repos', 'repo'],
       ['scope', 'repo'],
       ['server', 'model-server'],

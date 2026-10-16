@@ -31,6 +31,15 @@ let
   # pins the merged configuration does not hold.
   evaluate =
     {
+      # The certificate authority, as PEM, that issued the certificate the
+      # broker answers its TLS names with, or null for a VM whose broker
+      # answers none. The guest trusts it, so a client reaching such a name
+      # through the tunnel verifies the broker as that host.
+      #
+      # Content, not policy, for the same reason `gitBroker` is: removing it
+      # makes a client refuse the broker's certificate and fail. It cannot
+      # make a credential reachable.
+      brokerAuthority ? null,
       # Environment pointing the guest's model-provider clients at the
       # host's broker: a base URL per provider, and a placeholder where each
       # client expects a key. `{ }` for a VM with no such grant.
@@ -68,21 +77,18 @@ let
       # there, which can copy it anywhere, including into a share that
       # persists.
       credentials ? [ ],
-      # Git over HTTPS through the host's credential broker, as
-      # { hosts = [ "github.com" ]; port = 3128; } — or null for a VM with no
-      # git grant, which is the default.
+      # Git through the host's credential broker, as
+      # { hosts = [ "github.com" ]; } — or null for a VM with no git grant,
+      # which is the default.
       #
-      # Each host listed gets an `insteadOf` rewrite in the guest's system
-      # git config, so a clone of an ordinary GitHub URL goes to the broker's
-      # loopback port instead. The port is the guest end of the host's
-      # tether; it is passed in rather than fixed here because the host is
-      # what opens it.
+      # The broker answers each host listed itself, through the tunnel, so
+      # an ordinary HTTPS URL reaches it as it is. Each host's SSH forms get
+      # an `insteadOf` rewrite to that URL in the guest's system git config.
       #
-      # Content, not policy: a module that removes the rewrite makes git
-      # reach the upstream anonymously and fail on a private repository. It
-      # cannot make a credential reachable, which is the thing worth
-      # protecting, and the guest could unset the same config at runtime
-      # anyway.
+      # Content, not policy: a module that removes the rewrite leaves an SSH
+      # remote with no key to use, and fails. It cannot make a credential
+      # reachable, which is the thing worth protecting, and the guest could
+      # unset the same config at runtime anyway.
       gitBroker ? null,
       hostName ? "igloo",
       mem ? 4096,
@@ -123,10 +129,11 @@ let
         "credential name ${credential.name} must be letters, digits, _, . or -, starting with a letter, digit or underscore"
     ) credentials;
     let
-      # Point the guest's git at the broker for the hosts it holds a grant
-      # for. `git@host:` and `ssh://git@host/` are rewritten too: the SSH key
-      # is not in the guest, so an SSH remote would otherwise fail, and a
-      # remote written either way is the same repository.
+      # Send the guest's git to the broker for the hosts it holds a grant
+      # for. An HTTPS URL reaches it as written; `git@host:` and
+      # `ssh://git@host/` are rewritten to one, since the SSH key is not in
+      # the guest, so an SSH remote would otherwise fail, and a remote written
+      # either way is the same repository.
       gitBrokerModule =
         { ... }:
         {
@@ -138,15 +145,22 @@ let
           programs.git.config.url = lib.listToAttrs (
             map (
               host:
-              lib.nameValuePair "http://127.0.0.1:${toString gitBroker.port}/${host}/" {
+              lib.nameValuePair "https://${host}/" {
                 insteadOf = [
-                  "https://${host}/"
                   "git@${host}:"
                   "ssh://git@${host}/"
                 ];
               }
             ) gitBroker.hosts
           );
+        };
+
+      # Trust the authority behind the broker's certificate, beside the
+      # system's own.
+      brokerAuthorityModule =
+        { ... }:
+        {
+          security.pki.certificates = [ brokerAuthority ];
         };
 
       # Point the guest's model-provider clients at the broker. Session
@@ -350,6 +364,7 @@ let
           coreModule
         ]
         ++ lib.optional (gitBroker != null) gitBrokerModule
+        ++ lib.optional (brokerAuthority != null) brokerAuthorityModule
         ++ lib.optional (brokerEnv != { }) brokerEnvModule
         ++ lib.optional (brokerFiles != [ ]) brokerFilesModule
         ++ contentModules
