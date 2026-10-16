@@ -17,13 +17,16 @@ pkgs.mkShell {
   #
   # `perl` is the tests': their stand-ins for QEMU and `ssh` run under
   # units confined to the store, and bun will not start under those
-  # units' `MemoryDenyWriteExecute=`.
+  # units' `MemoryDenyWriteExecute=`. `util-linux` is the tests' too:
+  # their probes inside those units run `ipcs` and `dmesg`, which have to
+  # come from the store rather than from whatever the host has.
   buildInputs = import ./core-packages.nix pkgs ++ [
     pkgs.bubblewrap
     pkgs.bun
     pkgs.openssh
     pkgs.perl
     pkgs.shellcheck
+    pkgs.util-linux
   ];
   shellHook = ''
     # Current bubblewrap has no setuid mode and works through unprivileged
