@@ -212,7 +212,13 @@ export type ModelServerOperation = Extract<
   'chat-completions' | 'list-models' | 'responses'
 >
 
-export type Operation = GitOperation | InferenceOperation
+/**
+ * A read on a name the broker answers that no grant covers: git's two fetch
+ * requests, or anything else read with GET or HEAD.
+ */
+export type AnonymousOperation = GitOperation | 'read'
+
+export type Operation = AnonymousOperation | InferenceOperation
 
 /**
  * Where a request is going, once it is known to be one this broker serves.
@@ -221,7 +227,8 @@ export type Operation = GitOperation | InferenceOperation
  * a git request is for one repository and an inference request names none, and
  * the headers each sends and returns are built differently. A model server's
  * request is built as an inference one is, and goes to a server the grant
- * names, with a credential only if the grant holds one.
+ * names, with a credential only if the grant holds one. An anonymous one goes
+ * to the host it was addressed to with no credential at all.
  */
 export type Decision =
   | {
@@ -250,6 +257,13 @@ export type Decision =
       readonly operation: ModelServerOperation
       /** The server's name, as the grant spells it. */
       readonly server: string
+      readonly upstream: string
+    }
+  | {
+      readonly _tag: 'Anonymous'
+      /** A name the broker answers: where the request goes. */
+      readonly host: string
+      readonly operation: AnonymousOperation
       readonly upstream: string
     }
   | {
@@ -606,9 +620,12 @@ const modelServerEndpoints: Readonly<Record<string, ModelServerOperation>> = {
   'v1/responses': 'responses',
 }
 
-/** Whether an operation sends a body: a model listing and a ref advertisement are read. */
+/**
+ * Whether an operation sends a body: a model listing, a ref advertisement and
+ * an anonymous read are read.
+ */
 const sendsBody = (operation: Operation): boolean =>
-  operation !== 'list-models' && operation !== 'ls-refs'
+  operation !== 'list-models' && operation !== 'ls-refs' && operation !== 'read'
 
 /** How each inference operation is requested: a listing is read, the rest are sent a body. */
 const methodOf = (operation: InferenceOperation): 'GET' | 'POST' =>
@@ -826,6 +843,13 @@ export const decide = (grants: readonly Grant[], method: string, target: string)
  * answered at is read as one, so a guest choosing the name chooses among those
  * and nothing else; the rest is `decide`'s, unchanged.
  *
+ * A read that no grant serves is sent on without a credential if `reach`, the
+ * tunnel's scope, takes in the name: the guest could have sent it through the
+ * tunnel itself had the broker not answered the name, and nothing is added to
+ * it. Its path and query go as the guest sent them, since no grant is being
+ * matched against them. Anything else no grant serves is refused as `decide`
+ * refuses it.
+ *
  * `url` is the request URL as received, whose authority is the request's
  * `Host`.
  */
@@ -833,6 +857,7 @@ export const decideAddressed = (
   grants: readonly Grant[],
   method: string,
   url: string,
+  reach: TunnelScope = [],
 ): Decision => {
   let parsed: URL
   try {
@@ -846,7 +871,42 @@ export const decideAddressed = (
   if (!tlsNames(grants).includes(name)) {
     return deny(421, `${name} is not answered here for this VM`, { host: name })
   }
-  return decide(grants, method, `/${name}${parsed.pathname}${parsed.search}`)
+  const granted = decide(grants, method, `/${name}${parsed.pathname}${parsed.search}`)
+  if (granted._tag !== 'Deny') return granted
+
+  const operation = readOf(method, parsed)
+  if (operation === undefined) return granted
+  const reached = reach === 'any' || reach.some(each => each.toLowerCase() === name)
+  if (!reached) {
+    // A refusal that names a repository says enough. One that says only that
+    // this is no git endpoint hides why a read was not sent on.
+    return granted.status === 404
+      ? deny(
+          403,
+          `no grant covers this, and the tunnel does not reach ${name}, so it is not sent without one either`,
+          { host: name },
+        )
+      : granted
+  }
+  return {
+    _tag: 'Anonymous',
+    host: name,
+    operation,
+    upstream: `https://${name}${parsed.pathname}${parsed.search}`,
+  }
+}
+
+/**
+ * What a request is, if it only reads: git's ref advertisement for a fetch,
+ * its fetch, or anything else asked for with GET or HEAD. A push's ref
+ * advertisement is a GET, and is the start of a write.
+ */
+const readOf = (method: string, url: URL): AnonymousOperation | undefined => {
+  const service = url.searchParams.get('service')
+  if (method === 'POST') return url.pathname.endsWith('/git-upload-pack') ? 'fetch' : undefined
+  if (method !== 'GET' && method !== 'HEAD') return undefined
+  if (service === 'git-receive-pack') return undefined
+  return url.pathname.endsWith('/info/refs') && service === 'git-upload-pack' ? 'ls-refs' : 'read'
 }
 
 /**
@@ -908,11 +968,12 @@ const bodyHeaders = ['content-encoding', 'content-type'] as const
  * own name. None of them can send the request elsewhere or attach a
  * credential, since the URL is built from the grant and the credential is set
  * after the guest's are dropped. A model server's request is built the same
- * way.
+ * way, and so is an anonymous read, whose credentials are dropped and none
+ * set.
  *
  * `token` is the value of the credential the decision names, and `undefined`
- * only for a model server that takes none: `handle` sends nothing for a
- * credential it does not hold.
+ * only for a model server that takes none and an anonymous read: `handle`
+ * sends nothing for a credential it does not hold.
  */
 export const upstreamHeaders = (
   decision: Exclude<Decision, { _tag: 'Deny' }>,
@@ -980,6 +1041,12 @@ export const upstreamHeaders = (
  * that" are the two things a 401 can mean and the message cannot tell them
  * apart. A model server's grant may hold no credential, and then a 401 is the
  * server asking for one it was never given.
+ *
+ * An anonymous read carries no credential, so its redirect goes back to the
+ * guest as the upstream gave it, for the guest to follow or not: whatever it
+ * reaches, it reaches with nothing the broker holds. Its 401 is the upstream
+ * asking for a credential no grant gives, and comes back as a final 403, which
+ * git reports rather than prompting for one.
  */
 export const relay = (
   attempt: {
@@ -990,6 +1057,14 @@ export const relay = (
   },
   upstreamStatus: number,
 ): { reason: string; status: number } | undefined => {
+  if (attempt.kind === 'Anonymous') {
+    return upstreamStatus === 401
+      ? {
+          reason: `${attempt.host} wants a credential for this, and no grant of this VM's covers it`,
+          status: 403,
+        }
+      : undefined
+  }
   if (upstreamStatus === 401) {
     return {
       reason:
@@ -1443,7 +1518,9 @@ const unforwardedResponseHeaders: ReadonlySet<string> = new Set([
  * authentication challenge inside the VM. For inference and a model server,
  * the upstream's headers but those in `unforwardedResponseHeaders`: a harness
  * reads its retry delay, its rate limits and the request id it reports from
- * them. A redirect never reaches either, since `relay` answers it.
+ * them. A redirect never reaches either, since `relay` answers it. An
+ * anonymous read's are passed the same way, a redirect's `Location` among
+ * them.
  */
 export const responseHeaders = (
   kind: Exclude<Decision['_tag'], 'Deny'>,
@@ -1478,6 +1555,7 @@ export const responseHeaders = (
  * cover generation rather than round-trip. A request that needs longer than this
  * is one that should be streaming, where the first byte arrives immediately. A
  * model server's call is a model call too, and may wait on its model loading.
+ * An anonymous read is given git's: no model is generating its answer.
  */
 const headerTimeoutMs = { git: 30_000, inference: 600_000 } as const
 
@@ -1599,8 +1677,9 @@ const handle = async (
   // names its model only in a body that is not parsed.
   const scope = decision._tag === 'Git' ? decision.repo : undefined
   // A model server's grant may hold none, and then the request is sent with
-  // none, as the server was configured to take it.
-  const { credential } = decision
+  // none, as the server was configured to take it. An anonymous read is sent
+  // with none because no grant covers it.
+  const credential = decision._tag === 'Anonymous' ? undefined : decision.credential
 
   audit({
     ...(credential === undefined ? {} : { credential }),
@@ -1626,7 +1705,9 @@ const handle = async (
     () => {
       abort.abort()
     },
-    decision._tag === 'Git' ? headerTimeoutMs.git : headerTimeoutMs.inference,
+    decision._tag === 'Inference' || decision._tag === 'ModelServer'
+      ? headerTimeoutMs.inference
+      : headerTimeoutMs.git,
   )
 
   let upstream: Response
@@ -2085,17 +2166,20 @@ export const serveRequests = (
  * `decideAddressed`, and served as `serveRequests` serves.
  *
  * Nothing in the guest reaches it but through the tunnel, so it is the tunnel
- * that decides a connection gets here at all.
+ * that decides a connection gets here at all. `reach` is the tunnel's scope,
+ * which decides whether a read no grant covers is sent on without a
+ * credential.
  */
 export const serveTls = (
   socketPath: string,
   grants: readonly Grant[],
   credentials: ReadonlyMap<string, string>,
   tls: TlsIdentity,
+  reach: TunnelScope,
   send: Upstream = fetch,
   ids: () => number = requestIds(),
 ): import('bun').Server<undefined> =>
-  listen(socketPath, request => decideAddressed(grants, request.method, request.url), {
+  listen(socketPath, request => decideAddressed(grants, request.method, request.url, reach), {
     credentials,
     ids,
     send,
@@ -2238,7 +2322,7 @@ const main = (): void => {
       ? undefined
       : {
           names: tlsNames(grants),
-          server: serveTls(tlsPath, grants, credentials, { cert, key }, fetch, ids),
+          server: serveTls(tlsPath, grants, credentials, { cert, key }, tunnelHosts, fetch, ids),
           socket: tlsPath,
         }
   if (answered !== undefined) {

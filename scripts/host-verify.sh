@@ -2155,7 +2155,7 @@ EOF
 					# Through the broker, by its own log: the remote reads as the
 					# repository's URL either way.
 					if grep -qE '^[0-9a-f]{40}$' "$out/artifacts/github-git-clone.txt" &&
-						grep -q '"event":"allow","host":"github.com","id":[0-9]*,"operation":"fetch"' "$out/artifacts/github-git-clone.txt"; then
+						grep -q '"credential":"IGLOO_VERIFY_BROKERED","event":"allow","host":"github.com","id":[0-9]*,"operation":"fetch"' "$out/artifacts/github-git-clone.txt"; then
 						verdict PASS github-git-clone "a real token fetches a real repository, through the broker rather than past it"
 					else
 						verdict FAIL github-git-clone "the clone did not complete — read artifacts/github-git-clone.txt"
@@ -2316,10 +2316,20 @@ EOF
 			# and names that resolve inside this machine, or to one of its own
 			# public addresses, do not. The content layer above supplies curl.
 			# And a bound on the broker's memory, which the user layer alone sets.
+			# A github grant, so that github.com is answered by the broker, which
+			# sends a read no grant covers on without a credential, since the
+			# tunnel reaches github.com itself here.
 			section "internet, and the tunnel"
 			cat >"$broker_config/igloo/igloo-policy.nix" <<EOF
 {
   brokerMem = 64;
+  secrets.IGLOO_VERIFY_BROKERED = {
+    source = { file = "$broker_config/from-file"; };
+    mode = "broker";
+    profile = "github";
+    repos = [ "git/git" ];
+    projects = [ "$project" ];
+  };
 }
 EOF
 			printf '{ network = "internet"; }\n' >"$project/igloo-policy.nix"
@@ -2358,6 +2368,34 @@ EOF
 					guest 'printenv HTTPS_PROXY NO_PROXY 2>&1'
 				} >"$out/artifacts/internet.txt" 2>&1
 				keep_boot up-internet
+
+				# github.com is answered by the broker here. What no grant covers
+				# is sent on bare, and a redirect comes back for the guest to
+				# follow through the tunnel.
+				{
+					echo "=== a public repository the grant does not name"
+					guest 'GIT_TERMINAL_PROMPT=0 timeout 60 git ls-remote https://github.com/cli/cli HEAD 2>&1 | head -3'
+					echo
+					echo "=== a release download from github.com, followed to where it redirects"
+					guest 'timeout 60 curl -sSL -o /dev/null -w "release %{http_code} %{num_redirects} %{size_download}\n" https://github.com/cli/cli/releases/download/v2.0.0/gh_2.0.0_checksums.txt 2>&1'
+					echo
+					# Copied here because the boot record was kept before any of
+					# the above ran.
+					echo "=== what the broker allowed for github.com, from its log"
+					grep '"event":"allow","host":"github.com"' "$(boot_log broker.log)"
+				} >"$out/artifacts/github-anonymous.txt" 2>&1
+				if grep -qE '^[0-9a-f]{40}[[:space:]]+HEAD$' "$out/artifacts/github-anonymous.txt" &&
+					grep -q '"t":"[^"]*","event":"allow","host":"github.com","id":[0-9]*,"operation":"fetch"' "$out/artifacts/github-anonymous.txt"; then
+					verdict PASS github-anonymous-fetch "a public repository no grant names is fetched through the broker, with no credential"
+				else
+					verdict FAIL github-anonymous-fetch "read artifacts/github-anonymous.txt"
+				fi
+				if grep -qE '^release 200 [1-9][0-9]* [1-9][0-9]*$' "$out/artifacts/github-anonymous.txt" &&
+					grep -q '"t":"[^"]*","event":"allow","host":"github.com","id":[0-9]*,"operation":"read"' "$out/artifacts/github-anonymous.txt"; then
+					verdict PASS github-anonymous-download "a release download from github.com reaches GitHub with no credential, and its redirect is followed through the tunnel"
+				else
+					verdict FAIL github-anonymous-download "read artifacts/github-anonymous.txt"
+				fi
 
 				if grep -qE '^[0-9]+: (eth0|ens|enp)' "$out/artifacts/internet.txt"; then
 					verdict FAIL internet-no-nic "the guest has a network interface, so traffic can leave without the broker"

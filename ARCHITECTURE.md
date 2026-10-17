@@ -220,14 +220,22 @@ loopback, at the port its grant names (`routeModelServer`). Nothing the guest se
 upstream URL but an OpenRouter model listing's query, rebuilt so that each name and value is
 encoded. A path holding a percent-escape is refused, and so is a push.
 
+On the TLS listener, a read no grant serves — a GET or HEAD, or git's fetch — is sent to the host it
+was addressed to, with its path and query as the guest sent them and no credential at all, when the
+tunnel's destinations take in that host (`decideAddressed`). The guest could have sent the same
+request through the tunnel had the broker not answered the name. Anything else no grant serves is
+refused.
+
 The credential is always the broker's. A git request's headers are built, carrying of the guest's
 only git's protocol version, checked against a pattern, and its body's gzip encoding
 (`upstreamHeaders`). A model request carries the guest's headers less its credentials, the
 hop-by-hop ones and any its `Connection` names, `Host`, `Expect`, `Content-Length` and
 `Accept-Encoding` (`unforwardedRequestHeaders`), and a listing carries no body headers
-(`bodyHeaders`); the broker's credential is set after the guest's are dropped. A redirect is never
-followed, a 401 becomes the broker's own refusal (`relay`), and an answer loses its cookies and
-authentication challenges on the way back (`responseHeaders`).
+(`bodyHeaders`); the broker's credential is set after the guest's are dropped. An anonymous read is
+built as a model request is, and no credential is set. A redirect is never followed, a 401 becomes
+the broker's own refusal (`relay`), and an answer loses its cookies and authentication challenges on
+the way back (`responseHeaders`). An anonymous read's redirect alone goes back to the guest as it
+came, since nothing the broker holds goes with it.
 
 The body is streamed upstream as it arrives, in chunks, never read and never refused for its size
 (`handle`, `serveRequests`). `headerTimeoutMs` ends a request whose upstream has not answered in
@@ -254,12 +262,13 @@ check here, and is reached.
 
 The one exception is a host the broker's git grants reach, `tlsNames`. A `CONNECT` to one is not
 tunnelled anywhere: whatever the destinations, it is joined to the broker's own TLS listener
-(`serveTunnel`), where each request is decided and constructed as on the broker's port (`serveTls`).
-That listener answers with a certificate for those hosts from an authority made for the project,
-which the guest trusts (`mkRunner`'s `brokerAuthority`). The authority's name constraints limit it
-to the hosts any profile's grant can reach (`tlsNamesCovered`), and its key is deleted once it has
-signed (`Tls.ensure`), so what the project keeps can answer those hosts to its own guest and sign
-nothing.
+(`serveTunnel`), where each request is decided and constructed as on the broker's port, and a read
+no grant serves is sent on without a credential where the destinations take in the host
+(`serveTls`). That listener answers with a certificate for those hosts from an authority made for
+the project, which the guest trusts (`mkRunner`'s `brokerAuthority`). The authority's name
+constraints limit it to the hosts any profile's grant can reach (`tlsNamesCovered`), and its key is
+deleted once it has signed (`Tls.ensure`), so what the project keeps can answer those hosts to its
+own guest and sign nothing.
 
 **Held by:** `broker.ts`: `parseConnect`, `allowTunnel`, `isReachableAddress`, `isHostAddress`,
 `publicDestinations`, `serveTunnel`, `serveTls`; `Tls.ensure`.
