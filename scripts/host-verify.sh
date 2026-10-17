@@ -1938,6 +1938,12 @@ EOF
 				guest 'timeout 30 curl -sS -X POST -d "{}" https://api.github.com/repos/git/git-scm.com/hooks 2>&1 | head -3'
 				guest 'timeout 30 curl -sS -X PUT -d "{}" https://api.github.com/repos/git/git-scm.com/actions/secrets/X 2>&1 | head -3'
 				echo
+				echo "=== an asset uploaded to a release of the repository the grant may write"
+				guest 'timeout 30 curl -sS -X POST -H "Content-Type: text/plain" --data-binary igloo-verify "https://uploads.github.com/repos/git/git-scm.com/releases/1/assets?name=igloo-verify.txt" 2>&1 | head -3'
+				echo
+				echo "=== an asset uploaded to a release of one it may only read"
+				guest 'timeout 30 curl -sS -X POST -H "Content-Type: text/plain" --data-binary igloo-verify "https://uploads.github.com/repos/git/git/releases/1/assets?name=igloo-verify.txt" 2>&1 | head -3'
+				echo
 				echo "=== a new gist, and the account's repositories"
 				guest 'timeout 30 curl -sS -X POST -d "{}" https://api.github.com/gists 2>&1 | head -3'
 				guest 'timeout 30 curl -sS https://api.github.com/user/repos 2>&1 | head -3'
@@ -1999,6 +2005,24 @@ EOF
 			else
 				verdict FAIL github-api-write-refuses "read artifacts/github-api.txt"
 			fi
+			upload_said=$(awk '/^=== an asset uploaded to a release of the repository/ { getline; print; exit }' "$out/artifacts/github-api.txt")
+			case $upload_said in
+			*'uploads.github.com refused IGLOO_VERIFY_BROKERED; '*' not scoped to git/git-scm.com')
+				verdict PASS github-upload-reaches-upstream "an asset uploaded to a release of a repository in write reaches uploads.github.com through the broker, which reports its own credential being refused"
+				;;
+			*)
+				verdict FAIL github-upload-reaches-upstream "read artifacts/github-api.txt, then logs/up-broker/broker.log"
+				;;
+			esac
+			upload_refused=$(awk '/^=== an asset uploaded to a release of one it may only read/ { getline; print; exit }' "$out/artifacts/github-api.txt")
+			case $upload_refused in
+			*'this VM may read git/git, not write to it'*)
+				verdict PASS github-upload-refuses "an asset uploaded to a release of a repository the grant may only read is refused, with its reason"
+				;;
+			*)
+				verdict FAIL github-upload-refuses "read artifacts/github-api.txt"
+				;;
+			esac
 
 			# The whole point of brokering, stated as the thing that must be absent.
 			if grep -q 'brokered-value-never-in-the-guest' "$out/artifacts/tether.txt" ||
@@ -2332,8 +2356,10 @@ EOF
 						refs_before=$(guest "GIT_TERMINAL_PROMPT=0 git ls-remote https://github.com/$write_repo >/tmp/scratch-refs 2>/dev/null && wc -l </tmp/scratch-refs || echo unreadable")
 						if [ "$refs_before" = 0 ]; then
 							verdict NOTE github-push-live "not run: the scratch repository has no commits, so a branch pushed there would become its default, which GitHub will not delete — give it a first commit, such as a README"
+							verdict NOTE github-release-live "not run: the scratch repository has no commits, which a release needs"
 						elif [ "$refs_before" = unreadable ]; then
 							verdict FAIL github-push-live "the scratch repository could not be read through the broker, so nothing was pushed — is IGLOO_VERIFY_GITHUB_WRITE_REPO a repository the token can reach?"
+							verdict NOTE github-release-live "not run: the scratch repository could not be read"
 						else
 							branch=igloo-verify-$(date +%Y%m%d%H%M%S)
 							{
@@ -2360,9 +2386,53 @@ EOF
 							else
 								verdict FAIL github-push-live "read artifacts/github-push-live.txt; a branch named igloo-verify-… may be left in the scratch repository"
 							fi
+
+							# A draft release, given an asset with its length and one in
+							# chunks, read back through the API, and deleted. A draft
+							# creates no tag, so deleting it leaves nothing behind.
+							# Statuses, GitHub's own messages and the host an asset is
+							# served from only, for the reason the push gives.
+							tag=igloo-verify-$(date +%Y%m%d%H%M%S)
+							guest 'head -c 65536 /dev/urandom >/tmp/asset.bin'
+							{
+								echo "=== the draft release made: its status"
+								guest "timeout 30 curl -sS -o /tmp/release.json -w '%{http_code}\n' -X POST -H 'Content-Type: application/json' -d '{\"tag_name\":\"$tag\",\"name\":\"igloo host-verify\",\"draft\":true}' https://api.github.com/repos/$write_repo/releases 2>&1 | tail -1"
+								release=$(guest "grep -o 'releases/[0-9]*/assets' /tmp/release.json 2>/dev/null | head -1 | tr -dc 0-9")
+								if [ -n "$release" ]; then
+									echo "=== an asset uploaded with its length: its status"
+									guest "timeout 60 curl -sS -o /tmp/upload-sized.json -w '%{http_code}\n' -X POST -H 'Content-Type: application/octet-stream' --data-binary @/tmp/asset.bin 'https://uploads.github.com/repos/$write_repo/releases/$release/assets?name=with-length.bin' 2>&1 | tail -1"
+									echo "=== an asset uploaded in chunks: its status, then GitHub's message if it gave one"
+									guest "timeout 60 curl -sS -o /tmp/upload-chunked.json -w '%{http_code}\n' -X POST -H 'Content-Type: application/octet-stream' -H 'Transfer-Encoding: chunked' --data-binary @/tmp/asset.bin 'https://uploads.github.com/repos/$write_repo/releases/$release/assets?name=in-chunks.bin' 2>&1 | tail -1; grep -o '\"message\":\"[^\"]*\"' /tmp/upload-chunked.json"
+									echo "=== the asset read back through the API: its status, and the host it is sent from"
+									guest "timeout 30 curl -sS -o /dev/null -w '%{http_code} %{redirect_url}\n' -H 'Accept: application/octet-stream' https://api.github.com/repos/$write_repo/releases/assets/\$(grep -o 'releases/assets/[0-9]*' /tmp/upload-sized.json | head -1 | tr -dc 0-9) 2>&1 | tail -1 | sed -E 's#(https://[^/]*)/.*#\1#'"
+									echo "=== the release deleted: its status"
+									guest "timeout 30 curl -sS -o /dev/null -w '%{http_code}\n' -X DELETE https://api.github.com/repos/$write_repo/releases/$release 2>&1 | tail -1"
+									echo "=== the release read again: its status"
+									guest "timeout 30 curl -sS -o /dev/null -w '%{http_code}\n' https://api.github.com/repos/$write_repo/releases/$release 2>&1 | tail -1"
+								fi
+								echo "=== uploads the broker allowed, from its log"
+								grep -c '"event":"allow".*"operation":"upload"' "$(boot_log broker.log)"
+								echo "=== writes the broker allowed, from its log"
+								grep -c '"event":"allow".*"operation":"write"' "$(boot_log broker.log)"
+							} >"$out/artifacts/github-release-live.txt" 2>&1
+							released() { awk -v header="=== $1" 'index($0, header) == 1 { getline; print; exit }' "$out/artifacts/github-release-live.txt"; }
+							chunked_said=$(awk '/^=== an asset uploaded in chunks/ { getline; s = $0; if ((getline) > 0 && $0 !~ /^===/) s = s " " $0; print s; exit }' "$out/artifacts/github-release-live.txt")
+							if [ "$(released 'the draft release made')" = 201 ] &&
+								[ "$(released 'an asset uploaded with its length')" = 201 ] &&
+								case $(released 'the asset read back') in 302\ https://*) true ;; *) false ;; esac &&
+								[ "$(released 'the release deleted')" = 204 ] &&
+								[ "$(released 'the release read again')" = 404 ] &&
+								[ "$(released 'uploads the broker allowed')" = 2 ] &&
+								[ "$(released 'writes the broker allowed')" = 2 ]; then
+								verdict PASS github-release-live "a real token makes a draft release in a repository in write through the broker, uploads an asset to it, reads it back, and deletes it — the asset is served from $(released 'the asset read back' | cut -d' ' -f2)"
+							else
+								verdict FAIL github-release-live "read artifacts/github-release-live.txt; a draft release named igloo host-verify may be left in the scratch repository"
+							fi
+							verdict NOTE github-upload-chunked "an asset uploaded in chunks, with no length: GitHub answered ${chunked_said:-nothing}"
 						fi
 					else
 						verdict NOTE github-push-live "not run: set IGLOO_VERIFY_GITHUB_WRITE_REPO to a scratch repository the token can push to"
+						verdict NOTE github-release-live "not run: IGLOO_VERIFY_GITHUB_WRITE_REPO is not set"
 					fi
 				else
 					verdict FAIL github-git-clone "the VM did not come back up for the token run — read steps/up-token.txt"
@@ -2372,6 +2442,7 @@ EOF
 				verdict NOTE github-api-read "not run: IGLOO_VERIFY_GITHUB_TOKEN is not set"
 				verdict NOTE github-graphql-read "not run: IGLOO_VERIFY_GITHUB_TOKEN is not set"
 				verdict NOTE github-push-live "not run: IGLOO_VERIFY_GITHUB_TOKEN is not set"
+				verdict NOTE github-release-live "not run: IGLOO_VERIFY_GITHUB_TOKEN is not set"
 			fi
 
 			# ------------------------------------- restricted, and the tunnel --

@@ -217,15 +217,16 @@ upstream URL is built from the profile's fixed host and the grant's own copy of 
 git request for the repository as the grant spells it, a push only for one in its `write`
 (`routeGit`), a read through a git grant's API under `repos/` and that repository or of the API's
 root, a write there for one in its `write` at a path `apiWrites` lists, or a `POST` to the API's
-fixed `graphql` path (`routeApi`), a model provider's request for an endpoint its profile lists in
-`inferenceEndpoints` (`routeInference`), and a model server's on loopback, at the port its grant
-names (`routeModelServer`). Nothing the guest sends reaches the upstream URL but an OpenRouter model
-listing's query, and an API request's path past its repository and its query: each query rebuilt so
-that each name and value is encoded, and the path's segments as the URL parser left them, with every
-`.` and `..` resolved, so that none leaves the repository. A path holding a percent-escape or an
-empty segment is refused, but for the one ending a host's root, and so is a push or a REST write for
-a repository no grant's `write` lists, a push at its ref advertisement as well as at the push, and a
-REST write `apiWrites` does not list.
+fixed `graphql` path (`routeApi`), an upload of a release's asset for one in its `write` at the
+fixed path its API takes one at (`routeUploads`), a model provider's request for an endpoint its
+profile lists in `inferenceEndpoints` (`routeInference`), and a model server's on loopback, at the
+port its grant names (`routeModelServer`). Nothing the guest sends reaches the upstream URL but an
+OpenRouter model listing's query, and an API request's path past its repository and its query: each
+query rebuilt so that each name and value is encoded, and the path's segments as the URL parser left
+them, with every `.` and `..` resolved, so that none leaves the repository. A path holding a
+percent-escape or an empty segment is refused, but for the one ending a host's root, and so is a
+push or a REST write for a repository no grant's `write` lists, a push at its ref advertisement as
+well as at the push, and a REST write `apiWrites` does not list.
 
 A GraphQL query is the one request a grant's repositories do not bound. It names what it reads and
 writes in its body, much of it by node IDs that say which repository they belong to only after a
@@ -257,13 +258,17 @@ repository's number is put back in the `repos/<owner>/<repo>/` form (`pagesOf`),
 following it stays within the grant.
 
 The body is streamed upstream as it arrives, in chunks, never read and never refused for its size
-(`handle`, `serveRequests`). `headerTimeoutMs` ends a request whose upstream has not answered in
-time, a body that never ends among them. What a provider does for a model, its hosted tools
-included, is the provider's, so under `restricted` workspace data can leave through one to any
-address.
+(`handle`, `serveRequests`). An asset's upload sent with a `Content-Length` and no
+`Transfer-Encoding` goes with that length instead, and is held to it: a body that runs past it or
+ends short of it ends the request and its connection, so that no byte past the stated length reaches
+the upstream, which would read it as the start of another request (`uploadLength`, `heldTo`).
+`headerTimeoutMs` ends a request whose upstream has not answered in time, a body that never ends
+among them. What a provider does for a model, its hosted tools included, is the provider's, so under
+`restricted` workspace data can leave through one to any address.
 
 **Held by:** `broker.ts`: `decide`, `decideAddressed`, `routeApi`, `routeGit`, `routeInference`,
-`routeModelServer`, `upstreamHeaders`, `relay`, `responseHeaders`, `pagesOf`, `handle`.
+`routeModelServer`, `routeUploads`, `upstreamHeaders`, `uploadLength`, `heldTo`, `relay`,
+`responseHeaders`, `pagesOf`, `handle`.
 
 ### The tunnel reaches only public addresses, on port 443
 
