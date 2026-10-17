@@ -185,11 +185,12 @@ reachable there, never where "there" is. The one upstream policy places is a
   - Fetching, `git clone`, `git fetch` and `git pull`, from the repositories listed. Pushing is
     refused.
   - Reading through the REST API, with `GET` or `HEAD`, anything under `repos/<owner>/<repo>/` for a
-    repository listed, with its query.
+    repository listed, with its query, and the API's root, where GitHub gives a token's scopes.
   - A GraphQL query, `POST graphql`, whatever it reads or writes. The grant does not bound it: see
     [what a grant does not bound](#what-a-grant-does-not-bound).
   - Through the API, everything else is refused: a write under `repos/`, another repository, and
-    everything outside `repos/` but `graphql`, `gists`, `user/repos` and `search` among it.
+    everything outside `repos/` but the root and `graphql`, `gists`, `user/repos` and `search` among
+    it.
 - **Grant:** `repos`, required: `owner/repo`, with or without `.git`, matched ignoring case.
 - **In the guest:** `git` is installed, and `GH_TOKEN=igloo-broker-holds-the-real-key`, a
   placeholder for GitHub's CLI, `gh`, which makes no request without a token. The broker answers
@@ -202,14 +203,14 @@ reachable there, never where "there" is. The one upstream policy places is a
 A project has at most one `github` credential: a request to the API may name no repository, so the
 broker could not tell which of two pays. List every repository in the one.
 
-With `gh` in the guest, its commands that read a listed repository work: `gh run list`,
-`gh run view`, `gh release list`, `gh release view`, `gh repo view`, `gh issue list`, `gh pr list`,
-and `gh api` under `repos/`. Those that read through GraphQL, as most of `gh pr`, `gh issue` and
-`gh repo` do, reach whatever the token reaches, listed or not, and those that write through it, as
-`gh issue create`, `gh pr comment` and `gh pr merge` do, work if the token can write. GitHub serves
-a run's logs and a release's assets as redirects to signed URLs on other hosts, which the broker
-passes back for the guest to follow through the tunnel; under `restricted`, list those hosts in
-`tunnel`.
+With `gh` in the guest, `gh auth status` works, and so do its commands that read a listed
+repository: `gh run list`, `gh run view`, `gh release list`, `gh release view`, `gh repo view`,
+`gh issue list`, `gh pr list`, and `gh api` under `repos/`. Those that read through GraphQL, as most
+of `gh pr`, `gh issue` and `gh repo` do, reach whatever the token reaches, listed or not, and those
+that write through it, as `gh issue create`, `gh pr comment` and `gh pr merge` do, work if the token
+can write. GitHub serves a run's logs and a release's assets as redirects to signed URLs on other
+hosts, which the broker passes back for the guest to follow through the tunnel; under `restricted`,
+list those hosts in `tunnel`.
 
 Scope the token itself to the same repositories, read-only. The grant bounds what the broker asks
 for over git and the REST API, and the token bounds what GitHub gives. A GraphQL query is bounded by

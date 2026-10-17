@@ -671,7 +671,8 @@ const methodOf = (operation: InferenceOperation): 'GET' | 'POST' =>
  * segment: `decide` has already refused a percent-escape and an empty segment,
  * and the URL parser has resolved every `.` and `..`, so no segment can leave
  * the repository it follows. The query is carried, rebuilt so that each name
- * and value is encoded.
+ * and value is encoded. A read of the API's root is sent with the credential
+ * too, and without its query.
  *
  * A GraphQL query, a `POST` to `graphql`, is sent with the credential too, and
  * its body as it arrived. It names what it reads and writes in that body, some
@@ -711,6 +712,18 @@ const routeApi = (
     })
   }
   const [area, owner, repo, ...tail] = rest
+  // The API's root names its endpoints and, asked with a token, that token's
+  // scopes, which is what `gh auth status` reads once it has a login.
+  if (area === undefined) {
+    return {
+      _tag: 'Api',
+      credential: grant.credential,
+      host: lowered,
+      operation: 'read',
+      profile: grant.profile,
+      upstream: `https://${lowered}/`,
+    }
+  }
   if (area !== 'repos') {
     return deny(403, `/${rest.join('/')} is not something this VM may read through ${lowered}`, {
       host: lowered,
@@ -925,7 +938,12 @@ export const decide = (grants: readonly Grant[], method: string, target: string)
   // thing to this matcher and another to whatever decodes it later.
   if (url.pathname.includes('%')) return deny(400, 'percent-encoding is not accepted in a path')
 
-  const segments = url.pathname.split('/').slice(1)
+  // A host's root, `/<host>/`, is the host alone: the one place an empty
+  // segment is the path's own rather than a gap in it.
+  const segments = url.pathname
+    .replace(/^(\/[^/]+)\/$/, '$1')
+    .split('/')
+    .slice(1)
   if (segments.some(segment => segment === '')) return deny(404, 'empty path segment')
 
   // A forge's API first, by its host: its paths are the forge's own, and one of

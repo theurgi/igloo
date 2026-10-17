@@ -349,11 +349,32 @@ describe('Broker.decide, on GitHub’s API', () => {
       '/search/issues?q=repo:someone/else',
       '/repositories/212613049/issues',
       '/orgs/someone/repos',
-      '/',
     ]) {
-      assert.strictEqual(outcome(api(path)), path === '/' ? 404 : 403, path)
+      assert.strictEqual(outcome(api(path)), 403, path)
     }
     assert.strictEqual(outcome(api('/repos/you')), 404)
+  })
+
+  it('reads the API’s root with its credential, which is where a token’s scopes are given', () => {
+    const root = {
+      _tag: 'Api',
+      credential: 'GITHUB_TOKEN',
+      host: 'api.github.com',
+      operation: 'read',
+      profile: 'github',
+      upstream: 'https://api.github.com/',
+    } as const
+    assert.deepStrictEqual(api('/'), root)
+    assert.deepStrictEqual(api(''), root)
+    assert.deepStrictEqual(api('/?x=1', 'HEAD'), root)
+    assert.strictEqual(outcome(api('/', 'POST')), 403)
+  })
+
+  it('takes an empty segment as the root only where it ends a host alone', () => {
+    for (const path of ['//', '/repos/you/api/', '/repos//api']) {
+      assert.strictEqual(outcome(api(path)), 404, path)
+    }
+    assert.strictEqual(outcome(Broker.decide(grants, 'GET', `${base}/github.com/`)), 404)
   })
 
   it('refuses a write, whatever it is for', () => {
@@ -512,6 +533,12 @@ describe('Broker.decideAddressed, on a read no grant covers', () => {
     const query = read('https://api.github.com/graphql', 'POST', [])
     assert.strictEqual(query._tag === 'Api' ? query.operation : '', 'graphql')
     assert.strictEqual(read('https://github.com/graphql', 'POST', 'any')._tag, 'Deny')
+  })
+
+  it('reads the API’s root with the grant’s credential, reached or not', () => {
+    const root = read('https://api.github.com/', 'GET', [])
+    assert.strictEqual(root._tag === 'Api' ? root.upstream : '', 'https://api.github.com/')
+    assert.strictEqual(read('https://github.com/', 'GET', 'any')._tag, 'Anonymous')
   })
 
   it('answers no other name, reached or not', () => {
