@@ -817,11 +817,24 @@ describe('Config.compose: grants', () => {
     assert.include(message, 'keep one')
   })
 
-  it('takes one credential for each inference profile, and several for git', () => {
+  it('takes one credential for each profile', () => {
     const policy = composed({
       project: {
+        secrets: { OPENROUTER: { mode: 'broker', profile: 'openrouter', source: { file: '/k' } } },
+      },
+      user: { secrets: { ...calling().secrets, ...brokered().secrets } },
+    })
+    assert.deepStrictEqual(policy.secrets.map(secret => secret.name).toSorted(), [
+      'ANTHROPIC_API_KEY',
+      'GITHUB_TOKEN',
+      'OPENROUTER',
+    ])
+  })
+
+  it('refuses a second github credential, since a request to its API may name no repository', () => {
+    const message = refused({
+      project: {
         secrets: {
-          OPENROUTER: { mode: 'broker', profile: 'openrouter', source: { file: '/k' } },
           SECOND_TOKEN: {
             mode: 'broker',
             profile: 'github',
@@ -830,14 +843,10 @@ describe('Config.compose: grants', () => {
           },
         },
       },
-      user: { secrets: { ...calling().secrets, ...brokered().secrets } },
+      user: brokered(),
     })
-    assert.deepStrictEqual(policy.secrets.map(secret => secret.name).toSorted(), [
-      'ANTHROPIC_API_KEY',
-      'GITHUB_TOKEN',
-      'OPENROUTER',
-      'SECOND_TOKEN',
-    ])
+    assert.include(message, 'are both brokered for the github profile')
+    assert.include(message, 'list every repository in it')
   })
 })
 

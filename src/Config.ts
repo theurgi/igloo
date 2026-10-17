@@ -773,18 +773,19 @@ const composeSecrets = (
     }
     for (const [name, body] of own) secrets.push(declaration(name, 'project', body))
 
-    // One credential per inference profile: a request names no credential, so
-    // the broker would have nothing to choose between two by.
+    // One credential per profile: a request names no credential, and one to a
+    // forge's API may name no repository either, so the broker would have
+    // nothing to choose between two by.
     const fileOf = (secret: SecretDeclaration) =>
       secret.layer === 'user' ? userPath : project.path
     const calling = new Map<string, SecretDeclaration>()
     for (const secret of secrets) {
-      if (secret.mode !== 'broker' || !isInferenceProfile(secret.grant.profile)) continue
+      if (secret.mode !== 'broker') continue
       const first = calling.get(secret.grant.profile)
       if (first !== undefined) {
         const elsewhere = fileOf(first) === fileOf(secret) ? '' : ` (in ${fileOf(first)})`
         return yield* bad(
-          `${fileOf(secret)}: \`${secret.name}\` and \`${first.name}\`${elsewhere} are both brokered for the ${secret.grant.profile} profile. A request names no credential, so the broker could not tell which one pays: keep one.`,
+          `${fileOf(secret)}: \`${secret.name}\` and \`${first.name}\`${elsewhere} are both brokered for the ${secret.grant.profile} profile. ${isInferenceProfile(secret.grant.profile) ? 'A request names no credential' : 'A request to its API may name no repository'}, so the broker could not tell which one pays: keep one${isInferenceProfile(secret.grant.profile) ? '' : ', and list every repository in it'}.`,
         )
       }
       calling.set(secret.grant.profile, secret)
