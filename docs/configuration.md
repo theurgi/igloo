@@ -112,7 +112,7 @@ Every VM starts from `nixosModules.guest`. Any of it can be overridden by a cont
 - **Packages:** `bash`, `cacert`, `coreutils`, `diffutils`, `findutils`, `gawk`, `gnugrep`,
   `gnused`, `gnutar`, `gzip`, `less`, `ncurses`, `openssh`, `which` and `xz`, plus terminfo for
   Ghostty and kitty. `git` is installed only when the VM has a
-  [`github-git` grant](credentials.md#github-git).
+  [`github` grant](credentials.md#github).
 - **`programs.nix-ld`** is enabled, so prebuilt binaries a language toolchain downloads — rustup's,
   uv's Python, an `npm i -g` package — can run.
 - **Unfree packages** are allowed.

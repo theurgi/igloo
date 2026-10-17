@@ -8,7 +8,7 @@ import { connect as connectTls } from 'node:tls'
 import * as Broker from './broker.ts'
 
 const grants: readonly Broker.Grant[] = [
-  { credential: 'GITHUB_TOKEN', profile: 'github-git', repos: ['you/api'] },
+  { credential: 'GITHUB_TOKEN', profile: 'github', repos: ['you/api'] },
 ]
 
 const base = 'http://127.0.0.1:3128'
@@ -31,7 +31,7 @@ describe('Broker.decide, on what it permits', () => {
       credential: 'GITHUB_TOKEN',
       host: 'github.com',
       operation: 'ls-refs',
-      profile: 'github-git',
+      profile: 'github',
       repo: 'you/api',
       upstream: 'https://github.com/you/api.git/info/refs?service=git-upload-pack',
     })
@@ -52,7 +52,7 @@ describe('Broker.decide, on what it permits', () => {
     assert.strictEqual(
       outcome(
         Broker.decide(
-          [{ credential: 'T', profile: 'github-git', repos: ['you/api.git'] }],
+          [{ credential: 'T', profile: 'github', repos: ['you/api.git'] }],
           'GET',
           `${base}/github.com/you/api/info/refs?service=git-upload-pack`,
         ),
@@ -70,7 +70,7 @@ describe('Broker.decide, on what it permits', () => {
     // name that reached the upstream URL would be a path this broker never
     // authorized, however carefully the rest of it was checked.
     const decision = Broker.decide(
-      [{ credential: 'T', profile: 'github-git', repos: ['You/Api'] }],
+      [{ credential: 'T', profile: 'github', repos: ['You/Api'] }],
       'GET',
       `${base}/github.com/you/api/info/refs?service=git-upload-pack`,
     )
@@ -160,9 +160,9 @@ describe('Broker.decide, on what it refuses', () => {
   })
 
   it('refuses anything that is not a git fetch endpoint', () => {
-    // A `github-git` grant is not a GitHub grant: the token would authenticate
-    // an API call perfectly well, which is the reason the allowlist is of
-    // operations and not of hosts.
+    // github.com serves git and nothing else: the token would authenticate a
+    // request for anything there perfectly well, which is the reason the
+    // allowlist is of operations and not of hosts.
     assert.strictEqual(outcome(advertise('/github.com/you/api/pulls')), 404)
     assert.strictEqual(outcome(advertise('/github.com/user/keys')), 404)
   })
@@ -213,7 +213,7 @@ describe('Broker.tlsNames', () => {
   it('answers each git grant’s host, once, and is covered by the certificate', () => {
     const twice: readonly Broker.Grant[] = [
       ...grants,
-      { credential: 'OTHER', profile: 'github-git', repos: ['you/web'] },
+      { credential: 'OTHER', profile: 'github', repos: ['you/web'] },
     ]
     assert.deepStrictEqual(Broker.tlsNames(twice), ['github.com'])
     for (const name of Broker.tlsNames(twice)) assert.include(Broker.tlsNamesCovered, name)
@@ -300,7 +300,7 @@ describe('Broker.upstreamHeaders', () => {
     credential: 'GITHUB_TOKEN',
     host: 'github.com',
     operation: 'ls-refs',
-    profile: 'github-git',
+    profile: 'github',
     repo: 'you/api',
     upstream: 'https://github.com/you/api.git/info/refs?service=git-upload-pack',
   } as const
@@ -1054,8 +1054,8 @@ const message = (json: string): string => {
 describe('Broker.parseGrants', () => {
   it('reads a grant', () => {
     assert.deepStrictEqual(
-      Broker.parseGrants('[{"credential":"T","profile":"github-git","repos":["you/api"]}]'),
-      { grants: [{ credential: 'T', profile: 'github-git', repos: ['you/api'] }] },
+      Broker.parseGrants('[{"credential":"T","profile":"github","repos":["you/api"]}]'),
+      { grants: [{ credential: 'T', profile: 'github', repos: ['you/api'] }] },
     )
   })
 
@@ -1067,23 +1067,17 @@ describe('Broker.parseGrants', () => {
     // A broker that dropped the grant it could not read would serve a smaller
     // policy than the one written down, which is not a difference anyone
     // notices until the request that should have been refused succeeds.
-    assert.include(
-      message('[{"credential":"T","profile":"github","repos":["you/api"]}]'),
-      'github-git',
-    )
+    assert.include(message('[{"credential":"T","profile":"gitlab","repos":["you/api"]}]'), 'gitlab')
   })
 
   it('refuses a grant that names no repositories', () => {
-    assert.include(
-      message('[{"credential":"T","profile":"github-git","repos":[]}]'),
-      'no repositories',
-    )
+    assert.include(message('[{"credential":"T","profile":"github","repos":[]}]'), 'no repositories')
   })
 
   it('refuses a repository that is not owner/repo', () => {
     for (const repo of ['api', 'you/api/extra', '../api', 'https://github.com/you/api', 'you/']) {
       assert.include(
-        message(`[{"credential":"T","profile":"github-git","repos":[${JSON.stringify(repo)}]}]`),
+        message(`[{"credential":"T","profile":"github","repos":[${JSON.stringify(repo)}]}]`),
         'owner/repo',
       )
     }
@@ -1092,7 +1086,7 @@ describe('Broker.parseGrants', () => {
   it('refuses malformed input rather than starting without it', () => {
     assert.include(message('not json'), 'not JSON')
     assert.include(message('{}'), 'array')
-    assert.include(message('[{"profile":"github-git","repos":["you/api"]}]'), 'credential')
+    assert.include(message('[{"profile":"github","repos":["you/api"]}]'), 'credential')
   })
 
   it('reads an inference grant, which is a profile and a credential', () => {
@@ -1114,7 +1108,7 @@ describe('Broker.parseGrants', () => {
       { credential: 'K', models: ['m'], profile: 'anthropic-messages' },
       { credential: 'K', maxOutputTokens: 64, profile: 'openrouter' },
       { credential: 'K', profile: 'anthropic-messages', repos: ['you/api'] },
-      { credential: 'T', models: ['m'], profile: 'github-git', repos: ['you/api'] },
+      { credential: 'T', models: ['m'], profile: 'github', repos: ['you/api'] },
     ]) {
       assert.include(message(JSON.stringify([grant])), 'which this broker does not read')
     }
@@ -1130,7 +1124,7 @@ describe('Broker.parseGrants', () => {
     // A git request names its repository, which is what picks the grant.
     assert.property(
       Broker.parseGrants(
-        '[{"credential":"T","profile":"github-git","repos":["you/api"]},{"credential":"U","profile":"github-git","repos":["you/web"]}]',
+        '[{"credential":"T","profile":"github","repos":["you/api"]},{"credential":"U","profile":"github","repos":["you/web"]}]',
       ),
       'grants',
     )
@@ -2125,11 +2119,11 @@ describe('Broker.serveRequests, request by request', () => {
   const granted: readonly Broker.Grant[] = [
     {
       credential: 'GITHUB_TOKEN',
-      profile: 'github-git',
+      profile: 'github',
       repos: ['you/api', 'you/gone', 'you/refused', 'you/moved', 'you/broken', 'you/endless'],
     },
     // A grant whose credential the broker was never given.
-    { credential: 'OTHER_TOKEN', profile: 'github-git', repos: ['you/other'] },
+    { credential: 'OTHER_TOKEN', profile: 'github', repos: ['you/other'] },
   ]
 
   /** A provider standing in for each repository: what asking it does. */
@@ -3143,7 +3137,7 @@ describe('Broker, run as a program', () => {
         assert.deepStrictEqual(listening, {
           credentials: ['GITHUB_TOKEN'],
           event: 'listening',
-          grants: [{ credential: 'GITHUB_TOKEN', profile: 'github-git', repos: ['you/api'] }],
+          grants: [{ credential: 'GITHUB_TOKEN', profile: 'github', repos: ['you/api'] }],
           socket,
         })
         const denied = events.find(e => e['event'] === 'deny')
@@ -3237,7 +3231,7 @@ describe('Broker, run as a program', () => {
           socket,
           '--grants',
           JSON.stringify([
-            { credential: Broker.tlsKeyCredential, profile: 'github-git', repos: ['you/api'] },
+            { credential: Broker.tlsKeyCredential, profile: 'github', repos: ['you/api'] },
           ]),
         ],
         {

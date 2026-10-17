@@ -57,7 +57,7 @@ The user layer declares credentials once and lists the projects each one goes to
       "github/fine-grained-token"
     ];
     mode = "broker";
-    profile = "github-git";
+    profile = "github";
     repos = [ "alice/demo" ];
     projects = [ "${config.home.homeDirectory}/projects/demo" ];
   };
@@ -77,20 +77,20 @@ holds its own TLS certificate and key under them.
 
 ### Fields
 
-| Field      | Applies to             | Value                                                    |
-| ---------- | ---------------------- | -------------------------------------------------------- |
-| `source`   | every credential       | `{ file = "…"; }` or `{ command = [ … ]; }`              |
-| `mode`     | every credential       | `"broker"` or `"deliver"`                                |
-| `profile`  | brokered               | `"anthropic-messages"`, `"openrouter"` or `"github-git"` |
-| `repos`    | brokered, `github-git` | Repositories, as `owner/repo`.                           |
-| `projects` | user layer only        | Absolute paths of the projects' root directories.        |
+| Field      | Applies to         | Value                                                |
+| ---------- | ------------------ | ---------------------------------------------------- |
+| `source`   | every credential   | `{ file = "…"; }` or `{ command = [ … ]; }`          |
+| `mode`     | every credential   | `"broker"` or `"deliver"`                            |
+| `profile`  | brokered           | `"anthropic-messages"`, `"openrouter"` or `"github"` |
+| `repos`    | brokered, `github` | Repositories, as `owner/repo`.                       |
+| `projects` | user layer only    | Absolute paths of the projects' root directories.    |
 
 A field that does not apply is refused rather than ignored: `repos` on a model grant, or `profile`
 on a delivered credential, would be someone believing they had narrowed something.
 
 A project has at most one brokered credential per inference profile. A request names no credential,
-so the broker would have no way to choose between two. Several `github-git` credentials are fine:
-each request names its repository.
+so the broker would have no way to choose between two. Several `github` credentials are fine: each
+request names its repository.
 
 `models` and `maxOutputTokens` are refused. Which models a key may call and what it may spend are
 set on the key, at the provider: OpenRouter has a credit limit and guardrails per key, Anthropic a
@@ -177,7 +177,7 @@ reachable there, never where "there" is. The one upstream policy places is a
   - `OPENROUTER_BASE_URL=http://127.0.0.1:3128/openrouter.ai/api/v1`
   - `OPENROUTER_API_KEY=igloo-broker-holds-the-real-key`
 
-### `github-git`
+### `github`
 
 - **Upstream:** `https://github.com`, over git's smart HTTP protocol, with the token sent the way
   git sends a fine-grained personal access token or a GitHub App installation token.
@@ -196,8 +196,8 @@ ask for, and the token bounds what GitHub will give.
 ### How the guest reaches GitHub
 
 The broker answers `github.com` over TLS with a certificate of its own, so the guest has to trust
-what issued it. On the first launch with a `github-git` grant, igloo makes a certificate authority
-for the project with `openssl`, and a certificate for `github.com` signed by it. It keeps both in
+what issued it. On the first launch with a `github` grant, igloo makes a certificate authority for
+the project with `openssl`, and a certificate for `github.com` signed by it. It keeps both in
 `.igloo/tls/`, with the certificate's key, readable only by you. The guest is built trusting that
 authority beside the system's own, and `NODE_EXTRA_CA_CERTS` points Node and Bun at the same list.
 
@@ -340,18 +340,18 @@ On every brokered request:
   `anthropic-beta` and `x-session-id` included. Those about the guest's connection do not: `Host`,
   `Connection` and the headers it names, the other hop-by-hop ones, and `Expect`. Nor do
   `Accept-Encoding` and `Content-Length`, which the broker sets itself. A model listing sends no
-  body, so it carries no `Content-Type` or `Content-Encoding` either. On `github-git`, the broker
-  builds the headers and carries over only git's protocol version and request-body encoding, each
-  checked first. A `github-git` request arrives over TLS and names no host in its path, so the host
-  it was sent to is read instead, and only `github.com` is answered.
+  body, so it carries no `Content-Type` or `Content-Encoding` either. On `github`, the broker builds
+  the headers and carries over only git's protocol version and request-body encoding, each checked
+  first. A `github` request arrives over TLS and names no host in its path, so the host it was sent
+  to is read instead, and only `github.com` is answered.
 - The response passes back with its status and body. On an inference profile or a model server its
   headers pass too, `retry-after`, rate limits and request ids included, except `Set-Cookie`,
   `WWW-Authenticate`, `Proxy-Authenticate`, `Alt-Svc`, `Content-Length`, `Content-Encoding` and the
-  hop-by-hop ones. On `github-git`, `Content-Type` is its only header.
+  hop-by-hop ones. On `github`, `Content-Type` is its only header.
 - An upstream `401` comes back saying the host's credential was refused: as a `403` on an inference
   profile or a model server, which an agent reports at once rather than retrying, and as a `502` on
-  `github-git`, so that git does not prompt for credentials the guest must not have. A redirect is
-  not followed.
+  `github`, so that git does not prompt for credentials the guest must not have. A redirect is not
+  followed.
 - Every refusal the broker writes itself carries `x-should-retry: false`, except the one that may
   pass: an upstream that did not answer.
 - No request body is refused for its size. The upstream's own limit is the one a body meets, and on
@@ -452,8 +452,8 @@ that way, since it never enters the guest.
   every request to a profile's upstream fails verification. The tunnel does not open the TLS it
   carries, so there the guest's own client does the verifying, and a content module can give the
   guest the authority with `security.pki.certificates`.
-- `github-git` fetches from GitHub, and cannot push.
-- With a `github-git` grant, nothing in the guest reaches `github.com` but through the broker, which
+- `github` fetches from GitHub, and cannot push.
+- With a `github` grant, nothing in the guest reaches `github.com` but through the broker, which
   serves git for the repositories listed: a release download from `github.com`, or a clone of a
   repository the grant does not list, is refused, under `internet` too.
 - A client that verifies against a list of certificate authorities of its own, rather than the

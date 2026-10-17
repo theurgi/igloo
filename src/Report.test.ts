@@ -101,9 +101,7 @@ const record: Report.BootRecord = {
         json({
           credentials: ['ACME_GITHUB'],
           event: 'listening',
-          grants: [
-            { credential: 'ACME_GITHUB', profile: 'github-git', repos: ['acme/secret-sauce'] },
-          ],
+          grants: [{ credential: 'ACME_GITHUB', profile: 'github', repos: ['acme/secret-sauce'] }],
           socket: `/run/user/1000/igloo/acme-widgets-${cidHex}-broker/http.sock`,
           t: '1',
         }),
@@ -225,7 +223,7 @@ describe('Report.render', () => {
     assert.include(tunnel?.['socket'], `/${placeholder.label}-${placeholder.cidHex}-broker/`)
     assert.deepStrictEqual(listening?.['credentials'], [placeholder.credential])
     assert.deepStrictEqual(listening?.['grants'], [
-      { credential: placeholder.credential, profile: 'github-git', repos: [placeholder.repo] },
+      { credential: placeholder.credential, profile: 'github', repos: [placeholder.repo] },
     ])
     assert.strictEqual(allow?.['credential'], placeholder.credential)
     assert.strictEqual(allow?.['scope'], placeholder.repo)
@@ -324,7 +322,7 @@ describe('Report.render', () => {
         files: [
           {
             name: 'broker.log',
-            text: `${json({ credential: 'github', event: 'allow', host: 'api.anthropic.com' })}\n`,
+            text: `${json({ credential: 'anthropic', event: 'allow', host: 'api.anthropic.com' })}\n`,
           },
           { name: 'serial.log', text: 'api calls api.anthropic.com and github.com\n' },
         ],

@@ -592,7 +592,7 @@ describe('Config.compose: secrets', () => {
     // reads this to decide which of the two mechanisms a credential gets.
     const policy = composed({
       project: {},
-      user: declared({ mode: 'broker', profile: 'github-git', repos: ['you/api'] }),
+      user: declared({ mode: 'broker', profile: 'github', repos: ['you/api'] }),
     })
     assert.deepStrictEqual(
       policy.secrets.map(secret => secret.mode),
@@ -684,7 +684,7 @@ describe('Config.compose: grants', () => {
     secrets: {
       GITHUB_TOKEN: {
         mode: 'broker',
-        profile: 'github-git',
+        profile: 'github',
         projects: [projectRoot],
         repos: ['you/api'],
         source: { command: ['gh', 'auth', 'token'] },
@@ -702,7 +702,7 @@ describe('Config.compose: grants', () => {
   it('carries the grant through to the launch path', () => {
     const [secret] = composed({ project: {}, user: brokered() }).secrets
     assert.deepStrictEqual(secret?.mode === 'broker' ? secret.grant : undefined, {
-      profile: 'github-git',
+      profile: 'github',
       repos: ['you/api'],
     })
   })
@@ -713,12 +713,12 @@ describe('Config.compose: grants', () => {
     // confusable.
     const message = refused({ project: {}, user: brokered({ profile: undefined }) })
     assert.include(message, '`secrets.GITHUB_TOKEN.profile`')
-    assert.include(message, '"github-git"')
+    assert.include(message, '"github"')
   })
 
   it('refuses a profile that is not built', () => {
-    const message = refused({ project: {}, user: brokered({ profile: 'github' }) })
-    assert.include(message, '"github-git"')
+    const message = refused({ project: {}, user: brokered({ profile: 'gitlab' }) })
+    assert.include(message, '"github"')
   })
 
   it('refuses a grant that reaches nothing', () => {
@@ -824,7 +824,7 @@ describe('Config.compose: grants', () => {
           OPENROUTER: { mode: 'broker', profile: 'openrouter', source: { file: '/k' } },
           SECOND_TOKEN: {
             mode: 'broker',
-            profile: 'github-git',
+            profile: 'github',
             repos: ['you/web'],
             source: { file: '/t' },
           },
