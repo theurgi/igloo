@@ -88,9 +88,8 @@ holds its own TLS certificate and key under them.
 A field that does not apply is refused rather than ignored: `repos` on a model grant, or `profile`
 on a delivered credential, would be someone believing they had narrowed something.
 
-A project has at most one brokered credential per inference profile. A request names no credential,
-so the broker would have no way to choose between two. Several `github` credentials are fine: each
-request names its repository.
+A project has at most one brokered credential per profile. A request names no credential, and one to
+GitHub's API may name no repository, so the broker would have no way to choose between two.
 
 `models` and `maxOutputTokens` are refused. Which models a key may call and what it may spend are
 set on the key, at the provider: OpenRouter has a credit limit and guardrails per key, Anthropic a
@@ -179,38 +178,58 @@ reachable there, never where "there" is. The one upstream policy places is a
 
 ### `github`
 
-- **Upstream:** `https://github.com`, over git's smart HTTP protocol, with the token sent the way
-  git sends a fine-grained personal access token or a GitHub App installation token.
-- **Operations:** fetching — `git clone`, `git fetch`, `git pull` — from the repositories listed.
-  Pushing is refused.
+- **Upstream:** `https://github.com`, over git's smart HTTP protocol, and GitHub's REST API at
+  `https://api.github.com`, with the token sent the way each takes a fine-grained personal access
+  token or a GitHub App installation token.
+- **Operations:**
+  - Fetching, `git clone`, `git fetch` and `git pull`, from the repositories listed. Pushing is
+    refused.
+  - Reading through the API, with `GET` or `HEAD`, anything under `repos/<owner>/<repo>/` for a
+    repository listed, with its query. Through the API, everything else is refused: a write, another
+    repository, and everything outside `repos/`, `gists`, `user/repos` and `search` among it.
 - **Grant:** `repos`, required: `owner/repo`, with or without `.git`, matched ignoring case.
-- **In the guest:** `git` is installed. The broker answers `github.com` itself: a connection to it
-  through the [tunnel](network.md#the-tunnel) reaches the broker rather than GitHub, under every
-  network mode and with no `tunnel` entry. So an ordinary GitHub URL just works, and a remote reads
-  as the URL it was cloned from. Its system configuration rewrites `git@github.com:` and
-  `ssh://git@github.com/` URLs to `https://github.com/`.
+- **In the guest:** `git` is installed, and `GH_TOKEN=igloo-broker-holds-the-real-key`, a
+  placeholder for GitHub's CLI, `gh`, which makes no request without a token. The broker answers
+  `github.com` and `api.github.com` itself: a connection to either through the
+  [tunnel](network.md#the-tunnel) reaches the broker rather than GitHub, under every network mode
+  and with no `tunnel` entry. So an ordinary GitHub URL just works, a remote reads as the URL it was
+  cloned from, and `gh` finds its repository from it. Its system configuration rewrites
+  `git@github.com:` and `ssh://git@github.com/` URLs to `https://github.com/`.
+
+A project has at most one `github` credential: a request to the API may name no repository, so the
+broker could not tell which of two pays. List every repository in the one.
+
+With `gh` in the guest, `gh run list`, `gh run view`, `gh release view` and `gh api` reading under a
+listed repository work. The commands that use GitHub's GraphQL API are refused, `gh pr`, `gh issue`,
+`gh repo view`, `gh release list` and `gh auth status` among them. GitHub serves a run's logs and a
+release's assets as redirects to signed URLs on other hosts, which the broker passes back for the
+guest to follow through the tunnel; under `restricted`, list those hosts in `tunnel`.
 
 Scope the token itself to the same repositories, read-only. The grant bounds what the broker will
 ask for, and the token bounds what GitHub will give.
 
 ### How the guest reaches GitHub
 
-The broker answers `github.com` over TLS with a certificate of its own, so the guest has to trust
-what issued it. On the first launch with a `github` grant, igloo makes a certificate authority for
-the project with `openssl`, and a certificate for `github.com` signed by it. It keeps both in
-`.igloo/tls/`, with the certificate's key, readable only by you. The guest is built trusting that
-authority beside the system's own, and `NODE_EXTRA_CA_CERTS` points Node and Bun at the same list.
+The broker answers `github.com` and `api.github.com` over TLS with a certificate of its own, so the
+guest has to trust what issued it. On the first launch with a `github` grant, igloo makes a
+certificate authority for the project with `openssl`, and a certificate for both names signed by it.
+It keeps both in `.igloo/tls/`, with the certificate's key, readable only by you. The guest is built
+trusting that authority beside the system's own, and `NODE_EXTRA_CA_CERTS` points Node and Bun at
+the same list.
 
-- The authority can sign for `github.com` and nothing else: its name constraints say so, and its own
-  key is deleted once it has signed the one certificate. What `.igloo/tls/` holds can answer
-  `github.com` to this project's guest, and sign nothing.
-- Every request the guest makes to `github.com` over HTTPS reaches the broker. Git's fetches for the
-  repositories listed are served with the token. A read no grant covers, a release download or a
-  clone of a public repository the grant does not list, is sent to GitHub with no credential at all,
-  when the VM's tunnel could reach `github.com` itself: under `internet`, or under `restricted` with
-  `github.com` in `tunnel`. A redirect in its answer comes back for the guest to follow through the
-  tunnel. Anything else, a push to a repository the grant does not list among them, is refused with
-  the reason.
+- The authority can sign for `github.com` and its subdomains and nothing else: its name constraints
+  say so, and its own key is deleted once it has signed the one certificate. What `.igloo/tls/`
+  holds can answer GitHub's names to this project's guest, and sign nothing.
+- Every request the guest makes to either name over HTTPS reaches the broker. What the grant covers
+  is served with the token. A read no grant covers, a release download, a clone of a public
+  repository the grant does not list or an install script's read through the API, is sent to GitHub
+  with no credential at all, when the VM's tunnel could reach that name itself: under `internet`, or
+  under `restricted` with the name in `tunnel`. A redirect in its answer comes back for the guest to
+  follow through the tunnel. Anything else, a write no grant covers among it, is refused with the
+  reason.
+- GitHub names the next page of a repository's listing by the repository's number, which no grant
+  names. On an answer for a listed repository, the broker puts each such link back in the
+  `repos/<owner>/<repo>/` form, so a client following it stays within the grant.
 - `.igloo/tls/` is made again when it no longer covers the names the broker answers, or is within 30
   days of expiring after ten years. Delete it to have it made again; the next launch rebuilds the
   guest, since the authority is part of it.
@@ -456,10 +475,14 @@ that way, since it never enters the guest.
   every request to a profile's upstream fails verification. The tunnel does not open the TLS it
   carries, so there the guest's own client does the verifying, and a content module can give the
   guest the authority with `security.pki.certificates`.
-- `github` fetches from GitHub, and cannot push.
-- With a `github` grant, nothing in the guest reaches `github.com` but through the broker. Under
-  `restricted` without `github.com` in `tunnel`, that means only the repositories listed: a release
-  download from `github.com`, or a clone of any other repository, is refused.
+- `github` fetches from GitHub and reads through its REST API, and cannot push or write. GitHub's
+  GraphQL API, which much of `gh` uses, is refused.
+- With a `github` grant, nothing in the guest reaches `github.com` or `api.github.com` but through
+  the broker. Under `restricted` without them in `tunnel`, that means only the repositories listed:
+  a release download from `github.com`, a clone of any other repository, or an anonymous read
+  through the API, is refused.
+- A path holding a percent-escape is refused, so an API read naming a branch with a `/` in it, as
+  `branches/feature%2Fx`, is refused.
 - A client that verifies against a list of certificate authorities of its own, rather than the
   system's, does not trust the broker's, and fails to reach `github.com` from the guest. Node and
   Bun read `NODE_EXTRA_CA_CERTS`, which the guest sets; point any other at

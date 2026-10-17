@@ -1473,6 +1473,18 @@ EOF
 	# broker is not told the mode, so what passes it here passes it under
 	# internet too.
 	printf '{ network = "restricted"; }\n' >"$project/igloo-policy.nix"
+	# The core is deflated, so the guest has no HTTPS client to prove the
+	# broker's TLS names and the tunnel with. A content layer is how a project
+	# adds one, which makes this both the fixture and a second use of the
+	# content plane — and the module sits in the workspace, imported from the
+	# project layer, because that is the one place outside the layers a
+	# confined evaluation may read from.
+	cat >"$project/workspace/igloo-verify-curl.nix" <<'EOF'
+{ pkgs, ... }: { environment.systemPackages = [ pkgs.curl ]; }
+EOF
+	cat >"$project/igloo.nix" <<'EOF'
+{ ... }: { imports = [ ./workspace/igloo-verify-curl.nix ]; }
+EOF
 
 	use_layer "$broker_config/igloo"
 	if step up-broker -- "$repo/bin/igloo" up; then
@@ -1869,6 +1881,41 @@ EOF
 				verdict FAIL github-git-scopes-repos "an ungranted repository was not refused — read artifacts/github-git.txt"
 			fi
 
+			# GitHub's REST API, answered by the broker as github.com is. The
+			# token is the same invalid one, so a granted read reaching GitHub
+			# comes back as GitHub refusing the broker's credential.
+			{
+				echo "=== the token gh is given"
+				guest 'printenv GH_TOKEN 2>&1'
+				echo
+				echo "=== a read under the granted repository"
+				guest 'timeout 30 curl -sS https://api.github.com/repos/git/git 2>&1 | head -3'
+				echo
+				echo "=== a read under a repository the grant does not name"
+				guest 'timeout 30 curl -sS https://api.github.com/repos/torvalds/linux 2>&1 | head -3'
+				echo
+				echo "=== a new gist, and the account's repositories"
+				guest 'timeout 30 curl -sS -X POST -d "{}" https://api.github.com/gists 2>&1 | head -3'
+				guest 'timeout 30 curl -sS https://api.github.com/user/repos 2>&1 | head -3'
+			} >"$out/artifacts/github-api.txt" 2>&1
+			if grep -qx 'igloo-broker-holds-the-real-key' "$out/artifacts/github-api.txt"; then
+				verdict PASS github-api-placeholder "the guest's GH_TOKEN is the placeholder, which the broker replaces"
+			else
+				verdict FAIL github-api-placeholder "read artifacts/github-api.txt"
+			fi
+			if grep -q 'api.github.com refused IGLOO_VERIFY_BROKERED' "$out/artifacts/github-api.txt"; then
+				verdict PASS github-api-reaches-upstream "a read through the API reaches api.github.com through the broker, which reports its own credential being refused"
+			else
+				verdict FAIL github-api-reaches-upstream "read artifacts/github-api.txt, then logs/up-broker/broker.log"
+			fi
+			if grep -q 'torvalds/linux is not a repository this VM may read' "$out/artifacts/github-api.txt" &&
+				grep -q 'not POST /gists' "$out/artifacts/github-api.txt" &&
+				grep -q '/user/repos is not something this VM may read' "$out/artifacts/github-api.txt"; then
+				verdict PASS github-api-refuses "another repository, a new gist and the account's repositories are refused through the API, each with its reason"
+			else
+				verdict FAIL github-api-refuses "read artifacts/github-api.txt"
+			fi
+
 			# The whole point of brokering, stated as the thing that must be absent.
 			if grep -q 'brokered-value-never-in-the-guest' "$out/artifacts/tether.txt" ||
 				grep -q 'IGLOO_VERIFY_BROKERED' "$out/artifacts/tether.txt"; then
@@ -2147,6 +2194,12 @@ EOF
 						echo "=== and the guest still has no credential store of its own"
 						guest 'ls /run/credentials/@system/ 2>&1'
 						echo
+						# Counts and forms only: the repository may be one of the user's.
+						echo "=== the repository read through the API: answers naming it"
+						guest "timeout 30 curl -sS https://api.github.com/repos/$real_repo 2>&1 | grep -c '\"full_name\"'"
+						echo "=== the forms its commits' next page is named in"
+						guest "timeout 30 curl -sS -D - -o /dev/null 'https://api.github.com/repos/$real_repo/commits?per_page=1' 2>&1 | grep -i '^link:' | grep -o '/repos/\|/repositories/' | sort -u"
+						echo
 						# Copied for the reason the github-git section gives.
 						echo "=== the fetches the broker allowed, from its log"
 						grep '"event":"allow".*"operation":"fetch"' "$(boot_log broker.log)"
@@ -2160,11 +2213,22 @@ EOF
 					else
 						verdict FAIL github-git-clone "the clone did not complete — read artifacts/github-git-clone.txt"
 					fi
+
+					# The repository's own answer, once, and its next page named in the
+					# form the grant matches rather than by the repository's number.
+					api_named=$(awk '/^=== the repository read through the API/ { getline; print; exit }' "$out/artifacts/github-git-clone.txt")
+					api_pages=$(awk '/^=== the forms its commits/ { f = 1; next } /^===/ { f = 0 } f && NF' "$out/artifacts/github-git-clone.txt" | tr '\n' ' ')
+					if [ "$api_named" = 1 ] && [ "$api_pages" = "/repos/ " ]; then
+						verdict PASS github-api-read "a real token reads a real repository through the API, and its next page is named so that it stays within the grant"
+					else
+						verdict FAIL github-api-read "read artifacts/github-git-clone.txt"
+					fi
 				else
 					verdict FAIL github-git-clone "the VM did not come back up for the token run — read steps/up-token.txt"
 				fi
 			else
 				verdict NOTE github-git-clone "not run: export IGLOO_VERIFY_GITHUB_TOKEN (a fine-grained read-only token) to check that a valid credential actually fetches"
+				verdict NOTE github-api-read "not run: IGLOO_VERIFY_GITHUB_TOKEN is not set"
 			fi
 
 			# ------------------------------------- restricted, and the tunnel --
@@ -2185,18 +2249,7 @@ EOF
   tunnel = [ "pypi.org" ];
 }
 EOF
-			# The core is deflated, so the guest has no HTTPS client to prove the
-			# tunnel with. A content layer is how a project adds one, which makes
-			# this both the fixture and a second use of the content plane — and
-			# the module sits in the workspace, imported from the project layer,
-			# because that is the one place outside the layers a confined
-			# evaluation may read from.
-			cat >"$project/workspace/igloo-verify-curl.nix" <<'EOF'
-{ pkgs, ... }: { environment.systemPackages = [ pkgs.curl ]; }
-EOF
-			cat >"$project/igloo.nix" <<'EOF'
-{ ... }: { imports = [ ./workspace/igloo-verify-curl.nix ]; }
-EOF
+			# The guest's curl is the content layer the brokered section added.
 			# A raw CONNECT, because curl reports the status of a failed tunnel
 			# and discards the body — and the body is where the broker says
 			# which of refusing, not resolving and not connecting it did.

@@ -214,11 +214,14 @@ advertisement, and by nothing else it carries (`decide`). On the TLS listener, t
 was addressed to is read as well, and only as one of the hosts the broker's git grants reach: it
 stands where the path form puts the host, and the rest is `decide`'s (`decideAddressed`). The
 upstream URL is built from the profile's fixed host and the grant's own copy of what it allows: a
-git request for the repository as the grant spells it (`routeGit`), a model provider's request for
-an endpoint its profile lists in `inferenceEndpoints` (`routeInference`), and a model server's on
-loopback, at the port its grant names (`routeModelServer`). Nothing the guest sends reaches the
-upstream URL but an OpenRouter model listing's query, rebuilt so that each name and value is
-encoded. A path holding a percent-escape is refused, and so is a push.
+git request for the repository as the grant spells it (`routeGit`), a read through a git grant's API
+under `repos/` and that repository (`routeApi`), a model provider's request for an endpoint its
+profile lists in `inferenceEndpoints` (`routeInference`), and a model server's on loopback, at the
+port its grant names (`routeModelServer`). Nothing the guest sends reaches the upstream URL but an
+OpenRouter model listing's query, and an API read's path past its repository and its query: each
+query rebuilt so that each name and value is encoded, and the path's segments as the URL parser left
+them, with every `.` and `..` resolved, so that none leaves the repository. A path holding a
+percent-escape or an empty segment is refused, and so is a push, and a write through the API.
 
 On the TLS listener, a read no grant serves — a GET or HEAD, or git's fetch — is sent to the host it
 was addressed to, with its path and query as the guest sent them and no credential at all, when the
@@ -234,8 +237,11 @@ hop-by-hop ones and any its `Connection` names, `Host`, `Expect`, `Content-Lengt
 (`bodyHeaders`); the broker's credential is set after the guest's are dropped. An anonymous read is
 built as a model request is, and no credential is set. A redirect is never followed, a 401 becomes
 the broker's own refusal (`relay`), and an answer loses its cookies and authentication challenges on
-the way back (`responseHeaders`). An anonymous read's redirect alone goes back to the guest as it
-came, since nothing the broker holds goes with it.
+the way back (`responseHeaders`). The redirects of an API read and an anonymous read alone go back
+to the guest as they came: an API's leads to a signed URL for a log or an asset, and the broker
+neither follows it nor sends its credential there. An API read's `Link` naming a page by the
+repository's number is put back in the `repos/<owner>/<repo>/` form (`pagesOf`), so a client
+following it stays within the grant.
 
 The body is streamed upstream as it arrives, in chunks, never read and never refused for its size
 (`handle`, `serveRequests`). `headerTimeoutMs` ends a request whose upstream has not answered in
@@ -243,8 +249,8 @@ time, a body that never ends among them. What a provider does for a model, its h
 included, is the provider's, so under `restricted` workspace data can leave through one to any
 address.
 
-**Held by:** `broker.ts`: `decide`, `decideAddressed`, `routeGit`, `routeInference`,
-`routeModelServer`, `upstreamHeaders`, `relay`, `responseHeaders`, `handle`.
+**Held by:** `broker.ts`: `decide`, `decideAddressed`, `routeApi`, `routeGit`, `routeInference`,
+`routeModelServer`, `upstreamHeaders`, `relay`, `responseHeaders`, `pagesOf`, `handle`.
 
 ### The tunnel reaches only public addresses, on port 443
 

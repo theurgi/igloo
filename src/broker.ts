@@ -53,8 +53,9 @@ const usage =
  * places, and it is placed no further than a port: see `ModelServerGrant`.
  *
  * The kind decides which half of this file answers a request: a `git` profile
- * fetches from the repositories a grant lists, an `inference` profile calls the
- * endpoints `inferenceEndpoints` lists.
+ * fetches from the repositories a grant lists, and reads its forge's API, at
+ * `api`, for them; an `inference` profile calls the endpoints
+ * `inferenceEndpoints` lists.
  *
  * No profile limits a body's size. A body is streamed, so the broker holds
  * little of it at once however large it is, and the upstream's own limit is
@@ -65,7 +66,7 @@ const usage =
 export const profiles = {
   // Anthropic's own, for the messages endpoint and for counting tokens.
   'anthropic-messages': { host: 'api.anthropic.com', kind: 'inference' },
-  github: { host: 'github.com', kind: 'git' },
+  github: { api: 'api.github.com', host: 'github.com', kind: 'git' },
   openrouter: { host: 'openrouter.ai', kind: 'inference' },
 } as const
 
@@ -93,24 +94,32 @@ export const isInferenceProfile = (name: ProfileName): name is InferenceProfile 
 export const profileNames: readonly string[] = Object.keys(profiles)
 
 /**
- * Every name a broker may answer TLS for: each git profile's host. A guest's
- * git reaches such a host by its own name, through the tunnel, which hands the
+ * The names a git profile is answered at: its host and its API's. A guest's
+ * client reaches each by its own name, through the tunnel, which hands the
  * connection to the broker's TLS listener rather than to the host. A remote
  * then reads as the repository's own URL, which is how a client that reads
- * remotes recognises one.
- *
- * What the broker's certificate covers, whichever of them its grants use.
+ * remotes recognises one, and a URL the API gives in an answer leads back to
+ * the broker, which is where a client that follows one goes.
  */
+const answeredAt = (profile: GitGrant['profile']): readonly string[] => [
+  profiles[profile].host,
+  profiles[profile].api,
+]
+
+/** Every name a broker may answer TLS for, which its certificate covers. */
 export const tlsNamesCovered: readonly string[] = [
   ...new Set(
-    Object.values(profiles)
-      .filter(profile => profile.kind === 'git')
-      .map(profile => profile.host),
+    profileNames
+      .filter(isProfileName)
+      .filter((name): name is GitGrant['profile'] => profiles[name].kind === 'git')
+      .flatMap(answeredAt),
   ),
 ]
 
 /**
- * Fetch over git's smart HTTP, from a fixed set of repositories.
+ * Fetch over git's smart HTTP, and read through the forge's API, for a fixed
+ * set of repositories. At most one per profile: a request to the API may name
+ * no repository, so nothing in it could choose between two.
  *
  * `repos` is the broker's own copy of what is permitted. It is compared against
  * a request, never built from one.
@@ -119,7 +128,7 @@ export interface GitGrant {
   /** The credential to inject, under the name systemd loaded it as. */
   readonly credential: string
   readonly profile: 'github'
-  /** `owner/repo`, the complete set this grant may fetch. */
+  /** `owner/repo`, the complete set this grant may fetch and read. */
   readonly repos: readonly string[]
 }
 
@@ -171,9 +180,9 @@ export const isInferenceGrant = (grant: Grant): grant is InferenceGrant =>
 export const isGitGrant = (grant: Grant): grant is GitGrant =>
   !isModelServerGrant(grant) && profiles[grant.profile].kind === 'git'
 
-/** The names a broker holding `grants` answers TLS for: each git grant's host, once. */
+/** The names a broker holding `grants` answers TLS for: each git grant's, once. */
 export const tlsNames = (grants: readonly Grant[]): readonly string[] => [
-  ...new Set(grants.filter(isGitGrant).map(grant => profiles[grant.profile].host)),
+  ...new Set(grants.filter(isGitGrant).flatMap(grant => answeredAt(grant.profile))),
 ]
 
 /**
@@ -257,6 +266,16 @@ export type Decision =
       readonly operation: ModelServerOperation
       /** The server's name, as the grant spells it. */
       readonly server: string
+      readonly upstream: string
+    }
+  | {
+      readonly _tag: 'Api'
+      readonly credential: string
+      readonly host: string
+      readonly operation: 'read'
+      readonly profile: GitGrant['profile']
+      /** The repository as the *grant* spells it, for a request under one. */
+      readonly repo?: string
       readonly upstream: string
     }
   | {
@@ -385,6 +404,12 @@ export const parseGrants = (json: string): { grants: Grant[] } | { message: stri
       return { message: 'a grant needs a credential name' }
     }
 
+    // One per profile: a request that names no repository, or no credential,
+    // could not choose between two.
+    if (grants.some(grant => grant.profile === profile)) {
+      return { message: `there are two ${profile} grants, and a request could not choose one` }
+    }
+
     if (!isInferenceProfile(profile)) {
       if (!Array.isArray(repos) || repos.length === 0) {
         return { message: `the ${profile} grant names no repositories` }
@@ -400,9 +425,6 @@ export const parseGrants = (json: string): { grants: Grant[] } | { message: stri
       continue
     }
 
-    if (grants.some(grant => grant.profile === profile)) {
-      return { message: `there are two ${profile} grants, and a request could not choose one` }
-    }
     grants.push({ credential, profile })
   }
   return { grants }
@@ -508,6 +530,11 @@ export const guestEnvironment = (
   const [server, ...others] = grants.filter(isModelServerGrant)
   if (server !== undefined && others.length === 0) {
     environment['LLAMA_CPP_BASE_URL'] = modelServerBase(server.name, port)
+  }
+  // GitHub's CLI reaches its API by name, which the broker answers, and makes
+  // no request without a token. Its own name for one, ahead of `GITHUB_TOKEN`.
+  if (grants.some(grant => isGitGrant(grant) && grant.profile === 'github')) {
+    environment['GH_TOKEN'] = guestPlaceholderKey
   }
   return environment
 }
@@ -630,6 +657,65 @@ const sendsBody = (operation: Operation): boolean =>
 /** How each inference operation is requested: a listing is read, the rest are sent a body. */
 const methodOf = (operation: InferenceOperation): 'GET' | 'POST' =>
   sendsBody(operation) ? 'POST' : 'GET'
+
+/**
+ * Route a request for a git grant's API, or `undefined` if the path's host is
+ * no held grant's API.
+ *
+ * A read under `repos/<owner>/<repo>/` for a repository a grant lists is sent
+ * with that grant's credential. The upstream path is the grant's spelling of
+ * the repository, then the rest of the path as the request had it, segment by
+ * segment: `decide` has already refused a percent-escape and an empty segment,
+ * and the URL parser has resolved every `.` and `..`, so no segment can leave
+ * the repository it follows. The query is carried, rebuilt so that each name
+ * and value is encoded. Everything else is refused.
+ */
+const routeApi = (
+  grants: readonly Grant[],
+  method: string,
+  segments: readonly string[],
+  query: URLSearchParams,
+): Decision | undefined => {
+  const [host, ...rest] = segments
+  if (host === undefined) return undefined
+  const lowered = host.toLowerCase()
+  const held = grants.filter(isGitGrant).filter(grant => profiles[grant.profile].api === lowered)
+  const [grant] = held
+  if (grant === undefined) return undefined
+
+  if (method !== 'GET' && method !== 'HEAD') {
+    return deny(403, `this VM may read through ${lowered}, not ${method} /${rest.join('/')}`, {
+      host: lowered,
+    })
+  }
+  const [area, owner, repo, ...tail] = rest
+  if (area !== 'repos') {
+    return deny(403, `/${rest.join('/')} is not something this VM may read through ${lowered}`, {
+      host: lowered,
+    })
+  }
+  if (owner === undefined || repo === undefined) {
+    return deny(404, 'a repository is read at /repos/<owner>/<repo>')
+  }
+
+  const wanted = `${owner}/${repo}`.toLowerCase()
+  for (const candidate of held) {
+    const allowed = candidate.repos.find(spelled => normaliseRepo(spelled) === wanted)
+    if (allowed === undefined) continue
+    const path = withoutGit(allowed)
+    const filter = new URLSearchParams(query).toString()
+    return {
+      _tag: 'Api',
+      credential: candidate.credential,
+      host: lowered,
+      operation: 'read',
+      profile: candidate.profile,
+      repo: path,
+      upstream: `https://${lowered}/repos/${[path, ...tail].join('/')}${filter === '' ? '' : `?${filter}`}`,
+    }
+  }
+  return deny(403, `${wanted} is not a repository this VM may read`, { scope: wanted })
+}
 
 /**
  * Route a git request, or `undefined` if the path is not a git endpoint at all —
@@ -794,7 +880,7 @@ const routeModelServer = (
  *
  * Pure. `target` is the request URL as received; nothing is taken from it except
  * the path, as a sequence of segments matched against a fixed shape, git's
- * `service`, and a model listing's filter.
+ * `service`, a model listing's filter, and an API read's query.
  */
 export const decide = (grants: readonly Grant[], method: string, target: string): Decision => {
   if (grants.length === 0) return deny(403, 'this VM has no brokered credential')
@@ -820,11 +906,14 @@ export const decide = (grants: readonly Grant[], method: string, target: string)
   const segments = url.pathname.split('/').slice(1)
   if (segments.some(segment => segment === '')) return deny(404, 'empty path segment')
 
-  // git first, and only then inference: a git endpoint has a shape of its own,
-  // so trying it first keeps every refusal it makes — the push at the
-  // advertisement, the wrong method, the path that is not three segments —
-  // rather than letting an unrecognised git path fall through to a different
-  // profile's "no such endpoint".
+  // A forge's API first, by its host: its paths are the forge's own, and one of
+  // them could end in what reads as a git endpoint. Then git, and only then
+  // inference: a git endpoint has a shape of its own, so trying it first keeps
+  // every refusal it makes — the push at the advertisement, the wrong method,
+  // the path that is not three segments — rather than letting an unrecognised
+  // git path fall through to a different profile's "no such endpoint".
+  const api = routeApi(grants, method, segments, url.searchParams)
+  if (api !== undefined) return api
   const git = routeGit(grants, method, segments, url.searchParams.get('service'))
   if (git !== undefined) return git
   const local = routeModelServer(grants, method, segments)
@@ -1077,6 +1166,9 @@ export const relay = (
   // Everything in the 3xx range except 304, which redirects nowhere: it is an
   // answer about a cached response and a client acts on it locally.
   if (upstreamStatus >= 300 && upstreamStatus < 400 && upstreamStatus !== 304) {
+    // An API's redirect is to a signed URL elsewhere, a log or an asset, which
+    // needs no credential: the guest follows it, and the broker does not.
+    if (attempt.kind === 'Api') return undefined
     return {
       reason:
         attempt.credential === undefined
@@ -1540,6 +1632,35 @@ export const responseHeaders = (
 }
 
 /**
+ * A `Link` header whose pages a client can follow back to the broker for.
+ *
+ * GitHub names the next page of a repository's listing by the repository's
+ * number, `repositories/<id>/…`, which says which repository it is only after
+ * a lookup, and so matches no grant. On an answer for one repository, each such
+ * link is put back in the form the request had, `repos/<owner>/<repo>/…`, with
+ * the repository as the grant spells it. The rest of each link, its query
+ * among it, is left as it is.
+ */
+export const pagesOf = (link: string, host: string, repo: string): string =>
+  link.replaceAll(
+    new RegExp(`<https://${host.replaceAll('.', '\\.')}/repositories/\\d+(?=[/?>])`, 'g'),
+    `<https://${host}/repos/${repo}`,
+  )
+
+/** The headers returned for a decision: `responseHeaders`', and an API read's pages kept here. */
+const returnedHeaders = (
+  decision: Exclude<Decision, { _tag: 'Deny' }>,
+  upstream: Headers,
+): Headers => {
+  const headers = responseHeaders(decision._tag, upstream)
+  const link = headers.get('link')
+  if (decision._tag === 'Api' && decision.repo !== undefined && link !== null) {
+    headers.set('link', pagesOf(link, decision.host, decision.repo))
+  }
+  return headers
+}
+
+/**
  * How long the upstream has to answer with headers, by what is being asked of it.
  * Guards against an upstream that accepts a request and never answers it, which
  * would leave the guest's request waiting for as long as the guest does.
@@ -1675,7 +1796,7 @@ const handle = async (
   // Which credential pays and what it was expected to cover, both settled by
   // the path: a git request is for a repository, and an inference request
   // names its model only in a body that is not parsed.
-  const scope = decision._tag === 'Git' ? decision.repo : undefined
+  const scope = decision._tag === 'Git' || decision._tag === 'Api' ? decision.repo : undefined
   // A model server's grant may hold none, and then the request is sent with
   // none, as the server was configured to take it. An anonymous read is sent
   // with none because no grant covers it.
@@ -1757,7 +1878,7 @@ const handle = async (
   if (upstream.body === null) {
     audit({ bytes: 0, event: 'response', id, ms, status: upstream.status })
     return new Response(null, {
-      headers: responseHeaders(decision._tag, upstream.headers),
+      headers: returnedHeaders(decision, upstream.headers),
       status: upstream.status,
     })
   }
@@ -1765,7 +1886,7 @@ const handle = async (
     counted(upstream.body, bytes => {
       audit({ bytes, event: 'response', id, ms, status: upstream.status })
     }),
-    { headers: responseHeaders(decision._tag, upstream.headers), status: upstream.status },
+    { headers: returnedHeaders(decision, upstream.headers), status: upstream.status },
   )
 }
 

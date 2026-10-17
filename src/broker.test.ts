@@ -215,7 +215,7 @@ describe('Broker.tlsNames', () => {
       ...grants,
       { credential: 'OTHER', profile: 'github', repos: ['you/web'] },
     ]
-    assert.deepStrictEqual(Broker.tlsNames(twice), ['github.com'])
+    assert.deepStrictEqual(Broker.tlsNames(twice), ['github.com', 'api.github.com'])
     for (const name of Broker.tlsNames(twice)) assert.include(Broker.tlsNamesCovered, name)
   })
 
@@ -249,11 +249,11 @@ describe('Broker.decideAddressed', () => {
   })
 
   it('refuses a name no grant is answered at, naming it', () => {
-    const refused = addressed('https://api.github.com/repos/you/api')
+    const refused = addressed('https://gist.github.com/you')
     assert.deepStrictEqual(refused, {
       _tag: 'Deny',
-      asked: { host: 'api.github.com' },
-      reason: 'api.github.com is not answered here for this VM',
+      asked: { host: 'gist.github.com' },
+      reason: 'gist.github.com is not answered here for this VM',
       status: 421,
     })
     for (const granted of [[], inference]) {
@@ -291,6 +291,114 @@ describe('Broker.decideAddressed', () => {
       ...inference,
     ])
     assert.strictEqual(decided._tag, 'Deny')
+  })
+})
+
+describe('Broker.decide, on GitHub’s API', () => {
+  const api = (path: string, method = 'GET', granted = grants) =>
+    Broker.decide(granted, method, `${base}/api.github.com${path}`)
+
+  it('reads under a repository the grant lists, with its credential', () => {
+    assert.deepStrictEqual(api('/repos/you/api/actions/runs?per_page=100&status=failure'), {
+      _tag: 'Api',
+      credential: 'GITHUB_TOKEN',
+      host: 'api.github.com',
+      operation: 'read',
+      profile: 'github',
+      repo: 'you/api',
+      upstream: 'https://api.github.com/repos/you/api/actions/runs?per_page=100&status=failure',
+    })
+    assert.strictEqual(outcome(api('/repos/you/api', 'HEAD')), 'allow')
+    assert.strictEqual(outcome(api('/repos/You/API/releases/latest')), 'allow')
+  })
+
+  it('sends the grant’s spelling upstream, and the query encoded', () => {
+    const spelled: readonly Broker.Grant[] = [
+      { credential: 'T', profile: 'github', repos: ['Owner/Repo.git'] },
+    ]
+    const decided = api('/repos/owner/repo/issues?q=a b&labels=x,y', 'GET', spelled)
+    assert.strictEqual(
+      decided._tag === 'Api' ? decided.upstream : '',
+      'https://api.github.com/repos/Owner/Repo/issues?q=a+b&labels=x%2Cy',
+    )
+  })
+
+  it('cannot leave the repository by its path', () => {
+    // The URL parser resolves `..` before anything is matched, an escaped one
+    // too, so each of these asks for a repository the grant does not list.
+    const left = api('/repos/you/api/../other/issues')
+    assert.strictEqual(left._tag === 'Deny' ? left.asked?.scope : '', 'you/other')
+    const escaped = api('/repos/you/api/%2e%2e/%2e%2e/someone/else')
+    assert.strictEqual(escaped._tag === 'Deny' ? escaped.asked?.scope : '', 'someone/else')
+  })
+
+  it('refuses another repository, naming it', () => {
+    const refused = api('/repos/someone/else/actions/runs')
+    assert.deepStrictEqual(refused, {
+      _tag: 'Deny',
+      asked: { scope: 'someone/else' },
+      reason: 'someone/else is not a repository this VM may read',
+      status: 403,
+    })
+  })
+
+  it('refuses what lies outside the repositories, gists and new repositories among it', () => {
+    for (const path of [
+      '/gists',
+      '/user/repos',
+      '/search/issues?q=repo:someone/else',
+      '/repositories/212613049/issues',
+      '/orgs/someone/repos',
+      '/',
+    ]) {
+      assert.strictEqual(outcome(api(path)), path === '/' ? 404 : 403, path)
+    }
+    assert.strictEqual(outcome(api('/repos/you')), 404)
+  })
+
+  it('refuses a write, whatever it is for', () => {
+    for (const method of ['POST', 'PATCH', 'PUT', 'DELETE']) {
+      assert.strictEqual(outcome(api('/repos/you/api/issues', method)), 403, method)
+    }
+    assert.strictEqual(outcome(api('/gists', 'POST')), 403)
+  })
+
+  it('is not served without a github grant', () => {
+    assert.strictEqual(outcome(api('/repos/you/api', 'GET', inference)), 404)
+  })
+})
+
+describe('Broker.pagesOf', () => {
+  it('puts a page named by the repository’s number back in the form the grant matches', () => {
+    assert.strictEqual(
+      Broker.pagesOf(
+        '<https://api.github.com/repositories/212613049/actions/runs?per_page=100&page=2>; rel="next", ' +
+          '<https://api.github.com/repositories/212613049/actions/runs?per_page=100&page=362>; rel="last"',
+        'api.github.com',
+        'you/api',
+      ),
+      '<https://api.github.com/repos/you/api/actions/runs?per_page=100&page=2>; rel="next", ' +
+        '<https://api.github.com/repos/you/api/actions/runs?per_page=100&page=362>; rel="last"',
+    )
+    assert.strictEqual(
+      Broker.pagesOf(
+        '<https://api.github.com/repositories/1?page=2>; rel="next"',
+        'api.github.com',
+        'you/api',
+      ),
+      '<https://api.github.com/repos/you/api?page=2>; rel="next"',
+    )
+  })
+
+  it('leaves every other link as it was', () => {
+    for (const link of [
+      '<https://api.github.com/repos/you/api/issues?page=2>; rel="next"',
+      '<https://api.github.com/repositories/12x/issues>; rel="next"',
+      '<https://elsewhere.example/repositories/1/issues>; rel="next"',
+      '<https://api.github.com/user/repositories/1>; rel="next"',
+    ]) {
+      assert.strictEqual(Broker.pagesOf(link, 'api.github.com', 'you/api'), link)
+    }
   })
 })
 
@@ -361,6 +469,20 @@ describe('Broker.decideAddressed, on a read no grant covers', () => {
     ] as const) {
       assert.strictEqual(read(url, method, 'any')._tag, 'Deny', `${method} ${url}`)
     }
+  })
+
+  it('reads GitHub’s API the same way, for a repository no grant lists', () => {
+    const latest = 'https://api.github.com/repos/someone/tool/releases/latest'
+    assert.deepStrictEqual(read(latest, 'GET', ['api.github.com']), {
+      _tag: 'Anonymous',
+      host: 'api.github.com',
+      operation: 'read',
+      upstream: latest,
+    })
+    // Each name is reached in its own right.
+    assert.strictEqual(read(latest, 'GET', ['github.com'])._tag, 'Deny')
+    assert.strictEqual(read('https://api.github.com/repos/you/api/releases/latest')._tag, 'Api')
+    assert.strictEqual(read('https://api.github.com/gists', 'POST', 'any')._tag, 'Deny')
   })
 
   it('answers no other name, reached or not', () => {
@@ -483,6 +605,21 @@ describe('Broker.relay', () => {
     for (const status of [200, 304, 403, 404, 429, 500]) {
       assert.isUndefined(Broker.relay(allowed, status))
     }
+  })
+
+  it('passes an API read’s redirect back, and answers its refused credential with a final 403', () => {
+    const read = {
+      credential: 'GITHUB_TOKEN',
+      host: 'api.github.com',
+      kind: 'Api',
+      scope: 'you/api',
+    } as const
+    // A log or an asset is a signed URL elsewhere, which needs no credential.
+    for (const status of [302, 307]) assert.isUndefined(Broker.relay(read, status))
+    const refused = Broker.relay(read, 401)
+    assert.strictEqual(refused?.status, 403)
+    assert.include(refused?.reason ?? '', 'refused GITHUB_TOKEN')
+    assert.include(refused?.reason ?? '', 'you/api')
   })
 
   it('passes an anonymous read’s redirect back, and answers its 401 with a final 403', () => {
@@ -842,8 +979,10 @@ describe('Broker.guestEnvironment', () => {
     )
   })
 
-  it('says nothing for a VM whose grants are not inference ones', () => {
-    assert.deepStrictEqual(Broker.guestEnvironment(grants, 3128), {})
+  it('gives a github grant only the token GitHub’s CLI needs before it asks for anything', () => {
+    assert.deepStrictEqual(Broker.guestEnvironment(grants, 3128), {
+      GH_TOKEN: Broker.guestPlaceholderKey,
+    })
     assert.deepStrictEqual(Broker.guestEtcFiles(grants, 3128), {})
     assert.deepStrictEqual(Broker.guestClientFiles(grants, 3128), [])
   })
@@ -1204,19 +1343,20 @@ describe('Broker.parseGrants', () => {
     }
   })
 
-  it('refuses a second grant for one inference profile, which nothing could choose between', () => {
+  it('refuses a second grant for one profile, which nothing could choose between', () => {
     assert.include(
       message(
         '[{"credential":"K","profile":"anthropic-messages"},{"credential":"L","profile":"anthropic-messages"}]',
       ),
       'two anthropic-messages grants',
     )
-    // A git request names its repository, which is what picks the grant.
-    assert.property(
-      Broker.parseGrants(
+    // A request to GitHub's API may name no repository, so its repository
+    // cannot pick the grant.
+    assert.include(
+      message(
         '[{"credential":"T","profile":"github","repos":["you/api"]},{"credential":"U","profile":"github","repos":["you/web"]}]',
       ),
-      'grants',
+      'two github grants',
     )
   })
 
@@ -2020,7 +2160,7 @@ describe('Broker.serveTls', () => {
             proxyPath,
             'github.com',
             identity.cert,
-            addressedTo('api.github.com', '/repos/you/api'),
+            addressedTo('gist.github.com', '/you'),
           )
           assert.match(misdirected.split('\r\n')[0] ?? '', /^HTTP\/1\.1 421 /)
           assert.strictEqual(sent.length, 1)
@@ -2258,6 +2398,73 @@ describe.concurrent('Broker.serveRequests', () => {
       ),
     )
   })
+})
+
+describe('Broker.serveRequests, on GitHub’s API', () => {
+  const sent: Array<{ readonly init: RequestInit; readonly url: string }> = []
+  /** GitHub standing in: a listing with a second page, and a log's redirect. */
+  const github = (url: string, init: RequestInit): Promise<Response> => {
+    sent.push({ init, url })
+    return Promise.resolve(
+      url.endsWith('/logs')
+        ? new Response(null, {
+            headers: { Location: 'https://logs.example/run.zip?sig=s' },
+            status: 302,
+          })
+        : new Response('{"total_count":2}', {
+            headers: {
+              'Content-Type': 'application/json',
+              Link: '<https://api.github.com/repositories/42/actions/runs?page=2>; rel="next"',
+              'Set-Cookie': 'logged_in=no',
+              'X-RateLimit-Remaining': '4999',
+            },
+          }),
+    )
+  }
+
+  it('reads with the broker’s token, and keeps the next page on the broker', () =>
+    auditing(() =>
+      serving(grants, held, github, async server => {
+        sent.length = 0
+        const response = await server.fetch(
+          new Request('http://broker/api.github.com/repos/you/api/actions/runs?per_page=1', {
+            headers: {
+              Accept: 'application/vnd.github+json',
+              Authorization: 'token igloo-broker-holds-the-real-key',
+              'User-Agent': 'GitHub CLI 2.102.0',
+              'X-GitHub-Api-Version': '2022-11-28',
+            },
+          }),
+        )
+        assert.strictEqual(response.status, 200)
+        assert.strictEqual(await response.text(), '{"total_count":2}')
+        assert.strictEqual(
+          response.headers.get('Link'),
+          '<https://api.github.com/repos/you/api/actions/runs?page=2>; rel="next"',
+        )
+        assert.strictEqual(response.headers.get('X-RateLimit-Remaining'), '4999')
+        assert.isNull(response.headers.get('Set-Cookie'))
+
+        const headers = new Headers(sent[0]?.init.headers)
+        assert.strictEqual(headers.get('Authorization'), 'Bearer ghp-test')
+        assert.strictEqual(headers.get('X-GitHub-Api-Version'), '2022-11-28')
+        assert.strictEqual(headers.get('User-Agent'), 'GitHub CLI 2.102.0')
+        assert.strictEqual(sent[0]?.init.redirect, 'manual')
+      }),
+    ))
+
+  it('passes a log’s redirect back for the guest to follow, and follows none itself', () =>
+    auditing(() =>
+      serving(grants, held, github, async server => {
+        sent.length = 0
+        const response = await server.fetch(
+          new Request('http://broker/api.github.com/repos/you/api/actions/runs/7/logs'),
+        )
+        assert.strictEqual(response.status, 302)
+        assert.strictEqual(response.headers.get('Location'), 'https://logs.example/run.zip?sig=s')
+        assert.strictEqual(sent.length, 1)
+      }),
+    ))
 })
 
 describe('Broker.serveRequests, request by request', () => {
@@ -3347,7 +3554,7 @@ describe('Broker, run as a program', () => {
         const { t: _tlsAt, ...listeningTls } = events.find(e => e['event'] === 'tls-listening')!
         assert.deepStrictEqual(listeningTls, {
           event: 'tls-listening',
-          names: ['github.com'],
+          names: ['github.com', 'api.github.com'],
           socket: tls,
         })
         const listening = events.find(e => e['event'] === 'listening')
