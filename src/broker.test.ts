@@ -412,6 +412,82 @@ describe('Broker.decide, on GitHub’s API', () => {
   })
 })
 
+describe('Broker.decide, on a push', () => {
+  const pushing: readonly Broker.Grant[] = [
+    { credential: 'GITHUB_TOKEN', profile: 'github', repos: ['you/api'], write: ['You/Web.git'] },
+  ]
+  const push = (path: string, method: string) =>
+    Broker.decide(pushing, method, `${base}/github.com${path}`)
+
+  it('pushes to a repository in write, at both endpoints, as the grant spells it', () => {
+    assert.deepStrictEqual(push('/you/web/info/refs?service=git-receive-pack', 'GET'), {
+      _tag: 'Git',
+      credential: 'GITHUB_TOKEN',
+      host: 'github.com',
+      operation: 'push-refs',
+      profile: 'github',
+      repo: 'You/Web',
+      upstream: 'https://github.com/You/Web.git/info/refs?service=git-receive-pack',
+    })
+    const pushed = push('/you/web.git/git-receive-pack', 'POST')
+    assert.strictEqual(pushed._tag === 'Git' ? pushed.operation : '', 'push')
+    assert.strictEqual(
+      pushed._tag === 'Git' ? pushed.upstream : '',
+      'https://github.com/You/Web.git/git-receive-pack',
+    )
+  })
+
+  it('fetches and reads a repository in write without its being listed twice', () => {
+    assert.strictEqual(outcome(push('/you/web/info/refs?service=git-upload-pack', 'GET')), 'allow')
+    assert.strictEqual(outcome(push('/you/web/git-upload-pack', 'POST')), 'allow')
+    const read = Broker.decide(pushing, 'GET', `${base}/api.github.com/repos/you/web/issues`)
+    assert.strictEqual(read._tag === 'Api' ? read.repo : '', 'You/Web')
+  })
+
+  it('refuses a push to a repository it may only fetch, at both endpoints', () => {
+    for (const [path, method] of [
+      ['/you/api/info/refs?service=git-receive-pack', 'GET'],
+      ['/you/api/git-receive-pack', 'POST'],
+    ] as const) {
+      assert.deepStrictEqual(push(path, method), {
+        _tag: 'Deny',
+        asked: { scope: 'you/api' },
+        reason: 'this VM may fetch, not push',
+        status: 403,
+      })
+    }
+  })
+
+  it('refuses a push to a repository it does not list, naming it', () => {
+    const refused = push('/someone/else/info/refs?service=git-receive-pack', 'GET')
+    assert.strictEqual(
+      refused._tag === 'Deny' ? refused.reason : '',
+      'someone/else is not a repository this VM may push to',
+    )
+  })
+
+  it('refuses a push asked for the wrong way', () => {
+    assert.strictEqual(outcome(push('/you/web/git-receive-pack', 'GET')), 405)
+    assert.strictEqual(outcome(push('/you/web/info/refs?service=git-receive-pack', 'POST')), 405)
+  })
+
+  it('never sends a push no grant covers on bare, whatever the tunnel reaches', () => {
+    const addressed = (url: string, method: string) =>
+      Broker.decideAddressed(pushing, method, url, 'any')
+    assert.strictEqual(
+      addressed('https://github.com/you/web/info/refs?service=git-receive-pack', 'GET')._tag,
+      'Git',
+    )
+    for (const [url, method] of [
+      ['https://github.com/someone/else/info/refs?service=git-receive-pack', 'GET'],
+      ['https://github.com/someone/else/git-receive-pack', 'POST'],
+      ['https://github.com/you/api/git-receive-pack', 'POST'],
+    ] as const) {
+      assert.strictEqual(addressed(url, method)._tag, 'Deny', url)
+    }
+  })
+})
+
 describe('Broker.pagesOf', () => {
   it('puts a page named by the repository’s number back in the form the grant matches', () => {
     assert.strictEqual(
@@ -612,6 +688,16 @@ describe('Broker.upstreamHeaders', () => {
       headersFor('fetch', { 'Content-Type': 'text/plain' }).get('Content-Type'),
       'application/x-git-upload-pack-request',
     )
+  })
+
+  it('names a push’s types as git does, and its advertisement’s none', () => {
+    const pushed = headersFor('push', { 'Content-Type': 'text/plain' })
+    assert.strictEqual(pushed.get('Content-Type'), 'application/x-git-receive-pack-request')
+    assert.strictEqual(pushed.get('Accept'), 'application/x-git-receive-pack-result')
+    assert.strictEqual(pushed.get('Authorization'), `Basic ${btoa('x-access-token:ghp_secret')}`)
+    const advertised = headersFor('push-refs', { 'Content-Type': 'text/plain' })
+    assert.isNull(advertised.get('Content-Type'))
+    assert.strictEqual(advertised.get('Accept'), '*/*')
   })
 })
 
@@ -1357,6 +1443,36 @@ describe('Broker.parseGrants', () => {
 
   it('refuses a grant that names no repositories', () => {
     assert.include(message('[{"credential":"T","profile":"github","repos":[]}]'), 'no repositories')
+    assert.include(
+      message('[{"credential":"T","profile":"github","repos":[],"write":[]}]'),
+      'no repositories',
+    )
+  })
+
+  it('reads the repositories a grant may push to, with or without others to fetch', () => {
+    assert.deepStrictEqual(
+      Broker.parseGrants(
+        '[{"credential":"T","profile":"github","repos":["you/api"],"write":["you/web"]}]',
+      ),
+      { grants: [{ credential: 'T', profile: 'github', repos: ['you/api'], write: ['you/web'] }] },
+    )
+    assert.deepStrictEqual(
+      Broker.parseGrants('[{"credential":"T","profile":"github","repos":[],"write":["you/web"]}]'),
+      { grants: [{ credential: 'T', profile: 'github', repos: [], write: ['you/web'] }] },
+    )
+  })
+
+  it('refuses a write list that is not one of repositories', () => {
+    for (const [write, reason] of [
+      ['"you/web"', "the github grant's write is not a list"],
+      ['["you/web/extra"]', 'is not owner/repo'],
+      ['[3]', 'is not owner/repo'],
+    ] as const) {
+      assert.include(
+        message(`[{"credential":"T","profile":"github","repos":["you/api"],"write":${write}}]`),
+        reason,
+      )
+    }
   })
 
   it('refuses a repository that is not owner/repo', () => {
@@ -2561,6 +2677,59 @@ describe('Broker.serveRequests, on GitHub’s API', () => {
         assert.notProperty(allowed, 'scope')
       }),
     ))
+})
+
+describe('Broker.serveRequests, on a push', () => {
+  it('streams the pack to the repository in write, with the broker’s token, and logs it as a push', () => {
+    const sent: Array<{ readonly body: string; readonly init: RequestInit; readonly url: string }> =
+      []
+    const pushing: readonly Broker.Grant[] = [
+      { credential: 'GITHUB_TOKEN', profile: 'github', repos: [], write: ['you/web'] },
+    ]
+    return auditing(audited =>
+      serving(
+        pushing,
+        held,
+        async (url, init) => {
+          sent.push({ body: await new Response(init.body).text(), init, url })
+          return new Response('000eunpack ok\n0000', {
+            headers: { 'Content-Type': 'application/x-git-receive-pack-result' },
+          })
+        },
+        async server => {
+          const response = await server.fetch(
+            new Request('http://broker/github.com/you/web.git/git-receive-pack', {
+              body: 'the pack',
+              headers: { 'Content-Type': 'application/x-git-receive-pack-request' },
+              method: 'POST',
+            }),
+          )
+          assert.strictEqual(response.status, 200)
+          assert.strictEqual(await response.text(), '000eunpack ok\n0000')
+          assert.strictEqual(
+            response.headers.get('Content-Type'),
+            'application/x-git-receive-pack-result',
+          )
+
+          assert.strictEqual(sent[0]?.url, 'https://github.com/you/web.git/git-receive-pack')
+          assert.strictEqual(sent[0]?.body, 'the pack')
+          assert.strictEqual(
+            new Headers(sent[0]?.init.headers).get('Authorization'),
+            `Basic ${btoa('x-access-token:ghp-test')}`,
+          )
+          const allowed = audited.find(
+            (event): event is Record<string, unknown> =>
+              typeof event === 'object' &&
+              event !== null &&
+              'event' in event &&
+              event.event === 'allow',
+          )
+          assert.strictEqual(allowed?.['operation'], 'push')
+          assert.strictEqual(allowed?.['scope'], 'you/web')
+        },
+      ),
+    )
+  })
 })
 
 describe('Broker.serveRequests, request by request', () => {
