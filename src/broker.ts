@@ -1266,7 +1266,8 @@ const bodyHeaders = ['content-encoding', 'content-type'] as const
  * `Content-Length` declares, a whole number with no `Transfer-Encoding` beside
  * it, or `undefined`, and then it goes in chunks as every other body does.
  *
- * An asset goes framed as the guest framed it. `fetch` sends a stated length
+ * GitHub takes an asset only with its length, and refuses one sent in chunks,
+ * so it goes framed as the guest framed it. `fetch` sends a stated length
  * and then every byte of the body, however many there are, so bytes past it
  * would reach the upstream as the start of another request on the broker's
  * connection: `heldTo` keeps the body to the length it is sent with.

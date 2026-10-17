@@ -197,7 +197,8 @@ reachable there, never where "there" is. The one upstream policy places is a
     `force-cancel`, `actions/jobs/<id>/rerun` and `actions/workflows/<id>/dispatches`; and a
     commit's statuses and checks, at `statuses/<sha>`, `check-runs` and `check-suites`.
   - Uploading a release's asset, `POST repos/<owner>/<repo>/releases/<id>/assets` at
-    `uploads.github.com`, for a repository in `write`, with its query, which names the asset.
+    `uploads.github.com`, for a repository in `write`, with its query, which names the asset. GitHub
+    takes an asset only with its `Content-Length`, as `gh` sends it, and refuses one sent in chunks.
   - A GraphQL query, `POST graphql`, whatever it reads or writes. The grant does not bound it: see
     [what a grant does not bound](#what-a-grant-does-not-bound).
   - Through the API, everything else is refused: a write to a repository only in `repos`; any other
