@@ -210,7 +210,8 @@ of `gh pr`, `gh issue` and `gh repo` do, reach whatever the token reaches, liste
 that write through it, as `gh issue create`, `gh pr comment` and `gh pr merge` do, work if the token
 can write. GitHub serves a run's logs and a release's assets as redirects to signed URLs on other
 hosts, which the broker passes back for the guest to follow through the tunnel; under `restricted`,
-list those hosts in `tunnel`.
+list those hosts in `tunnel`. `gh run view --log` and `--log-failed` read a run's log archive from
+`results-receiver.actions.githubusercontent.com`.
 
 Scope the token itself to the same repositories, read-only. The grant bounds what the broker asks
 for over git and the REST API, and the token bounds what GitHub gives. A GraphQL query is bounded by
@@ -498,6 +499,10 @@ that way, since it never enters the guest.
   the broker. Under `restricted` without them in `tunnel`, that means only the repositories listed:
   a release download from `github.com`, a clone of any other repository, or an anonymous read
   through the API, is refused.
+- Under `restricted`, one job's log, read through the API at `actions/jobs/<id>/logs`, is out of
+  reach. GitHub redirects it to one of a set of numbered storage hosts,
+  `productionresultssa<n>.blob.core.windows.net`, which differs from job to job, and `tunnel` names
+  hosts exactly. A whole run's log archive comes from one host that can be listed.
 - A path holding a percent-escape is refused, so an API read naming a branch with a `/` in it, as
   `branches/feature%2Fx`, is refused.
 - A client that verifies against a list of certificate authorities of its own, rather than the
