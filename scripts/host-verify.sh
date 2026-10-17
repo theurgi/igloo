@@ -1897,16 +1897,26 @@ EOF
 				echo "=== a new gist, and the account's repositories"
 				guest 'timeout 30 curl -sS -X POST -d "{}" https://api.github.com/gists 2>&1 | head -3'
 				guest 'timeout 30 curl -sS https://api.github.com/user/repos 2>&1 | head -3'
+				echo
+				echo "=== a GraphQL query"
+				guest 'timeout 30 curl -sS -H "Content-Type: application/json" -d "{\"query\":\"query{viewer{login}}\"}" https://api.github.com/graphql 2>&1 | head -3'
 			} >"$out/artifacts/github-api.txt" 2>&1
 			if grep -qx 'igloo-broker-holds-the-real-key' "$out/artifacts/github-api.txt"; then
 				verdict PASS github-api-placeholder "the guest's GH_TOKEN is the placeholder, which the broker replaces"
 			else
 				verdict FAIL github-api-placeholder "read artifacts/github-api.txt"
 			fi
-			if grep -q 'api.github.com refused IGLOO_VERIFY_BROKERED' "$out/artifacts/github-api.txt"; then
+			# A read is refused as scoped to its repository, a GraphQL query as
+			# scoped to no repository, since nothing in its path names one.
+			if grep -q 'api.github.com refused IGLOO_VERIFY_BROKERED; .* not scoped to git/git' "$out/artifacts/github-api.txt"; then
 				verdict PASS github-api-reaches-upstream "a read through the API reaches api.github.com through the broker, which reports its own credential being refused"
 			else
 				verdict FAIL github-api-reaches-upstream "read artifacts/github-api.txt, then logs/up-broker/broker.log"
+			fi
+			if grep -q 'api.github.com refused IGLOO_VERIFY_BROKERED; .* not scoped to this request' "$out/artifacts/github-api.txt"; then
+				verdict PASS github-graphql-reaches-upstream "a GraphQL query reaches api.github.com through the broker with its credential, bounded by no repository"
+			else
+				verdict FAIL github-graphql-reaches-upstream "read artifacts/github-api.txt, then logs/up-broker/broker.log"
 			fi
 			if grep -q 'torvalds/linux is not a repository this VM may read' "$out/artifacts/github-api.txt" &&
 				grep -q 'not POST /gists' "$out/artifacts/github-api.txt" &&
@@ -2199,6 +2209,9 @@ EOF
 						guest "timeout 30 curl -sS https://api.github.com/repos/$real_repo 2>&1 | grep -c '\"full_name\"'"
 						echo "=== the forms its commits' next page is named in"
 						guest "timeout 30 curl -sS -D - -o /dev/null 'https://api.github.com/repos/$real_repo/commits?per_page=1' 2>&1 | grep -i '^link:' | grep -o '/repos/\|/repositories/' | sort -u"
+						echo "=== the repository read through GraphQL: answers naming it"
+						printf '{"query":"query{repository(owner:\\"%s\\",name:\\"%s\\"){nameWithOwner}}"}' "${real_repo%%/*}" "${real_repo#*/}" |
+							guest "timeout 30 curl -sS -H 'Content-Type: application/json' --data-binary @- https://api.github.com/graphql 2>&1 | grep -c '\"nameWithOwner\"'"
 						echo
 						# Copied for the reason the github-git section gives.
 						echo "=== the fetches the broker allowed, from its log"
@@ -2223,12 +2236,21 @@ EOF
 					else
 						verdict FAIL github-api-read "read artifacts/github-git-clone.txt"
 					fi
+					# Data back means the broker's token went with it: the guest holds
+					# only the placeholder, which GitHub refuses.
+					graphql_named=$(awk '/^=== the repository read through GraphQL/ { getline; print; exit }' "$out/artifacts/github-git-clone.txt")
+					if [ "$graphql_named" = 1 ]; then
+						verdict PASS github-graphql-read "a real token reads a real repository through GraphQL, sent on by the broker"
+					else
+						verdict FAIL github-graphql-read "read artifacts/github-git-clone.txt"
+					fi
 				else
 					verdict FAIL github-git-clone "the VM did not come back up for the token run — read steps/up-token.txt"
 				fi
 			else
 				verdict NOTE github-git-clone "not run: export IGLOO_VERIFY_GITHUB_TOKEN (a fine-grained read-only token) to check that a valid credential actually fetches"
 				verdict NOTE github-api-read "not run: IGLOO_VERIFY_GITHUB_TOKEN is not set"
+				verdict NOTE github-graphql-read "not run: IGLOO_VERIFY_GITHUB_TOKEN is not set"
 			fi
 
 			# ------------------------------------- restricted, and the tunnel --

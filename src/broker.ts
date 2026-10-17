@@ -227,7 +227,10 @@ export type ModelServerOperation = Extract<
  */
 export type AnonymousOperation = GitOperation | 'read'
 
-export type Operation = AnonymousOperation | InferenceOperation
+/** A request through a forge's API: a read under a repository, or a GraphQL query. */
+export type ApiOperation = 'graphql' | 'read'
+
+export type Operation = AnonymousOperation | ApiOperation | InferenceOperation
 
 /**
  * Where a request is going, once it is known to be one this broker serves.
@@ -272,9 +275,9 @@ export type Decision =
       readonly _tag: 'Api'
       readonly credential: string
       readonly host: string
-      readonly operation: 'read'
+      readonly operation: ApiOperation
       readonly profile: GitGrant['profile']
-      /** The repository as the *grant* spells it, for a request under one. */
+      /** The repository as the *grant* spells it, for a read under one. */
       readonly repo?: string
       readonly upstream: string
     }
@@ -649,7 +652,7 @@ const modelServerEndpoints: Readonly<Record<string, ModelServerOperation>> = {
 
 /**
  * Whether an operation sends a body: a model listing, a ref advertisement and
- * an anonymous read are read.
+ * a read are read.
  */
 const sendsBody = (operation: Operation): boolean =>
   operation !== 'list-models' && operation !== 'ls-refs' && operation !== 'read'
@@ -668,7 +671,15 @@ const methodOf = (operation: InferenceOperation): 'GET' | 'POST' =>
  * segment: `decide` has already refused a percent-escape and an empty segment,
  * and the URL parser has resolved every `.` and `..`, so no segment can leave
  * the repository it follows. The query is carried, rebuilt so that each name
- * and value is encoded. Everything else is refused.
+ * and value is encoded.
+ *
+ * A GraphQL query, a `POST` to `graphql`, is sent with the credential too, and
+ * its body as it arrived. It names what it reads and writes in that body, some
+ * of it by node IDs that say which repository they belong to only after a
+ * lookup, so no grant's repositories could be matched against it even by
+ * reading it: the token's own scope is all that bounds it.
+ *
+ * Everything else is refused.
  */
 const routeApi = (
   grants: readonly Grant[],
@@ -683,6 +694,17 @@ const routeApi = (
   const [grant] = held
   if (grant === undefined) return undefined
 
+  if (rest.length === 1 && rest[0] === 'graphql') {
+    if (method !== 'POST') return deny(405, `${method} is not how /graphql is requested`)
+    return {
+      _tag: 'Api',
+      credential: grant.credential,
+      host: lowered,
+      operation: 'graphql',
+      profile: grant.profile,
+      upstream: `https://${lowered}/graphql`,
+    }
+  }
   if (method !== 'GET' && method !== 'HEAD') {
     return deny(403, `this VM may read through ${lowered}, not ${method} /${rest.join('/')}`, {
       host: lowered,
@@ -1057,8 +1079,8 @@ const bodyHeaders = ['content-encoding', 'content-type'] as const
  * own name. None of them can send the request elsewhere or attach a
  * credential, since the URL is built from the grant and the credential is set
  * after the guest's are dropped. A model server's request is built the same
- * way, and so is an anonymous read, whose credentials are dropped and none
- * set.
+ * way, as is one through a forge's API, and so is an anonymous read, whose
+ * credentials are dropped and none set.
  *
  * `token` is the value of the credential the decision names, and `undefined`
  * only for a model server that takes none and an anonymous read: `handle`
