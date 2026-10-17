@@ -1929,6 +1929,15 @@ EOF
 				echo "=== a read under a repository the grant does not name"
 				guest 'timeout 30 curl -sS https://api.github.com/repos/torvalds/linux 2>&1 | head -3'
 				echo
+				echo "=== a write under the repository the grant may write"
+				guest 'timeout 30 curl -sS -X POST -H "Content-Type: application/json" -d "{\"title\":\"igloo-verify\"}" https://api.github.com/repos/git/git-scm.com/issues 2>&1 | head -3'
+				echo
+				echo "=== writes to one it may only read, to one it does not name, and of a webhook and a secret to the one it may write"
+				guest 'timeout 30 curl -sS -X POST -d "{}" https://api.github.com/repos/git/git/issues 2>&1 | head -3'
+				guest 'timeout 30 curl -sS -X POST -d "{}" https://api.github.com/repos/torvalds/linux/issues 2>&1 | head -3'
+				guest 'timeout 30 curl -sS -X POST -d "{}" https://api.github.com/repos/git/git-scm.com/hooks 2>&1 | head -3'
+				guest 'timeout 30 curl -sS -X PUT -d "{}" https://api.github.com/repos/git/git-scm.com/actions/secrets/X 2>&1 | head -3'
+				echo
 				echo "=== a new gist, and the account's repositories"
 				guest 'timeout 30 curl -sS -X POST -d "{}" https://api.github.com/gists 2>&1 | head -3'
 				guest 'timeout 30 curl -sS https://api.github.com/user/repos 2>&1 | head -3'
@@ -1946,7 +1955,7 @@ EOF
 			fi
 			# A read is refused as scoped to its repository, a GraphQL query as
 			# scoped to no repository, since nothing in its path names one.
-			if grep -q 'api.github.com refused IGLOO_VERIFY_BROKERED; .* not scoped to git/git' "$out/artifacts/github-api.txt"; then
+			if grep -q 'api.github.com refused IGLOO_VERIFY_BROKERED; .* not scoped to git/git$' "$out/artifacts/github-api.txt"; then
 				verdict PASS github-api-reaches-upstream "a read through the API reaches api.github.com through the broker, which reports its own credential being refused"
 			else
 				verdict FAIL github-api-reaches-upstream "read artifacts/github-api.txt, then logs/up-broker/broker.log"
@@ -1967,11 +1976,28 @@ EOF
 				;;
 			esac
 			if grep -q 'torvalds/linux is not a repository this VM may read' "$out/artifacts/github-api.txt" &&
-				grep -q 'not POST /gists' "$out/artifacts/github-api.txt" &&
+				grep -q '/gists is not something this VM may write through api.github.com' "$out/artifacts/github-api.txt" &&
 				grep -q '/user/repos is not something this VM may read' "$out/artifacts/github-api.txt"; then
 				verdict PASS github-api-refuses "another repository, a new gist and the account's repositories are refused through the API, each with its reason"
 			else
 				verdict FAIL github-api-refuses "read artifacts/github-api.txt"
+			fi
+			write_said=$(awk '/^=== a write under the repository the grant may write/ { getline; print; exit }' "$out/artifacts/github-api.txt")
+			case $write_said in
+			*'api.github.com refused IGLOO_VERIFY_BROKERED; '*' not scoped to git/git-scm.com')
+				verdict PASS github-api-write-reaches-upstream "a write under a repository in write reaches api.github.com through the broker, which reports its own credential being refused"
+				;;
+			*)
+				verdict FAIL github-api-write-reaches-upstream "read artifacts/github-api.txt, then logs/up-broker/broker.log"
+				;;
+			esac
+			if grep -q 'this VM may read git/git, not write to it' "$out/artifacts/github-api.txt" &&
+				grep -q 'torvalds/linux is not a repository this VM may write to' "$out/artifacts/github-api.txt" &&
+				grep -q 'POST /repos/git/git-scm.com/hooks is not a write this VM may make' "$out/artifacts/github-api.txt" &&
+				grep -q 'PUT /repos/git/git-scm.com/actions/secrets/X is not a write this VM may make' "$out/artifacts/github-api.txt"; then
+				verdict PASS github-api-write-refuses "a write through the API to a repository the grant may only read, and to one it does not name, is refused, and so are a webhook and a secret for the one it may write, each with its reason"
+			else
+				verdict FAIL github-api-write-refuses "read artifacts/github-api.txt"
 			fi
 
 			# The whole point of brokering, stated as the thing that must be absent.

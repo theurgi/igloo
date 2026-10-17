@@ -216,22 +216,25 @@ stands where the path form puts the host, and the rest is `decide`'s (`decideAdd
 upstream URL is built from the profile's fixed host and the grant's own copy of what it allows: a
 git request for the repository as the grant spells it, a push only for one in its `write`
 (`routeGit`), a read through a git grant's API under `repos/` and that repository or of the API's
-root, or a `POST` to the API's fixed `graphql` path (`routeApi`), a model provider's request for an
-endpoint its profile lists in `inferenceEndpoints` (`routeInference`), and a model server's on
-loopback, at the port its grant names (`routeModelServer`). Nothing the guest sends reaches the
-upstream URL but an OpenRouter model listing's query, and an API read's path past its repository and
-its query: each query rebuilt so that each name and value is encoded, and the path's segments as the
-URL parser left them, with every `.` and `..` resolved, so that none leaves the repository. A path
-holding a percent-escape or an empty segment is refused, but for the one ending a host's root, and
-so is a push to a repository no grant's `write` lists, at the ref advertisement as well as the push,
-and a write through the API's REST paths.
+root, a write there for one in its `write` at a path `apiWrites` lists, or a `POST` to the API's
+fixed `graphql` path (`routeApi`), a model provider's request for an endpoint its profile lists in
+`inferenceEndpoints` (`routeInference`), and a model server's on loopback, at the port its grant
+names (`routeModelServer`). Nothing the guest sends reaches the upstream URL but an OpenRouter model
+listing's query, and an API request's path past its repository and its query: each query rebuilt so
+that each name and value is encoded, and the path's segments as the URL parser left them, with every
+`.` and `..` resolved, so that none leaves the repository. A path holding a percent-escape or an
+empty segment is refused, but for the one ending a host's root, and so is a push or a REST write for
+a repository no grant's `write` lists, a push at its ref advertisement as well as at the push, and a
+REST write `apiWrites` does not list.
 
 A GraphQL query is the one request a grant's repositories do not bound. It names what it reads and
 writes in its body, much of it by node IDs that say which repository they belong to only after a
 lookup, so not even reading the body could match it against a grant; it is sent with the credential,
 its body unread like every other, and the token's own scope is its bound (`routeApi`). A push is
 bounded to its repository but not to its refs, which it names in its body: which branches and tags
-it updates is the repository's rulesets' to bound.
+it updates is the repository's rulesets' to bound. A REST write is bounded to its repository and its
+path, and what it sets, a merge's base branch or a release's tag and commit, is in its body, for the
+rulesets to bound as they bound a push.
 
 On the TLS listener, a read no grant serves — a GET or HEAD, or git's fetch — is sent to the host it
 was addressed to, with its path and query as the guest sent them and no credential at all, when the
@@ -247,9 +250,9 @@ hop-by-hop ones and any its `Connection` names, `Host`, `Expect`, `Content-Lengt
 (`bodyHeaders`); the broker's credential is set after the guest's are dropped. An anonymous read is
 built as a model request is, and no credential is set. A redirect is never followed, a 401 becomes
 the broker's own refusal (`relay`), and an answer loses its cookies and authentication challenges on
-the way back (`responseHeaders`). The redirects of an API read and an anonymous read alone go back
-to the guest as they came: an API's leads to a signed URL for a log or an asset, and the broker
-neither follows it nor sends its credential there. An API read's `Link` naming a page by the
+the way back (`responseHeaders`). The redirects of an API request and an anonymous read alone go
+back to the guest as they came: an API's leads to a signed URL for a log or an asset, and the broker
+neither follows it nor sends its credential there. An API answer's `Link` naming a page by the
 repository's number is put back in the `repos/<owner>/<repo>/` form (`pagesOf`), so a client
 following it stays within the grant.
 

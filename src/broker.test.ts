@@ -377,11 +377,28 @@ describe('Broker.decide, on GitHub’s API', () => {
     assert.strictEqual(outcome(Broker.decide(grants, 'GET', `${base}/github.com/`)), 404)
   })
 
-  it('refuses a write, whatever it is for', () => {
+  it('refuses a write to a repository only read, and outside the repositories', () => {
     for (const method of ['POST', 'PATCH', 'PUT', 'DELETE']) {
-      assert.strictEqual(outcome(api('/repos/you/api/issues', method)), 403, method)
+      assert.deepStrictEqual(api('/repos/you/api/issues', method), {
+        _tag: 'Deny',
+        asked: { scope: 'you/api' },
+        reason: 'this VM may read you/api, not write to it',
+        status: 403,
+      })
     }
-    assert.strictEqual(outcome(api('/gists', 'POST')), 403)
+    assert.deepStrictEqual(api('/gists', 'POST'), {
+      _tag: 'Deny',
+      asked: { host: 'api.github.com' },
+      reason: '/gists is not something this VM may write through api.github.com',
+      status: 403,
+    })
+    assert.strictEqual(outcome(api('/', 'POST')), 403)
+  })
+
+  it('refuses a method that neither reads nor writes', () => {
+    for (const method of ['OPTIONS', 'TRACE', 'CONNECT']) {
+      assert.strictEqual(outcome(api('/repos/you/api', method)), 405, method)
+    }
   })
 
   it('sends a GraphQL query with its credential, naming no repository', () => {
@@ -482,6 +499,132 @@ describe('Broker.decide, on a push', () => {
       ['https://github.com/someone/else/info/refs?service=git-receive-pack', 'GET'],
       ['https://github.com/someone/else/git-receive-pack', 'POST'],
       ['https://github.com/you/api/git-receive-pack', 'POST'],
+    ] as const) {
+      assert.strictEqual(addressed(url, method)._tag, 'Deny', url)
+    }
+  })
+})
+
+describe('Broker.decide, on a write through GitHub’s API', () => {
+  const writing: readonly Broker.Grant[] = [
+    { credential: 'GITHUB_TOKEN', profile: 'github', repos: ['you/api'], write: ['You/Web.git'] },
+  ]
+  const api = (path: string, method: string) =>
+    Broker.decide(writing, method, `${base}/api.github.com${path}`)
+
+  it('writes to a repository in write as the grant spells it, with its query', () => {
+    assert.deepStrictEqual(api('/repos/you/web/issues?x=a b', 'POST'), {
+      _tag: 'Api',
+      credential: 'GITHUB_TOKEN',
+      host: 'api.github.com',
+      operation: 'write',
+      profile: 'github',
+      repo: 'You/Web',
+      upstream: 'https://api.github.com/repos/You/Web/issues?x=a+b',
+    })
+  })
+
+  it('writes what GitHub’s CLI writes', () => {
+    for (const [method, path] of [
+      ['POST', 'issues'],
+      ['PATCH', 'issues/7'],
+      ['POST', 'issues/7/comments'],
+      ['DELETE', 'issues/comments/9'],
+      ['PUT', 'issues/7/lock'],
+      ['POST', 'pulls'],
+      ['PATCH', 'pulls/3'],
+      ['PUT', 'pulls/3/merge'],
+      ['POST', 'pulls/3/reviews'],
+      ['DELETE', 'pulls/3/requested_reviewers'],
+      ['POST', 'releases'],
+      ['POST', 'releases/generate-notes'],
+      ['PATCH', 'releases/5'],
+      ['DELETE', 'releases/5'],
+      ['DELETE', 'releases/assets/11'],
+      ['POST', 'actions/runs/8/rerun'],
+      ['POST', 'actions/runs/8/rerun-failed-jobs'],
+      ['POST', 'actions/runs/8/cancel'],
+      ['POST', 'actions/runs/8/force-cancel'],
+      ['POST', 'actions/jobs/13/rerun'],
+      ['POST', 'actions/workflows/ci.yml/dispatches'],
+      ['POST', 'statuses/0123abcd'],
+      ['POST', 'check-runs'],
+      ['PATCH', 'check-runs/4'],
+      ['POST', 'check-runs/4/rerequest'],
+      ['POST', 'check-suites'],
+      ['POST', 'check-suites/6/rerequest'],
+    ] as const) {
+      assert.strictEqual(
+        outcome(api(`/repos/you/web/${path}`, method)),
+        'allow',
+        `${method} ${path}`,
+      )
+    }
+  })
+
+  it('refuses every other write, naming it, though the token may make it', () => {
+    for (const [method, path] of [
+      ['PATCH', ''],
+      ['DELETE', ''],
+      ['POST', '/hooks'],
+      ['POST', '/keys'],
+      ['PUT', '/collaborators/someone'],
+      ['PUT', '/actions/secrets/TOKEN'],
+      ['POST', '/actions/variables'],
+      ['POST', '/actions/runners/registration-token'],
+      ['PUT', '/actions/permissions'],
+      ['PATCH', '/check-suites/preferences'],
+      ['PUT', '/contents/README.md'],
+      ['POST', '/git/refs'],
+      ['POST', '/forks'],
+      ['POST', '/labels'],
+      ['DELETE', '/actions/runs/8'],
+      ['PUT', '/actions/workflows/ci.yml/enable'],
+      ['PUT', '/actions/runs/8/rerun'],
+      ['POST', '/statuses'],
+      ['POST', '/statuses/0123abcd/x'],
+    ] as const) {
+      assert.deepStrictEqual(
+        api(`/repos/you/web${path}`, method),
+        {
+          _tag: 'Deny',
+          asked: { scope: 'you/web' },
+          reason: `${method} /repos/you/web${path} is not a write this VM may make`,
+          status: 403,
+        },
+        `${method} ${path}`,
+      )
+    }
+  })
+
+  it('refuses a write to a repository it does not list, naming it', () => {
+    assert.deepStrictEqual(api('/repos/someone/else/issues', 'POST'), {
+      _tag: 'Deny',
+      asked: { scope: 'someone/else' },
+      reason: 'someone/else is not a repository this VM may write to',
+      status: 403,
+    })
+  })
+
+  it('cannot leave the repository to write elsewhere by its path', () => {
+    const left = api('/repos/you/web/../api/issues', 'POST')
+    assert.strictEqual(
+      left._tag === 'Deny' ? left.reason : '',
+      'this VM may read you/api, not write to it',
+    )
+    const climbed = api('/repos/you/web/releases/../hooks', 'POST')
+    assert.strictEqual(climbed._tag === 'Deny' ? climbed.status : 0, 403)
+  })
+
+  it('never sends a write no grant covers on bare, whatever the tunnel reaches', () => {
+    const addressed = (url: string, method: string) =>
+      Broker.decideAddressed(writing, method, url, 'any')
+    assert.strictEqual(addressed('https://api.github.com/repos/you/web/issues', 'POST')._tag, 'Api')
+    for (const [url, method] of [
+      ['https://api.github.com/repos/someone/else/issues', 'POST'],
+      ['https://api.github.com/repos/you/api/issues', 'POST'],
+      ['https://api.github.com/repos/you/web/hooks', 'POST'],
+      ['https://api.github.com/gists', 'POST'],
     ] as const) {
       assert.strictEqual(addressed(url, method)._tag, 'Deny', url)
     }
@@ -2677,6 +2820,46 @@ describe('Broker.serveRequests, on GitHub’s API', () => {
         assert.notProperty(allowed, 'scope')
       }),
     ))
+
+  it('sends a write on with its body and type, and the broker’s token, and logs it as one', () => {
+    const writing: readonly Broker.Grant[] = [
+      { credential: 'GITHUB_TOKEN', profile: 'github', repos: [], write: ['you/web'] },
+    ]
+    return auditing(audited =>
+      serving(writing, held, github, async server => {
+        sent.length = 0
+        const issue = '{"title":"from the guest"}'
+        const response = await server.fetch(
+          new Request('http://broker/api.github.com/repos/you/web/issues', {
+            body: issue,
+            headers: {
+              Authorization: 'token igloo-broker-holds-the-real-key',
+              'Content-Type': 'application/json',
+            },
+            method: 'POST',
+          }),
+        )
+        assert.strictEqual(response.status, 200)
+        await response.text()
+
+        assert.strictEqual(sent[0]?.url, 'https://api.github.com/repos/you/web/issues')
+        assert.strictEqual(sent[0]?.init.method, 'POST')
+        assert.strictEqual(await new Response(sent[0]?.init.body).text(), issue)
+        const headers = new Headers(sent[0]?.init.headers)
+        assert.strictEqual(headers.get('Authorization'), 'Bearer ghp-test')
+        assert.strictEqual(headers.get('Content-Type'), 'application/json')
+        const allowed = audited.find(
+          (event): event is Record<string, unknown> =>
+            typeof event === 'object' &&
+            event !== null &&
+            'event' in event &&
+            event.event === 'allow',
+        )
+        assert.strictEqual(allowed?.['operation'], 'write')
+        assert.strictEqual(allowed?.['scope'], 'you/web')
+      }),
+    )
+  })
 })
 
 describe('Broker.serveRequests, on a push', () => {

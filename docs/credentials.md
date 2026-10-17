@@ -77,14 +77,14 @@ holds its own TLS certificate and key under them.
 
 ### Fields
 
-| Field      | Applies to         | Value                                                |
-| ---------- | ------------------ | ---------------------------------------------------- |
-| `source`   | every credential   | `{ file = "…"; }` or `{ command = [ … ]; }`          |
-| `mode`     | every credential   | `"broker"` or `"deliver"`                            |
-| `profile`  | brokered           | `"anthropic-messages"`, `"openrouter"` or `"github"` |
-| `repos`    | brokered, `github` | Repositories to fetch and read, as `owner/repo`.     |
-| `write`    | brokered, `github` | Repositories to push to as well, as `owner/repo`.    |
-| `projects` | user layer only    | Absolute paths of the projects' root directories.    |
+| Field      | Applies to         | Value                                                                       |
+| ---------- | ------------------ | --------------------------------------------------------------------------- |
+| `source`   | every credential   | `{ file = "…"; }` or `{ command = [ … ]; }`                                 |
+| `mode`     | every credential   | `"broker"` or `"deliver"`                                                   |
+| `profile`  | brokered           | `"anthropic-messages"`, `"openrouter"` or `"github"`                        |
+| `repos`    | brokered, `github` | Repositories to fetch and read, as `owner/repo`.                            |
+| `write`    | brokered, `github` | Repositories to push to and write through the API as well, as `owner/repo`. |
+| `projects` | user layer only    | Absolute paths of the projects' root directories.                           |
 
 A field that does not apply is refused rather than ignored: `repos` or `write` on a model grant, or
 `profile` on a delivered credential, would be someone believing they had narrowed something.
@@ -189,15 +189,23 @@ reachable there, never where "there" is. The one upstream policy places is a
   - Reading through the REST API, with `GET` or `HEAD`, anything under `repos/<owner>/<repo>/` for a
     repository in either list, with its query, and the API's root, where GitHub gives a token's
     scopes.
+  - Writing through the REST API, under `repos/<owner>/<repo>/` for a repository in `write`, what
+    `gh` writes: issues and pull requests, with their comments, labels, reviews and merges, anywhere
+    under `issues/` and `pulls/`; releases, anywhere under `releases/`; a run's rerun and cancel and
+    a workflow's dispatch, at `actions/runs/<id>/rerun`, `rerun-failed-jobs`, `cancel` and
+    `force-cancel`, `actions/jobs/<id>/rerun` and `actions/workflows/<id>/dispatches`; and a
+    commit's statuses and checks, at `statuses/<sha>`, `check-runs` and `check-suites`.
   - A GraphQL query, `POST graphql`, whatever it reads or writes. The grant does not bound it: see
     [what a grant does not bound](#what-a-grant-does-not-bound).
-  - Through the API, everything else is refused: a write under `repos/`, another repository, and
-    everything outside `repos/` but the root and `graphql`, `gists`, `user/repos` and `search` among
-    it.
-- **Grant:** `repos`, the repositories to fetch and read, and `write`, those to push to as well,
-  which are fetched and read without being listed twice. Either may be left out, but not both, and a
-  repository in both is refused. Each is `owner/repo`, with or without `.git`, matched ignoring
-  case.
+  - Through the API, everything else is refused: a write to a repository only in `repos`; any other
+    write to one in `write`, its settings, collaborators, webhooks, deploy keys, Actions secrets,
+    variables and runners, its contents and refs and its labels among them, even where the token
+    could make it; another repository; and everything outside `repos/` but the root and `graphql`,
+    `gists`, `user/repos` and `search` among it.
+- **Grant:** `repos`, the repositories to fetch and read, and `write`, those to push to and write
+  through the API as well, which are fetched and read without being listed twice. Either may be left
+  out, but not both, and a repository in both is refused. Each is `owner/repo`, with or without
+  `.git`, matched ignoring case.
 - **In the guest:** `git` is installed, and `GH_TOKEN=igloo-broker-holds-the-real-key`, a
   placeholder for GitHub's CLI, `gh`, which makes no request without a token. The broker answers
   `github.com` and `api.github.com` itself: a connection to either through the
@@ -222,9 +230,13 @@ repository: `gh run list`, `gh run view`, `gh release list`, `gh release view`, 
 `gh issue list`, `gh pr list`, and `gh api` under `repos/`. Those that read through GraphQL, as most
 of `gh pr`, `gh issue` and `gh repo` do, reach whatever the token reaches, listed or not, and those
 that write through it, as `gh issue create`, `gh pr comment` and `gh pr merge` do, work if the token
-can write. GitHub serves a run's logs and a release's assets as redirects to signed URLs on other
-hosts, which the broker passes back for the guest to follow through the tunnel; under `restricted`,
-list those hosts in `tunnel`. `gh run view --log` and `--log-failed` read a run's log archive from
+can write. For a repository in `write`, so do those that write through the REST API:
+`gh release create` without assets, `gh release edit` and `gh release delete`, `gh run rerun`,
+`gh run cancel` and `gh workflow run`. `gh label`, `gh run delete`, `gh workflow enable` and
+`disable`, `gh cache delete`, `gh secret` and `gh variable` write what is refused. GitHub serves a
+run's logs and a release's assets as redirects to signed URLs on other hosts, which the broker
+passes back for the guest to follow through the tunnel; under `restricted`, list those hosts in
+`tunnel`. `gh run view --log` and `--log-failed` read a run's log archive from
 `results-receiver.actions.githubusercontent.com`.
 
 Scope the token itself to the same repositories. The grant bounds what the broker asks for over git
@@ -430,6 +442,10 @@ On every brokered request:
   repositories listed, with no permission you would not give the agent.
 - **Which refs a push updates.** A push to a repository in `write` reaches every branch and tag the
   token can write to. The repository's rulesets bound it, and the grant does not.
+- **What a write through the REST API sets.** A write is allowed by its method and its path, and
+  what it sets is in its body. A merge lands on whatever branch the pull request targets, and a
+  release creates the tag it names, on the commit it names. The repository's rulesets bound those,
+  as they bound a push.
 
 ## Pointing an agent at the broker
 
@@ -513,8 +529,11 @@ that way, since it never enters the guest.
   every request to a profile's upstream fails verification. The tunnel does not open the TLS it
   carries, so there the guest's own client does the verifying, and a content module can give the
   guest the authority with `security.pki.certificates`.
-- `github` pushes only to the repositories in `write`, and writes nothing through the REST API. Its
-  GraphQL API is passed with the token, and the grant does not bound what a query reads or writes.
+- `github` pushes and writes through the REST API only for the repositories in `write`, and through
+  the REST API writes only what its operations list. A release's assets are uploaded to
+  `uploads.github.com`, which the broker does not answer, so `gh release upload` and
+  `gh release create` with assets fail. Its GraphQL API is passed with the token, and the grant does
+  not bound what a query reads or writes.
 - With a `github` grant, nothing in the guest reaches `github.com` or `api.github.com` but through
   the broker. Under `restricted` without them in `tunnel`, that means only the repositories listed:
   a release download from `github.com`, a clone of any other repository, or an anonymous read
