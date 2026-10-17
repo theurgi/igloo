@@ -13,6 +13,7 @@ import {
   isProfileName,
   isRepo,
   isTcpPort,
+  normaliseRepo,
   profileNames,
   profiles,
   tlsCertificateCredential,
@@ -527,28 +528,45 @@ const readGrant = (
     // Refused rather than ignored: `repos` on a model grant is someone believing
     // they narrowed something.
     if (isInferenceProfile(profile)) {
-      if ('repos' in entry) {
-        return yield* bad(
-          `${where}: \`secrets.${name}.repos\` does not apply to the ${profile} profile, which calls whichever model a request names. ${KEY_LIMITS}`,
-        )
+      for (const key of ['repos', 'write']) {
+        if (key in entry) {
+          return yield* bad(
+            `${where}: \`secrets.${name}.${key}\` does not apply to the ${profile} profile, which calls whichever model a request names. ${KEY_LIMITS}`,
+          )
+        }
       }
       return { profile }
     }
 
-    const repos = yield* readStringList(where, `secrets.${name}.repos`, entry['repos'])
-    if (repos.length === 0) {
+    const listed = (key: 'repos' | 'write') =>
+      entry[key] === undefined
+        ? Result.succeed([])
+        : readStringList(where, `secrets.${name}.${key}`, entry[key])
+    const repos = yield* listed('repos')
+    const write = yield* listed('write')
+    if (repos.length + write.length === 0) {
       return yield* bad(
-        `${where}: \`secrets.${name}.repos\` is empty, so the grant reaches nothing. List the repositories this credential may fetch, as \`owner/repo\`.`,
+        `${where}: \`secrets.${name}\` lists no repositories in \`repos\` or \`write\`, so the grant reaches nothing. List those this credential may fetch in \`repos\`, and those it may push to as well in \`write\`, as \`owner/repo\`.`,
       )
     }
-    for (const repo of repos) {
+    for (const repo of [...repos, ...write]) {
       if (!isRepo(repo)) {
         return yield* bad(
           `${where}: \`${repo}\` is not a repository. Write \`owner/repo\` — ${profiles[profile].host} is decided by the profile, so it is not part of the name.`,
         )
       }
     }
-    return { profile, repos }
+    // Refused rather than merged: listed in `repos` as well, a repository in
+    // `write` reads as one someone meant to keep from being pushed to.
+    const twice = write.find(repo =>
+      repos.some(read => normaliseRepo(read) === normaliseRepo(repo)),
+    )
+    if (twice !== undefined) {
+      return yield* bad(
+        `${where}: \`${twice}\` is in both \`secrets.${name}.repos\` and \`secrets.${name}.write\`. One in \`write\` is fetched and read as well as pushed to, so list it there alone, or in \`repos\` alone to keep it from being pushed to.`,
+      )
+    }
+    return { profile, repos, ...(write.length === 0 ? {} : { write }) }
   })
 
 /** What either layer says about one credential: where its value comes from, and what it is for. */
@@ -562,9 +580,10 @@ interface Shared {
   readonly projects: readonly string[]
 }
 
-const BODY_KEYS = new Set(['mode', 'profile', 'repos', 'source'])
+const BODY_KEYS = new Set(['mode', 'profile', 'repos', 'source', 'write'])
 
-const BODY_SHAPE = 'plus `profile` when the mode is "broker", and `repos` for a git profile'
+const BODY_SHAPE =
+  'plus `profile` when the mode is "broker", and `repos` or `write` for a git profile'
 
 /** A declaration's fields that are gone, and what to do instead. */
 const removedFromBody = new Map<string, string>([
@@ -619,7 +638,7 @@ const readBody = (
 
     const source = yield* readSource(where, `secrets.${name}.source`, entry['source'])
     if (mode === 'deliver') {
-      for (const key of ['profile', 'repos']) {
+      for (const key of ['profile', 'repos', 'write']) {
         if (key in entry) {
           return yield* bad(
             `${where}: \`secrets.${name}.${key}\` only means something for a brokered credential. A delivered one is handed to the guest whole, so there is nothing left to scope — set \`mode = "broker"\` to have the host hold it and make the requests.`,

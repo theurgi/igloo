@@ -118,18 +118,21 @@ export const tlsNamesCovered: readonly string[] = [
 
 /**
  * Fetch over git's smart HTTP, and read through the forge's API, for a fixed
- * set of repositories. At most one per profile: a request to the API may name
- * no repository, so nothing in it could choose between two.
+ * set of repositories, and push to those of them in `write`. At most one per
+ * profile: a request to the API may name no repository, so nothing in it could
+ * choose between two.
  *
- * `repos` is the broker's own copy of what is permitted. It is compared against
- * a request, never built from one.
+ * `repos` and `write` are the broker's own copy of what is permitted. They are
+ * compared against a request, never built from one.
  */
 export interface GitGrant {
   /** The credential to inject, under the name systemd loaded it as. */
   readonly credential: string
   readonly profile: 'github'
-  /** `owner/repo`, the complete set this grant may fetch and read. */
+  /** `owner/repo`, the repositories this grant may fetch and read, and no more. */
   readonly repos: readonly string[]
+  /** `owner/repo`, the repositories it may push to as well, each fetched and read as one in `repos` is. */
+  readonly write?: readonly string[]
 }
 
 /**
@@ -203,11 +206,13 @@ export const isModelServerName = (value: string): boolean => /^[a-z0-9][a-z0-9-]
 export const isTcpPort = (value: unknown): value is number =>
   typeof value === 'number' && Number.isInteger(value) && value > 0 && value <= 65535
 
-/**
- * The two requests git makes to fetch over HTTP, and the provider endpoints a
- * grant may reach.
- */
-export type GitOperation = 'fetch' | 'ls-refs'
+/** The two requests git makes to fetch over HTTP: the ref advertisement, and the fetch. */
+export type FetchOperation = 'fetch' | 'ls-refs'
+
+/** Those, and the two it makes to push: the advertisement a push asks for, and the push. */
+export type GitOperation = FetchOperation | 'push' | 'push-refs'
+
+/** The provider endpoints a grant may reach. */
 
 export type InferenceOperation =
   | 'chat-completions'
@@ -225,12 +230,12 @@ export type ModelServerOperation = Extract<
  * A read on a name the broker answers that no grant covers: git's two fetch
  * requests, or anything else read with GET or HEAD.
  */
-export type AnonymousOperation = GitOperation | 'read'
+export type AnonymousOperation = FetchOperation | 'read'
 
 /** A request through a forge's API: a read under a repository, or a GraphQL query. */
 export type ApiOperation = 'graphql' | 'read'
 
-export type Operation = AnonymousOperation | ApiOperation | InferenceOperation
+export type Operation = AnonymousOperation | ApiOperation | GitOperation | InferenceOperation
 
 /**
  * Where a request is going, once it is known to be one this broker serves.
@@ -339,12 +344,36 @@ export const isRepo = (repo: string): boolean => REPO.test(withoutGit(repo))
 
 export const normaliseRepo = (repo: string): string => withoutGit(repo).toLowerCase()
 
+/**
+ * The repository in `among` that `wanted`, already normalised, names, as the
+ * grant spells it.
+ */
+const grantedAs = (among: readonly string[] | undefined, wanted: string): string | undefined =>
+  among?.find(candidate => normaliseRepo(candidate) === wanted)
+
 /** The fields a grant of each kind carries. */
 const grantFields = {
-  git: new Set(['credential', 'profile', 'repos']),
+  git: new Set(['credential', 'profile', 'repos', 'write']),
   inference: new Set(['credential', 'profile']),
   'model-server': new Set(['credential', 'name', 'port', 'profile']),
 } as const
+
+/** A git grant's list of repositories, or why it is not one. */
+const repoList = (
+  profile: string,
+  field: string,
+  value: unknown,
+): Array<string> | { message: string } => {
+  if (!Array.isArray(value)) return { message: `the ${profile} grant's ${field} is not a list` }
+  const named: Array<string> = []
+  for (const repo of value as unknown[]) {
+    if (typeof repo !== 'string' || !isRepo(repo)) {
+      return { message: `${JSON.stringify(repo)} is not owner/repo` }
+    }
+    named.push(repo)
+  }
+  return named
+}
 
 /**
  * Read the grants a broker was started with.
@@ -414,17 +443,19 @@ export const parseGrants = (json: string): { grants: Grant[] } | { message: stri
     }
 
     if (!isInferenceProfile(profile)) {
-      if (!Array.isArray(repos) || repos.length === 0) {
+      const read = repoList(profile, 'repos', repos)
+      if ('message' in read) return read
+      const written = entry['write'] === undefined ? [] : repoList(profile, 'write', entry['write'])
+      if ('message' in written) return written
+      if (read.length + written.length === 0) {
         return { message: `the ${profile} grant names no repositories` }
       }
-      const named: Array<string> = []
-      for (const repo of repos as unknown[]) {
-        if (typeof repo !== 'string' || !isRepo(repo)) {
-          return { message: `${JSON.stringify(repo)} is not owner/repo` }
-        }
-        named.push(repo)
-      }
-      grants.push({ credential, profile, repos: named })
+      grants.push({
+        credential,
+        profile,
+        repos: read,
+        ...(written.length === 0 ? {} : { write: written }),
+      })
       continue
     }
 
@@ -655,7 +686,10 @@ const modelServerEndpoints: Readonly<Record<string, ModelServerOperation>> = {
  * a read are read.
  */
 const sendsBody = (operation: Operation): boolean =>
-  operation !== 'list-models' && operation !== 'ls-refs' && operation !== 'read'
+  operation !== 'list-models' &&
+  operation !== 'ls-refs' &&
+  operation !== 'push-refs' &&
+  operation !== 'read'
 
 /** How each inference operation is requested: a listing is read, the rest are sent a body. */
 const methodOf = (operation: InferenceOperation): 'GET' | 'POST' =>
@@ -735,7 +769,7 @@ const routeApi = (
 
   const wanted = `${owner}/${repo}`.toLowerCase()
   for (const candidate of held) {
-    const allowed = candidate.repos.find(spelled => normaliseRepo(spelled) === wanted)
+    const allowed = grantedAs(candidate.write, wanted) ?? grantedAs(candidate.repos, wanted)
     if (allowed === undefined) continue
     const path = withoutGit(allowed)
     const filter = new URLSearchParams(query).toString()
@@ -768,22 +802,20 @@ const routeGit = (
   let operation: GitOperation
   let head: readonly string[]
   if (last === 'refs' && segments.at(-2) === 'info') {
-    if (service === 'git-receive-pack') return deny(403, 'this VM may fetch, not push')
-    if (service !== 'git-upload-pack') {
-      return deny(404, 'the ref advertisement takes ?service=git-upload-pack')
+    if (service !== 'git-upload-pack' && service !== 'git-receive-pack') {
+      return deny(404, 'the ref advertisement takes ?service=git-upload-pack or git-receive-pack')
     }
     if (method !== 'GET') return deny(405, `${method} is not how a ref advertisement is requested`)
-    operation = 'ls-refs'
+    operation = service === 'git-upload-pack' ? 'ls-refs' : 'push-refs'
     head = segments.slice(0, -2)
-  } else if (last === 'git-upload-pack') {
-    if (method !== 'POST') return deny(405, `${method} is not how a fetch is requested`)
-    operation = 'fetch'
+  } else if (last === 'git-upload-pack' || last === 'git-receive-pack') {
+    operation = last === 'git-upload-pack' ? 'fetch' : 'push'
+    if (method !== 'POST') return deny(405, `${method} is not how a ${operation} is requested`)
     head = segments.slice(0, -1)
-  } else if (last === 'git-receive-pack') {
-    return deny(403, 'this VM may fetch, not push')
   } else {
     return undefined
   }
+  const pushes = operation === 'push' || operation === 'push-refs'
 
   // Exactly host, owner and repository. Anything longer or shorter is not a
   // shape this broker serves, which is also what makes `..` unreachable.
@@ -800,8 +832,15 @@ const routeGit = (
   if (forHost.length === 0) return deny(403, `${host} is not brokered for this VM`, { host })
 
   for (const grant of forHost) {
-    const allowed = grant.repos.find(candidate => normaliseRepo(candidate) === wanted)
+    const writable = grantedAs(grant.write, wanted)
+    const allowed = writable ?? grantedAs(grant.repos, wanted)
     if (allowed === undefined) continue
+    // Refused at the advertisement as well as at the push, since the
+    // advertisement is where git asks whether it may push at all: refusing only
+    // the second would let a push start and fail late.
+    if (pushes && writable === undefined) {
+      return deny(403, 'this VM may fetch, not push', { scope: wanted })
+    }
     // Built from the grant's spelling and a fixed template. The request decided
     // which grant applies and nothing else.
     const upstreamHost = profiles[grant.profile].host
@@ -813,13 +852,20 @@ const routeGit = (
       operation,
       profile: grant.profile,
       repo: path,
-      upstream:
-        operation === 'ls-refs'
-          ? `https://${upstreamHost}/${path}.git/info/refs?service=git-upload-pack`
-          : `https://${upstreamHost}/${path}.git/git-upload-pack`,
+      upstream: `https://${upstreamHost}/${path}.git/${gitEndpoints[operation]}`,
     }
   }
-  return deny(403, `${wanted} is not a repository this VM may fetch`, { scope: wanted })
+  return deny(403, `${wanted} is not a repository this VM may ${pushes ? 'push to' : 'fetch'}`, {
+    scope: wanted,
+  })
+}
+
+/** Where each git request goes, under a repository's `.git`. */
+const gitEndpoints: Readonly<Record<GitOperation, string>> = {
+  fetch: 'git-upload-pack',
+  'ls-refs': 'info/refs?service=git-upload-pack',
+  push: 'git-receive-pack',
+  'push-refs': 'info/refs?service=git-receive-pack',
 }
 
 /**
@@ -1078,6 +1124,18 @@ const unforwardedRequestHeaders: ReadonlySet<string> = new Set([
  */
 const bodyHeaders = ['content-encoding', 'content-type'] as const
 
+/** What git calls the body it sends and the one it gets back, on a fetch and a push. */
+const packTypes = {
+  fetch: {
+    request: 'application/x-git-upload-pack-request',
+    result: 'application/x-git-upload-pack-result',
+  },
+  push: {
+    request: 'application/x-git-receive-pack-request',
+    result: 'application/x-git-receive-pack-result',
+  },
+} as const
+
 /**
  * The headers sent upstream.
  *
@@ -1129,20 +1187,24 @@ export const upstreamHeaders = (
     return headers
   }
 
+  const pack =
+    decision.operation === 'fetch' || decision.operation === 'push'
+      ? packTypes[decision.operation]
+      : undefined
   const headers = new Headers({
     'Accept-Encoding': 'identity',
     // git's own name for what it is asking for. Constructed, so a guest cannot
     // use content negotiation to reach a different upstream behaviour.
-    Accept: decision.operation === 'ls-refs' ? '*/*' : 'application/x-git-upload-pack-result',
+    Accept: pack === undefined ? '*/*' : pack.result,
     'User-Agent': 'igloo-broker',
   })
   // A fine-grained personal access token or an App installation token, in the
   // username slot git itself uses for them.
   if (token !== undefined) headers.set('Authorization', `Basic ${btoa(`x-access-token:${token}`)}`)
-  if (decision.operation === 'fetch') {
-    headers.set('Content-Type', 'application/x-git-upload-pack-request')
-    // git compresses the negotiation body. The body is passed through
-    // unexamined, so the encoding that describes it has to go with it.
+  if (pack !== undefined) {
+    headers.set('Content-Type', pack.request)
+    // git may compress what it sends. The body is passed through unexamined,
+    // so the encoding that describes it has to go with it.
     if (guest.get('Content-Encoding') === 'gzip') headers.set('Content-Encoding', 'gzip')
   }
   const protocol = guest.get('Git-Protocol')
@@ -1717,8 +1779,12 @@ const returnedHeaders = (
  * is one that should be streaming, where the first byte arrives immediately. A
  * model server's call is a model call too, and may wait on its model loading.
  * An anonymous read is given git's: no model is generating its answer.
+ *
+ * A push's body is its pack, as large as what is pushed, and the upstream
+ * answers only once it has all of it and has applied it, so a push is given
+ * the minutes a model call is.
  */
-const headerTimeoutMs = { git: 30_000, inference: 600_000 } as const
+const headerTimeoutMs = { git: 30_000, inference: 600_000, push: 600_000 } as const
 
 /**
  * Pass a body through, counting it, and report when it ends however it ends.
@@ -1868,7 +1934,9 @@ const handle = async (
     },
     decision._tag === 'Inference' || decision._tag === 'ModelServer'
       ? headerTimeoutMs.inference
-      : headerTimeoutMs.git,
+      : decision.operation === 'push'
+        ? headerTimeoutMs.push
+        : headerTimeoutMs.git,
   )
 
   let upstream: Response

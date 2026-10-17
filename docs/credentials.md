@@ -82,11 +82,12 @@ holds its own TLS certificate and key under them.
 | `source`   | every credential   | `{ file = "…"; }` or `{ command = [ … ]; }`          |
 | `mode`     | every credential   | `"broker"` or `"deliver"`                            |
 | `profile`  | brokered           | `"anthropic-messages"`, `"openrouter"` or `"github"` |
-| `repos`    | brokered, `github` | Repositories, as `owner/repo`.                       |
+| `repos`    | brokered, `github` | Repositories to fetch and read, as `owner/repo`.     |
+| `write`    | brokered, `github` | Repositories to push to as well, as `owner/repo`.    |
 | `projects` | user layer only    | Absolute paths of the projects' root directories.    |
 
-A field that does not apply is refused rather than ignored: `repos` on a model grant, or `profile`
-on a delivered credential, would be someone believing they had narrowed something.
+A field that does not apply is refused rather than ignored: `repos` or `write` on a model grant, or
+`profile` on a delivered credential, would be someone believing they had narrowed something.
 
 A project has at most one brokered credential per profile. A request names no credential, and one to
 GitHub's API may name no repository, so the broker would have no way to choose between two.
@@ -182,16 +183,21 @@ reachable there, never where "there" is. The one upstream policy places is a
   APIs at `https://api.github.com`, with the token sent the way each takes a fine-grained personal
   access token or a GitHub App installation token.
 - **Operations:**
-  - Fetching, `git clone`, `git fetch` and `git pull`, from the repositories listed. Pushing is
-    refused.
+  - Fetching, `git clone`, `git fetch` and `git pull`, from the repositories in `repos` and `write`.
+  - Pushing, `git push`, to those in `write`. A push to any other is refused at the first request
+    git makes for it, before anything is sent.
   - Reading through the REST API, with `GET` or `HEAD`, anything under `repos/<owner>/<repo>/` for a
-    repository listed, with its query, and the API's root, where GitHub gives a token's scopes.
+    repository in either list, with its query, and the API's root, where GitHub gives a token's
+    scopes.
   - A GraphQL query, `POST graphql`, whatever it reads or writes. The grant does not bound it: see
     [what a grant does not bound](#what-a-grant-does-not-bound).
   - Through the API, everything else is refused: a write under `repos/`, another repository, and
     everything outside `repos/` but the root and `graphql`, `gists`, `user/repos` and `search` among
     it.
-- **Grant:** `repos`, required: `owner/repo`, with or without `.git`, matched ignoring case.
+- **Grant:** `repos`, the repositories to fetch and read, and `write`, those to push to as well,
+  which are fetched and read without being listed twice. Either may be left out, but not both, and a
+  repository in both is refused. Each is `owner/repo`, with or without `.git`, matched ignoring
+  case.
 - **In the guest:** `git` is installed, and `GH_TOKEN=igloo-broker-holds-the-real-key`, a
   placeholder for GitHub's CLI, `gh`, which makes no request without a token. The broker answers
   `github.com` and `api.github.com` itself: a connection to either through the
@@ -203,6 +209,14 @@ reachable there, never where "there" is. The one upstream policy places is a
 A project has at most one `github` credential: a request to the API may name no repository, so the
 broker could not tell which of two pays. List every repository in the one.
 
+A push to a repository in `write` reaches every branch and tag the token can write to. Which ones it
+updates is in its body, which the broker does not read, so the bound is the repository's own: its
+rulesets, such as no force-push and no deletion on `main`. A token acts as its account, so the token
+of an account a ruleset lets bypass it bypasses it from the guest too. To keep an agent off `main`,
+use a token of an account that is not on the bypass list. A GitHub App's installation token expires
+within an hour, and the broker reads a credential only when the VM boots, so it does not last a
+working session.
+
 With `gh` in the guest, `gh auth status` works, and so do its commands that read a listed
 repository: `gh run list`, `gh run view`, `gh release list`, `gh release view`, `gh repo view`,
 `gh issue list`, `gh pr list`, and `gh api` under `repos/`. Those that read through GraphQL, as most
@@ -213,9 +227,12 @@ hosts, which the broker passes back for the guest to follow through the tunnel; 
 list those hosts in `tunnel`. `gh run view --log` and `--log-failed` read a run's log archive from
 `results-receiver.actions.githubusercontent.com`.
 
-Scope the token itself to the same repositories, read-only. The grant bounds what the broker asks
-for over git and the REST API, and the token bounds what GitHub gives. A GraphQL query is bounded by
-the token alone.
+Scope the token itself to the same repositories. The grant bounds what the broker asks for over git
+and the REST API, and the token bounds what GitHub gives; a GraphQL query is bounded by the token
+alone. Without `write`, make the token read-only. With it, the token needs Contents write, which a
+fine-grained token holds for every repository it reaches, so a GraphQL query can write to one in
+`repos` too. A repository that must not be written belongs in neither `write` nor a token that can
+write.
 
 ### How the guest reaches GitHub
 
@@ -243,8 +260,9 @@ the same list.
   days of expiring after ten years. Delete it to have it made again; the next launch rebuilds the
   guest, since the authority is part of it.
 
-Pushing happens from the host, in a repository the agent has written. Before running `git` there,
-look at `.git/config` and `.git/hooks`: git runs what they name, as you.
+Without a repository in `write`, pushing happens from the host, in a repository the agent has
+written. Before running `git` there, look at `.git/config` and `.git/hooks`: git runs what they
+name, as you.
 
 ## Model servers on this machine
 
@@ -390,8 +408,9 @@ On every brokered request:
   pass: an upstream that did not answer.
 - No request body is refused for its size. The upstream's own limit is the one a body meets, and on
   an inference profile the upstream's refusal comes back as it gave it. A call is given up on when
-  its upstream has not answered within 10 minutes of a model call, or 30 seconds of a git request,
-  or when the guest leaves before it answers; a body still being sent then is cut off.
+  its upstream has not answered within 10 minutes of a model call or a push, or 30 seconds of any
+  other request, or when the guest leaves before it answers; a body still being sent then is cut
+  off.
 - The broker serves as many requests and tunnels at once as the guest opens. Its memory is not
   bounded unless you set `brokerMem`; see [Configuration](configuration.md#policy-settings) and
   [when the broker is killed](troubleshooting.md#when-the-broker-is-killed).
@@ -409,6 +428,8 @@ On every brokered request:
   only after a lookup, so not even reading it could bound one to the repositories listed. The
   token's own permissions are all that bound it: scope a fine-grained token to exactly the
   repositories listed, with no permission you would not give the agent.
+- **Which refs a push updates.** A push to a repository in `write` reaches every branch and tag the
+  token can write to. The repository's rulesets bound it, and the grant does not.
 
 ## Pointing an agent at the broker
 
@@ -492,9 +513,8 @@ that way, since it never enters the guest.
   every request to a profile's upstream fails verification. The tunnel does not open the TLS it
   carries, so there the guest's own client does the verifying, and a content module can give the
   guest the authority with `security.pki.certificates`.
-- `github` fetches from GitHub and reads through its REST API, and cannot push or write through
-  either. Its GraphQL API is passed with the token, and the grant does not bound what a query reads
-  or writes.
+- `github` pushes only to the repositories in `write`, and writes nothing through the REST API. Its
+  GraphQL API is passed with the token, and the grant does not bound what a query reads or writes.
 - With a `github` grant, nothing in the guest reaches `github.com` or `api.github.com` but through
   the broker. Under `restricted` without them in `tunnel`, that means only the repositories listed:
   a release download from `github.com`, a clone of any other repository, or an anonymous read

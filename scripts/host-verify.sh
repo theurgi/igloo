@@ -26,6 +26,9 @@
 #
 #   IGLOO_VERIFY_GITHUB_TOKEN      a clone through the broker with a real token
 #   IGLOO_VERIFY_GITHUB_REPO       the repository it clones, git/git by default
+#   IGLOO_VERIFY_GITHUB_WRITE_REPO a scratch repository, not the one cloned,
+#                                  that the token can push to: a branch is
+#                                  pushed to it and deleted again
 #   IGLOO_VERIFY_OPENROUTER_KEY    streaming model calls with a real key, which
 #                                  spend a few tokens of credit
 #   IGLOO_VERIFY_OPENROUTER_MODEL  the model they name
@@ -593,6 +596,7 @@ cleanup() {
 			[ -z "${!var:-}" ] || printf 'credential=%s\n' "${!var}"
 		done
 		[ -z "${IGLOO_VERIFY_GITHUB_REPO:-}" ] || printf 'repository=%s\n' "$IGLOO_VERIFY_GITHUB_REPO"
+		[ -z "${IGLOO_VERIFY_GITHUB_WRITE_REPO:-}" ] || printf 'repository=%s\n' "$IGLOO_VERIFY_GITHUB_WRITE_REPO"
 		# A name that spells one of this machine's addresses, which the address
 		# scrub cannot recognise in that spelling.
 		[ -z "$own_name" ] || printf 'own-address=%s\n' "$own_name"
@@ -1454,6 +1458,7 @@ EOF
       mode = "broker";
       profile = "github";
       repos = [ "git/git" ];
+      write = [ "git/git-scm.com" ];
       projects = [ "$project" ];
     };
     IGLOO_VERIFY_INFERENCE = {
@@ -1881,6 +1886,36 @@ EOF
 				verdict FAIL github-git-scopes-repos "an ungranted repository was not refused — read artifacts/github-git.txt"
 			fi
 
+			# Pushes, each a dry run: git asks for the push's ref advertisement
+			# and sends nothing more. The one to the repository in `write` goes to
+			# GitHub with the same invalid token, so it comes back refused; the
+			# others never leave the broker.
+			{
+				echo "=== a push to the repository the grant may push to"
+				guest 'cd /tmp && rm -rf pushing && git init -q pushing && cd pushing && git -c user.name=igloo-verify -c user.email=igloo-verify@invalid commit -q --allow-empty -m probe && GIT_TERMINAL_PROMPT=0 git push --dry-run https://github.com/git/git-scm.com HEAD:refs/heads/igloo-verify-probe 2>&1 | head -5'
+				echo
+				echo "=== a push to one it may only fetch"
+				guest 'cd /tmp/pushing && GIT_TERMINAL_PROMPT=0 git push --dry-run https://github.com/git/git HEAD:refs/heads/igloo-verify-probe 2>&1 | head -5'
+				echo
+				echo "=== a push to one it does not name"
+				guest 'cd /tmp/pushing && GIT_TERMINAL_PROMPT=0 git push --dry-run https://github.com/torvalds/linux HEAD:refs/heads/igloo-verify-probe 2>&1 | head -5'
+				echo
+				echo "=== the pushes the broker allowed, from its log"
+				grep '"event":"allow".*"operation":"push' "$(boot_log broker.log)"
+			} >"$out/artifacts/github-push.txt" 2>&1
+			if grep -q 'refused IGLOO_VERIFY_BROKERED; .* not scoped to git/git-scm.com' "$out/artifacts/github-push.txt" &&
+				grep -q '"operation":"push-refs","scope":"git/git-scm.com"' "$out/artifacts/github-push.txt"; then
+				verdict PASS github-push-reaches-upstream "a push to a repository in write reaches github.com through the broker, which reports its own credential being refused"
+			else
+				verdict FAIL github-push-reaches-upstream "read artifacts/github-push.txt, then logs/up-broker/broker.log"
+			fi
+			if grep -q 'may fetch, not push' "$out/artifacts/github-push.txt" &&
+				grep -q 'torvalds/linux is not a repository this VM may push to' "$out/artifacts/github-push.txt"; then
+				verdict PASS github-push-refuses "a push to a repository the grant may only fetch, and to one it does not name, is refused at the first request, each with its reason"
+			else
+				verdict FAIL github-push-refuses "read artifacts/github-push.txt"
+			fi
+
 			# GitHub's REST API, answered by the broker as github.com is. The
 			# token is the same invalid one, so a granted read reaching GitHub
 			# comes back as GitHub refusing the broker's credential.
@@ -2189,6 +2224,9 @@ GUEST
 				# A repository of the user's own choosing is named nowhere in the record.
 				shown_repo=${IGLOO_VERIFY_GITHUB_REPO:+the repository named in IGLOO_VERIFY_GITHUB_REPO}
 				shown_repo=${shown_repo:-git/git}
+				write_repo=${IGLOO_VERIFY_GITHUB_WRITE_REPO:-}
+				write_line=
+				[ -z "$write_repo" ] || write_line="write = [ \"$write_repo\" ];"
 				printf '%s' "$IGLOO_VERIFY_GITHUB_TOKEN" >"$broker_config/from-file"
 				cat >"$broker_config/igloo/igloo-policy.nix" <<EOF
 {
@@ -2198,6 +2236,7 @@ GUEST
       mode = "broker";
       profile = "github";
       repos = [ "$real_repo" ];
+      $write_line
       projects = [ "$project" ];
     };
   };
@@ -2257,6 +2296,36 @@ EOF
 					else
 						verdict FAIL github-graphql-read "read artifacts/github-git-clone.txt"
 					fi
+
+					# A new branch pushed, compared, and deleted again. Statuses and
+					# counts only: the repository is the user's.
+					if [ -n "$write_repo" ]; then
+						branch=igloo-verify-$(date +%Y%m%d%H%M%S)
+						{
+							echo "=== the push of a new branch: its status"
+							guest "cd /tmp && rm -rf pushed && git init -q pushed && cd pushed && git -c user.name=igloo-verify -c user.email=igloo-verify@invalid commit -q --allow-empty -m 'igloo host-verify' && GIT_TERMINAL_PROMPT=0 git push -q https://github.com/$write_repo HEAD:refs/heads/$branch >/dev/null 2>&1; echo \$?"
+							echo "=== the branch on GitHub against the commit pushed"
+							guest "cd /tmp/pushed && [ \"\$(GIT_TERMINAL_PROMPT=0 git ls-remote https://github.com/$write_repo refs/heads/$branch | cut -f1)\" = \"\$(git rev-parse HEAD)\" ] && echo same || echo different"
+							echo "=== the push deleting it: its status"
+							guest "cd /tmp/pushed && GIT_TERMINAL_PROMPT=0 git push -q https://github.com/$write_repo :refs/heads/$branch >/dev/null 2>&1; echo \$?"
+							echo "=== branches of that name left on GitHub"
+							guest "GIT_TERMINAL_PROMPT=0 git ls-remote https://github.com/$write_repo refs/heads/$branch | wc -l"
+							echo "=== pushes the broker allowed, from its log"
+							grep -c '"event":"allow".*"operation":"push"' "$(boot_log broker.log)"
+						} >"$out/artifacts/github-push-live.txt" 2>&1
+						said() { awk -v header="=== $1" 'index($0, header) == 1 { getline; print; exit }' "$out/artifacts/github-push-live.txt"; }
+						if [ "$(said 'the push of a new branch')" = 0 ] &&
+							[ "$(said 'the branch on GitHub')" = same ] &&
+							[ "$(said 'the push deleting it')" = 0 ] &&
+							[ "$(said 'branches of that name')" = 0 ] &&
+							[ "$(said 'pushes the broker allowed')" = 2 ]; then
+							verdict PASS github-push-live "a real token pushes a new branch to a repository in write through the broker, and deletes it again"
+						else
+							verdict FAIL github-push-live "read artifacts/github-push-live.txt, then logs/up-token/broker.log; a branch named igloo-verify-… may be left in the scratch repository"
+						fi
+					else
+						verdict NOTE github-push-live "not run: set IGLOO_VERIFY_GITHUB_WRITE_REPO to a scratch repository the token can push to"
+					fi
 				else
 					verdict FAIL github-git-clone "the VM did not come back up for the token run — read steps/up-token.txt"
 				fi
@@ -2264,6 +2333,7 @@ EOF
 				verdict NOTE github-git-clone "not run: export IGLOO_VERIFY_GITHUB_TOKEN (a fine-grained read-only token) to check that a valid credential actually fetches"
 				verdict NOTE github-api-read "not run: IGLOO_VERIFY_GITHUB_TOKEN is not set"
 				verdict NOTE github-graphql-read "not run: IGLOO_VERIFY_GITHUB_TOKEN is not set"
+				verdict NOTE github-push-live "not run: IGLOO_VERIFY_GITHUB_TOKEN is not set"
 			fi
 
 			# ------------------------------------- restricted, and the tunnel --

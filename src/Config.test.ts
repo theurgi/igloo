@@ -745,6 +745,56 @@ describe('Config.compose: grants', () => {
       user: brokered({ mode: 'deliver' }),
     })
     assert.include(message, 'only means something for a brokered credential')
+    const delivered = {
+      secrets: {
+        GITHUB_TOKEN: {
+          mode: 'deliver',
+          projects: [projectRoot],
+          source: { command: ['gh', 'auth', 'token'] },
+          write: ['you/api'],
+        },
+      },
+    }
+    assert.include(
+      refused({ project: {}, user: delivered }),
+      '`secrets.GITHUB_TOKEN.write` only means something for a brokered credential',
+    )
+  })
+
+  it('carries the repositories a grant may push to, beside those it may only fetch', () => {
+    const grantOf = (over: Record<string, unknown>) => {
+      const [secret] = composed({ project: {}, user: brokered(over) }).secrets
+      return secret?.mode === 'broker' ? secret.grant : undefined
+    }
+    assert.deepStrictEqual(grantOf({ write: ['you/web'] }), {
+      profile: 'github',
+      repos: ['you/api'],
+      write: ['you/web'],
+    })
+    assert.deepStrictEqual(grantOf({ repos: undefined, write: ['you/web'] }), {
+      profile: 'github',
+      repos: [],
+      write: ['you/web'],
+    })
+  })
+
+  it('refuses a grant whose two lists are both empty', () => {
+    assert.include(
+      refused({ project: {}, user: brokered({ repos: [], write: [] }) }),
+      'reaches nothing',
+    )
+  })
+
+  it('refuses a repository in both lists, which reads as one kept from being pushed to', () => {
+    const message = refused({ project: {}, user: brokered({ write: ['You/API.git'] }) })
+    assert.include(message, '`You/API.git` is in both')
+  })
+
+  it('refuses a repository written as anything but owner/repo in write too', () => {
+    assert.include(
+      refused({ project: {}, user: brokered({ write: ['https://github.com/you/web'] }) }),
+      'is not a repository',
+    )
   })
 
   const calling = (over: Record<string, unknown> = {}) => ({
@@ -800,6 +850,10 @@ describe('Config.compose: grants', () => {
     assert.include(
       refused({ project: {}, user: calling({ repos: ['you/api'] }) }),
       'does not apply to the anthropic-messages profile',
+    )
+    assert.include(
+      refused({ project: {}, user: calling({ write: ['you/api'] }) }),
+      '`secrets.ANTHROPIC_API_KEY.write` does not apply',
     )
   })
 

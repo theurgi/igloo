@@ -185,7 +185,7 @@ export const fromConfig = (
           ? `${grant.profile} ${grant.name} port=${String(grant.port)}${grant.credential === undefined ? '' : ` ${grant.credential}`}`
           : Broker.isInferenceGrant(grant)
             ? `${grant.profile} ${grant.credential}`
-            : `${grant.profile} ${grant.credential} repos=${grant.repos.toSorted().join(',')}`,
+            : `${grant.profile} ${grant.credential} repos=${grant.repos.toSorted().join(',')}${grant.write === undefined ? '' : ` write=${grant.write.toSorted().join(',')}`}`,
       )
       .toSorted(),
     `brokerMem=${config.policy.brokerMem === undefined ? 'unbounded' : String(config.policy.brokerMem)}`,
