@@ -359,22 +359,24 @@ On every brokered request:
 
 - The guest's `Authorization`, `x-api-key`, `Proxy-Authorization` and `Cookie` are dropped, and the
   broker sets its own credential.
-- On an inference profile or a model server, the guest's other headers pass, `anthropic-version`,
-  `anthropic-beta` and `x-session-id` included. Those about the guest's connection do not: `Host`,
-  `Connection` and the headers it names, the other hop-by-hop ones, and `Expect`. Nor do
-  `Accept-Encoding` and `Content-Length`, which the broker sets itself. A model listing sends no
-  body, so it carries no `Content-Type` or `Content-Encoding` either. On `github`, the broker builds
-  the headers and carries over only git's protocol version and request-body encoding, each checked
-  first. A `github` request arrives over TLS and names no host in its path, so the host it was sent
-  to is read instead, and only `github.com` is answered.
-- The response passes back with its status and body. On an inference profile or a model server its
-  headers pass too, `retry-after`, rate limits and request ids included, except `Set-Cookie`,
-  `WWW-Authenticate`, `Proxy-Authenticate`, `Alt-Svc`, `Content-Length`, `Content-Encoding` and the
-  hop-by-hop ones. On `github`, `Content-Type` is its only header.
+- On an inference profile, a model server or GitHub's API, the guest's other headers pass,
+  `anthropic-version`, `anthropic-beta`, `x-session-id` and `X-GitHub-Api-Version` included. Those
+  about the guest's connection do not: `Host`, `Connection` and the headers it names, the other
+  hop-by-hop ones, and `Expect`. Nor do `Accept-Encoding` and `Content-Length`, which the broker
+  sets itself. A request that sends no body, a model listing or a read, carries no `Content-Type` or
+  `Content-Encoding` either. On git's requests to `github.com`, the broker builds the headers and
+  carries over only git's protocol version and request-body encoding, each checked first. A `github`
+  request arrives over TLS and names no host in its path, so the host it was sent to is read
+  instead, and only `github.com` and `api.github.com` are answered.
+- The response passes back with its status and body. On an inference profile, a model server or
+  GitHub's API its headers pass too, `retry-after`, rate limits and request ids included, except
+  `Set-Cookie`, `WWW-Authenticate`, `Proxy-Authenticate`, `Alt-Svc`, `Content-Length`,
+  `Content-Encoding` and the hop-by-hop ones. On git's, `Content-Type` is its only header.
 - An upstream `401` comes back saying the host's credential was refused: as a `403` on an inference
-  profile or a model server, which an agent reports at once rather than retrying, and as a `502` on
-  `github`, so that git does not prompt for credentials the guest must not have. A redirect is not
-  followed.
+  profile, a model server or GitHub's API, which a client reports at once rather than retrying, and
+  as a `502` on git's requests to `github.com`, so that git does not prompt for credentials the
+  guest must not have. A redirect is not followed. One from GitHub's API comes back to the guest,
+  which follows it to a signed URL elsewhere without the credential.
 - Every refusal the broker writes itself carries `x-should-retry: false`, except the one that may
   pass: an upstream that did not answer.
 - No request body is refused for its size. The upstream's own limit is the one a body meets, and on
