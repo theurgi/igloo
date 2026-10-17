@@ -55,14 +55,14 @@ changes, rather than rewriting it, a running broker keeps the nameservers it sta
 - **`restricted`** reaches the destinations the project lists and whatever its brokered grants
   allow. A brokered credential's upstream does not need to be listed, because the broker reaches it
   itself rather than through the tunnel. `github.com`, for a `github` grant, is reached through the
-  tunnel but answered by the broker, so it needs no listing either. A model server is reached the
-  same way as an upstream, so `restricted` with no `tunnel` and a model server reaches that server
-  and nothing else. With no destinations, no brokered credential and no model server, `restricted`
-  reaches nothing, and igloo prints a note saying `none` says so more plainly. `restricted` bounds
-  the VM's own connections, not what a provider does for a model: a model call may use the
-  provider's own tools, such as web search, web fetch or an MCP connector, and through them
-  workspace data can reach any address
-  ([what the broker checks](credentials.md#what-the-broker-checks)).
+  tunnel but answered by the broker, so it needs no listing either; listed, it also lets through the
+  reads the grant does not cover, with no credential. A model server is reached the same way as an
+  upstream, so `restricted` with no `tunnel` and a model server reaches that server and nothing
+  else. With no destinations, no brokered credential and no model server, `restricted` reaches
+  nothing, and igloo prints a note saying `none` says so more plainly. `restricted` bounds the VM's
+  own connections, not what a provider does for a model: a model call may use the provider's own
+  tools, such as web search, web fetch or an MCP connector, and through them workspace data can
+  reach any address ([what the broker checks](credentials.md#what-the-broker-checks)).
 - **`internet`** reaches any public hostname. `tunnel` has no effect under it, and igloo prints a
   note if a project lists destinations anyway.
 
@@ -85,7 +85,9 @@ read it, and polices only where it goes.
 The exception is a name the broker answers: `github.com`, for a
 [`github` grant](credentials.md#how-the-guest-reaches-github). A `CONNECT` to it reaches the broker
 rather than the host, under every mode, and the broker is the other end of the TLS, with a
-certificate from an authority the guest trusts.
+certificate from an authority the guest trusts. A read the grant does not cover is sent on to GitHub
+with no credential where the tunnel would have reached `github.com`: under `internet`, or listed
+under `restricted`.
 
 - **Port 443 only.** No other port, no plain HTTP, no SSH, no UDP, no DNS and no ICMP, so `ping`,
   `dig` and `git` over SSH do not work. A [`github` grant](credentials.md#github) rewrites GitHub's

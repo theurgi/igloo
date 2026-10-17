@@ -294,6 +294,80 @@ describe('Broker.decideAddressed', () => {
   })
 })
 
+describe('Broker.decideAddressed, on a read no grant covers', () => {
+  const read = (url: string, method = 'GET', reach: Broker.TunnelScope = ['github.com']) =>
+    Broker.decideAddressed(grants, method, url, reach)
+
+  it('sends it on without a credential when the tunnel reaches the name', () => {
+    assert.deepStrictEqual(read('https://github.com/someone/tool/releases/download/v1/tool.tgz'), {
+      _tag: 'Anonymous',
+      host: 'github.com',
+      operation: 'read',
+      upstream: 'https://github.com/someone/tool/releases/download/v1/tool.tgz',
+    })
+    for (const reach of [['GitHub.com'], 'any'] as const) {
+      assert.strictEqual(read('https://github.com/someone/tool', 'HEAD', reach)._tag, 'Anonymous')
+    }
+  })
+
+  it('fetches a repository no grant lists that way, as git asks for it', () => {
+    const advertised = read('https://github.com/someone/else/info/refs?service=git-upload-pack')
+    assert.strictEqual(advertised._tag === 'Anonymous' ? advertised.operation : '', 'ls-refs')
+    assert.strictEqual(
+      advertised._tag === 'Anonymous' ? advertised.upstream : '',
+      'https://github.com/someone/else/info/refs?service=git-upload-pack',
+    )
+    const fetched = read('https://github.com/someone/else.git/git-upload-pack', 'POST')
+    assert.strictEqual(fetched._tag === 'Anonymous' ? fetched.operation : '', 'fetch')
+  })
+
+  it('carries its path as the guest sent it, escapes included', () => {
+    const decided = read('https://github.com/someone/tool/releases/download/v1/a%20b.tgz?x=1')
+    assert.strictEqual(
+      decided._tag === 'Anonymous' ? decided.upstream : '',
+      'https://github.com/someone/tool/releases/download/v1/a%20b.tgz?x=1',
+    )
+  })
+
+  it('still sends what a grant covers with its credential', () => {
+    assert.strictEqual(
+      read('https://github.com/you/api/info/refs?service=git-upload-pack')._tag,
+      'Git',
+    )
+  })
+
+  it('refuses it when the tunnel does not reach the name', () => {
+    for (const reach of [[], ['example.com'], ['github.com.example']] as const) {
+      const decided = read(
+        'https://github.com/someone/else/info/refs?service=git-upload-pack',
+        'GET',
+        reach,
+      )
+      assert.deepStrictEqual(
+        decided,
+        Broker.decide(grants, 'GET', '/github.com/someone/else/info/refs?service=git-upload-pack'),
+      )
+    }
+  })
+
+  it('refuses anything that is not a read, whatever the tunnel reaches', () => {
+    for (const [method, url] of [
+      ['GET', 'https://github.com/someone/else/info/refs?service=git-receive-pack'],
+      ['POST', 'https://github.com/someone/else.git/git-receive-pack'],
+      ['POST', 'https://github.com/login'],
+      ['PUT', 'https://github.com/someone/else'],
+      ['DELETE', 'https://github.com/someone/else'],
+      ['GET', 'https://github.com/you/api/info/refs?service=git-receive-pack'],
+    ] as const) {
+      assert.strictEqual(read(url, method, 'any')._tag, 'Deny', `${method} ${url}`)
+    }
+  })
+
+  it('answers no other name, reached or not', () => {
+    assert.strictEqual(outcome(read('https://example.com/', 'GET', 'any')), 421)
+  })
+})
+
 describe('Broker.upstreamHeaders', () => {
   const allowed = {
     _tag: 'Git',
@@ -409,6 +483,22 @@ describe('Broker.relay', () => {
     for (const status of [200, 304, 403, 404, 429, 500]) {
       assert.isUndefined(Broker.relay(allowed, status))
     }
+  })
+
+  it('passes an anonymous read’s redirect back, and answers its 401 with a final 403', () => {
+    const anonymous = {
+      credential: undefined,
+      host: 'github.com',
+      kind: 'Anonymous',
+      scope: undefined,
+    } as const
+    // Nothing the broker holds goes with it, wherever it leads.
+    for (const status of [200, 301, 302, 307, 308, 404]) {
+      assert.isUndefined(Broker.relay(anonymous, status))
+    }
+    const refused = Broker.relay(anonymous, 401)
+    assert.strictEqual(refused?.status, 403)
+    assert.include(refused?.reason ?? '', "no grant of this VM's covers it")
   })
 })
 
@@ -1901,7 +1991,7 @@ describe('Broker.serveTls', () => {
         const tlsPath = join(dir, 'tls.sock')
         const proxyPath = join(dir, 'proxy.sock')
         const plain = Broker.serveRequests(join(dir, 'http.sock'), grants, held, send, ids)
-        const server = Broker.serveTls(tlsPath, grants, held, identity, send, ids)
+        const server = Broker.serveTls(tlsPath, grants, held, identity, [], send, ids)
         const tunnel = Broker.serveTunnel(proxyPath, [], Broker.publicDestinations, {
           names: ['github.com'],
           socket: tlsPath,
@@ -1955,6 +2045,61 @@ describe('Broker.serveTls', () => {
           tunnel.stop(true)
           await server.stop(true)
           await plain.stop(true)
+        }
+      }),
+    ))
+
+  it('sends a read no grant covers on bare, and passes its redirect back', () =>
+    auditing(audited =>
+      withSocketDir(async dir => {
+        const identity = tlsIdentity(dir)
+        const sent: Array<{ readonly init: RequestInit; readonly url: string }> = []
+        const send = (url: string, init: RequestInit): Promise<Response> => {
+          sent.push({ init, url })
+          return Promise.resolve(
+            new Response(null, {
+              headers: { Location: 'https://objects.example/tool.tgz?signature=s' },
+              status: 302,
+            }),
+          )
+        }
+        const tlsPath = join(dir, 'tls.sock')
+        const proxyPath = join(dir, 'proxy.sock')
+        const server = Broker.serveTls(tlsPath, grants, held, identity, ['github.com'], send)
+        const tunnel = Broker.serveTunnel(proxyPath, ['github.com'], Broker.publicDestinations, {
+          names: ['github.com'],
+          socket: tlsPath,
+        })
+        try {
+          const answered = await overTunnel(
+            proxyPath,
+            'github.com',
+            identity.cert,
+            addressedTo('github.com', '/someone/tool/releases/download/v1/tool.tgz'),
+          )
+          assert.strictEqual(answered.split('\r\n')[0], 'HTTP/1.1 302 Found')
+          assert.match(
+            answered,
+            /\r\nlocation: https:\/\/objects\.example\/tool\.tgz\?signature=s\r\n/i,
+          )
+          assert.strictEqual(
+            sent[0]?.url,
+            'https://github.com/someone/tool/releases/download/v1/tool.tgz',
+          )
+          // The guest's own credential is dropped, and the broker's is not set.
+          assert.isNull(new Headers(sent[0]?.init.headers).get('Authorization'))
+          const allowed = audited.find(
+            (event): event is Record<string, unknown> =>
+              typeof event === 'object' &&
+              event !== null &&
+              'event' in event &&
+              event.event === 'allow',
+          )
+          assert.strictEqual(allowed?.['operation'], 'read')
+          assert.notProperty(allowed, 'credential')
+        } finally {
+          tunnel.stop(true)
+          await server.stop(true)
         }
       }),
     ))

@@ -205,8 +205,12 @@ authority beside the system's own, and `NODE_EXTRA_CA_CERTS` points Node and Bun
   key is deleted once it has signed the one certificate. What `.igloo/tls/` holds can answer
   `github.com` to this project's guest, and sign nothing.
 - Every request the guest makes to `github.com` over HTTPS reaches the broker. Git's fetches for the
-  repositories listed are served; anything else, a release download included, is refused with the
-  reason.
+  repositories listed are served with the token. A read no grant covers, a release download or a
+  clone of a public repository the grant does not list, is sent to GitHub with no credential at all,
+  when the VM's tunnel could reach `github.com` itself: under `internet`, or under `restricted` with
+  `github.com` in `tunnel`. A redirect in its answer comes back for the guest to follow through the
+  tunnel. Anything else, a push to a repository the grant does not list among them, is refused with
+  the reason.
 - `.igloo/tls/` is made again when it no longer covers the names the broker answers, or is within 30
   days of expiring after ten years. Delete it to have it made again; the next launch rebuilds the
   guest, since the authority is part of it.
@@ -453,9 +457,9 @@ that way, since it never enters the guest.
   carries, so there the guest's own client does the verifying, and a content module can give the
   guest the authority with `security.pki.certificates`.
 - `github` fetches from GitHub, and cannot push.
-- With a `github` grant, nothing in the guest reaches `github.com` but through the broker, which
-  serves git for the repositories listed: a release download from `github.com`, or a clone of a
-  repository the grant does not list, is refused, under `internet` too.
+- With a `github` grant, nothing in the guest reaches `github.com` but through the broker. Under
+  `restricted` without `github.com` in `tunnel`, that means only the repositories listed: a release
+  download from `github.com`, or a clone of any other repository, is refused.
 - A client that verifies against a list of certificate authorities of its own, rather than the
   system's, does not trust the broker's, and fails to reach `github.com` from the guest. Node and
   Bun read `NODE_EXTRA_CA_CERTS`, which the guest sets; point any other at
