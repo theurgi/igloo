@@ -215,7 +215,11 @@ describe('Broker.tlsNames', () => {
       ...grants,
       { credential: 'OTHER', profile: 'github', repos: ['you/web'] },
     ]
-    assert.deepStrictEqual(Broker.tlsNames(twice), ['github.com', 'api.github.com'])
+    assert.deepStrictEqual(Broker.tlsNames(twice), [
+      'github.com',
+      'api.github.com',
+      'uploads.github.com',
+    ])
     for (const name of Broker.tlsNames(twice)) assert.include(Broker.tlsNamesCovered, name)
   })
 
@@ -631,6 +635,115 @@ describe('Broker.decide, on a write through GitHub’s API', () => {
   })
 })
 
+describe('Broker.decide, on an upload of a release’s asset', () => {
+  const writing: readonly Broker.Grant[] = [
+    { credential: 'GITHUB_TOKEN', profile: 'github', repos: ['you/api'], write: ['You/Web.git'] },
+  ]
+  const upload = (path: string, method = 'POST') =>
+    Broker.decide(writing, method, `${base}/uploads.github.com${path}`)
+
+  it('uploads to a release of a repository in write, as the grant spells it, with its query', () => {
+    assert.deepStrictEqual(upload('/repos/you/web/releases/42/assets?name=a b.tgz&label='), {
+      _tag: 'Api',
+      credential: 'GITHUB_TOKEN',
+      host: 'uploads.github.com',
+      operation: 'upload',
+      profile: 'github',
+      repo: 'You/Web',
+      upstream: 'https://uploads.github.com/repos/You/Web/releases/42/assets?name=a+b.tgz&label=',
+    })
+    assert.strictEqual(
+      Broker.decideAddressed(
+        writing,
+        'POST',
+        'https://uploads.github.com/repos/you/web/releases/42/assets?name=x',
+      )._tag,
+      'Api',
+    )
+  })
+
+  it('refuses an upload to a repository it may only read, and to one it does not list', () => {
+    assert.deepStrictEqual(upload('/repos/you/api/releases/42/assets'), {
+      _tag: 'Deny',
+      asked: { scope: 'you/api' },
+      reason: 'this VM may read you/api, not write to it',
+      status: 403,
+    })
+    assert.deepStrictEqual(upload('/repos/someone/else/releases/42/assets'), {
+      _tag: 'Deny',
+      asked: { scope: 'someone/else' },
+      reason: 'someone/else is not a repository this VM may write to',
+      status: 403,
+    })
+  })
+
+  it('refuses everything else sent there, and an upload asked for the wrong way', () => {
+    for (const path of [
+      '/',
+      '/repos/you/web',
+      '/repos/you/web/releases/42',
+      '/repos/you/web/releases/42/assets/7',
+      '/repos/you/web/issues',
+      '/gists',
+    ]) {
+      assert.strictEqual(outcome(upload(path)), 403, path)
+    }
+    for (const method of ['GET', 'PUT', 'DELETE']) {
+      assert.strictEqual(outcome(upload('/repos/you/web/releases/42/assets', method)), 405, method)
+    }
+  })
+
+  it('is not served without a github grant', () => {
+    assert.strictEqual(
+      outcome(
+        Broker.decide(
+          inference,
+          'POST',
+          `${base}/uploads.github.com/repos/you/web/releases/1/assets`,
+        ),
+      ),
+      404,
+    )
+  })
+})
+
+describe('Broker.heldTo', () => {
+  const stream = (...sizes: number[]) =>
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const size of sizes) controller.enqueue(new Uint8Array(size).fill(0x61))
+        controller.close()
+      },
+    })
+  /** The bytes read before the stream ended, and how it ended. */
+  const drain = async (held: ReadableStream<Uint8Array>) => {
+    let bytes = 0
+    try {
+      for await (const chunk of held) bytes += chunk.byteLength
+      return { bytes, failed: false }
+    } catch {
+      return { bytes, failed: true }
+    }
+  }
+
+  it('passes on a body of exactly its length', async () => {
+    assert.deepStrictEqual(await drain(Broker.heldTo(stream(3, 4), 7)), { bytes: 7, failed: false })
+    assert.deepStrictEqual(await drain(Broker.heldTo(stream(), 0)), { bytes: 0, failed: false })
+  })
+
+  it('fails a body that runs past its length before passing on a byte beyond it', async () => {
+    assert.deepStrictEqual(await drain(Broker.heldTo(stream(3, 4, 5), 7)), {
+      bytes: 7,
+      failed: true,
+    })
+    assert.deepStrictEqual(await drain(Broker.heldTo(stream(8), 7)), { bytes: 0, failed: true })
+  })
+
+  it('fails a body that ends short of its length', async () => {
+    assert.deepStrictEqual(await drain(Broker.heldTo(stream(3), 7)), { bytes: 3, failed: true })
+  })
+})
+
 describe('Broker.pagesOf', () => {
   it('puts a page named by the repository’s number back in the form the grant matches', () => {
     assert.strictEqual(
@@ -841,6 +954,40 @@ describe('Broker.upstreamHeaders', () => {
     const advertised = headersFor('push-refs', { 'Content-Type': 'text/plain' })
     assert.isNull(advertised.get('Content-Type'))
     assert.strictEqual(advertised.get('Accept'), '*/*')
+  })
+
+  it('sends an asset’s upload with the length it declared alone, and no other body with one', () => {
+    const through = (operation: Broker.ApiOperation, guest: Record<string, string>) =>
+      Broker.upstreamHeaders(
+        {
+          _tag: 'Api',
+          credential: 'GITHUB_TOKEN',
+          host: 'uploads.github.com',
+          operation,
+          profile: 'github',
+          repo: 'you/web',
+          upstream: 'https://uploads.github.com/repos/you/web/releases/1/assets?name=a',
+        },
+        'ghp_secret',
+        new Headers(guest),
+      )
+    const sized = through('upload', {
+      'Content-Length': '1024',
+      'Content-Type': 'application/gzip',
+    })
+    assert.strictEqual(sized.get('Content-Length'), '1024')
+    assert.strictEqual(sized.get('Content-Type'), 'application/gzip')
+    assert.strictEqual(sized.get('Authorization'), 'Bearer ghp_secret')
+    for (const guest of [
+      {},
+      { 'Content-Length': '10', 'Transfer-Encoding': 'chunked' },
+      { 'Content-Length': '1e3' },
+      { 'Content-Length': '-1' },
+      { 'Content-Length': '10, 12' },
+    ]) {
+      assert.isNull(through('upload', guest).get('Content-Length'), JSON.stringify(guest))
+    }
+    assert.isNull(through('write', { 'Content-Length': '1024' }).get('Content-Length'))
   })
 })
 
@@ -3566,6 +3713,60 @@ describe('Broker.serveRequests, on a request body', () => {
     )
   })
 
+  it('sends an asset with the length it was sent with, and nothing after it, or in chunks', () => {
+    const writing: readonly Broker.Grant[] = [
+      { credential: 'GITHUB_TOKEN', profile: 'github', repos: [], write: ['you/web'] },
+    ]
+    const asset = bodyOf(3 * 1024 * 1024)
+    /** A request framed by its length: its head, its body, and how many bytes followed. */
+    const sized = (received: Buffer) => {
+      const headEnd = received.indexOf('\r\n\r\n')
+      if (headEnd < 0) return undefined
+      const head = received.subarray(0, headEnd).toString('latin1')
+      const length = /^content-length: (\d+)$/im.exec(head)?.[1]
+      if (length === undefined) return undefined
+      const end = headEnd + 4 + Number(length)
+      if (received.length < end) return undefined
+      return { after: received.length - end, body: received.subarray(headEnd + 4, end), head }
+    }
+    return auditing(() =>
+      onLoopback(
+        received =>
+          sized(received) !== undefined || unchunked(received) !== undefined
+            ? reply(201, '{}')
+            : undefined,
+        (send, connections) =>
+          overHttp(writing, held, send, async post => {
+            for (const sent of [asset, chunked(asset)]) {
+              const response = await post(
+                '/uploads.github.com/repos/you/web/releases/1/assets?name=a.bin',
+                sent,
+              )
+              assert.strictEqual(response.status, 201)
+              await response.text()
+            }
+            await Bun.sleep(100)
+            assert.strictEqual(connections.length, 2)
+            const [withLength, inChunks] = connections
+            const first = sized(withLength?.received ?? Buffer.alloc(0))
+            assert.isDefined(first)
+            assert.match(
+              first?.head ?? '',
+              /^POST \/repos\/you\/web\/releases\/1\/assets\?name=a\.bin /,
+            )
+            assert.match(first?.head ?? '', /^content-length: 3145728$/im)
+            assert.notMatch(first?.head ?? '', /^transfer-encoding:/im)
+            assert.isTrue(first?.body.equals(asset))
+            assert.strictEqual(first?.after, 0)
+            const second = unchunked(inChunks?.received ?? Buffer.alloc(0))
+            assert.isDefined(second)
+            assert.notMatch(second?.head ?? '', /^content-length:/im)
+            assert.isTrue(second?.body.equals(asset))
+          }),
+      ),
+    )
+  })
+
   it('passes on an answer the provider gives before it has the whole body, its 413 included', () => {
     const tooLarge = '{"type":"error","error":{"type":"request_too_large"}}'
     return auditing(audited =>
@@ -4002,7 +4203,7 @@ describe('Broker, run as a program', () => {
         const { t: _tlsAt, ...listeningTls } = events.find(e => e['event'] === 'tls-listening')!
         assert.deepStrictEqual(listeningTls, {
           event: 'tls-listening',
-          names: ['github.com', 'api.github.com'],
+          names: ['github.com', 'api.github.com', 'uploads.github.com'],
           socket: tls,
         })
         const listening = events.find(e => e['event'] === 'listening')

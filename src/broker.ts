@@ -56,8 +56,8 @@ const usage =
  * The kind decides which half of this file answers a request: a `git` profile
  * fetches from the repositories a grant lists, and reads its forge's API, at
  * `api`, for them, and pushes to and writes through the API for those in its
- * `write`; an `inference` profile calls the endpoints
- * `inferenceEndpoints` lists.
+ * `write`, uploading a release's assets at `uploads`; an `inference` profile
+ * calls the endpoints `inferenceEndpoints` lists.
  *
  * No profile limits a body's size. A body is streamed, so the broker holds
  * little of it at once however large it is, and the upstream's own limit is
@@ -68,7 +68,7 @@ const usage =
 export const profiles = {
   // Anthropic's own, for the messages endpoint and for counting tokens.
   'anthropic-messages': { host: 'api.anthropic.com', kind: 'inference' },
-  github: { api: 'api.github.com', host: 'github.com', kind: 'git' },
+  github: { api: 'api.github.com', host: 'github.com', kind: 'git', uploads: 'uploads.github.com' },
   openrouter: { host: 'openrouter.ai', kind: 'inference' },
 } as const
 
@@ -96,16 +96,18 @@ export const isInferenceProfile = (name: ProfileName): name is InferenceProfile 
 export const profileNames: readonly string[] = Object.keys(profiles)
 
 /**
- * The names a git profile is answered at: its host and its API's. A guest's
- * client reaches each by its own name, through the tunnel, which hands the
- * connection to the broker's TLS listener rather than to the host. A remote
- * then reads as the repository's own URL, which is how a client that reads
- * remotes recognises one, and a URL the API gives in an answer leads back to
- * the broker, which is where a client that follows one goes.
+ * The names a git profile is answered at: its host, its API's, and the one its
+ * API takes uploads at. A guest's client reaches each by its own name, through
+ * the tunnel, which hands the connection to the broker's TLS listener rather
+ * than to the host. A remote then reads as the repository's own URL, which is
+ * how a client that reads remotes recognises one, and a URL the API gives in an
+ * answer, a release's for its assets among them, leads back to the broker,
+ * which is where a client that follows one goes.
  */
 const answeredAt = (profile: GitGrant['profile']): readonly string[] => [
   profiles[profile].host,
   profiles[profile].api,
+  profiles[profile].uploads,
 ]
 
 /** Every name a broker may answer TLS for, which its certificate covers. */
@@ -234,8 +236,11 @@ export type ModelServerOperation = Extract<
  */
 export type AnonymousOperation = FetchOperation | 'read'
 
-/** A request through a forge's API: a read or a write under a repository, or a GraphQL query. */
-export type ApiOperation = 'graphql' | 'read' | 'write'
+/**
+ * A request through a forge's API: a read or a write under a repository, an
+ * upload of a release's asset, or a GraphQL query.
+ */
+export type ApiOperation = 'graphql' | 'read' | 'upload' | 'write'
 
 export type Operation = AnonymousOperation | ApiOperation | GitOperation | InferenceOperation
 
@@ -853,6 +858,68 @@ const routeApi = (
 }
 
 /**
+ * Route a request for the host a git grant's API takes uploads at, or
+ * `undefined` if the path's host is no held grant's.
+ *
+ * GitHub takes a release's asset there, as a `POST` to
+ * `repos/<owner>/<repo>/releases/<id>/assets` with the asset's name in the
+ * query. One for a repository in a grant's `write` is sent with that grant's
+ * credential, its upstream built as an API write's is. Everything else there is
+ * refused.
+ */
+const routeUploads = (
+  grants: readonly Grant[],
+  method: string,
+  segments: readonly string[],
+  query: URLSearchParams,
+): Decision | undefined => {
+  const [host, ...rest] = segments
+  if (host === undefined) return undefined
+  const lowered = host.toLowerCase()
+  const held = grants
+    .filter(isGitGrant)
+    .filter(grant => profiles[grant.profile].uploads === lowered)
+  if (held.length === 0) return undefined
+
+  const [area, owner, repo, releases, release, assets, ...beyond] = rest
+  if (
+    area !== 'repos' ||
+    owner === undefined ||
+    repo === undefined ||
+    releases !== 'releases' ||
+    release === undefined ||
+    assets !== 'assets' ||
+    beyond.length > 0
+  ) {
+    return deny(403, `/${rest.join('/')} is not something this VM may send to ${lowered}`, {
+      host: lowered,
+    })
+  }
+  if (method !== 'POST') return deny(405, `${method} is not how a release's asset is uploaded`)
+
+  const wanted = `${owner}/${repo}`.toLowerCase()
+  for (const candidate of held) {
+    const writable = grantedAs(candidate.write, wanted)
+    if (writable === undefined) {
+      if (grantedAs(candidate.repos, wanted) === undefined) continue
+      return deny(403, `this VM may read ${wanted}, not write to it`, { scope: wanted })
+    }
+    const path = withoutGit(writable)
+    const filter = new URLSearchParams(query).toString()
+    return {
+      _tag: 'Api',
+      credential: candidate.credential,
+      host: lowered,
+      operation: 'upload',
+      profile: candidate.profile,
+      repo: path,
+      upstream: `https://${lowered}/repos/${path}/releases/${release}/assets${filter === '' ? '' : `?${filter}`}`,
+    }
+  }
+  return deny(403, `${wanted} is not a repository this VM may write to`, { scope: wanted })
+}
+
+/**
  * Route a git request, or `undefined` if the path is not a git endpoint at all —
  * which is what lets an inference endpoint be tried against the same path
  * without weakening any of the refusals below.
@@ -1058,14 +1125,17 @@ export const decide = (grants: readonly Grant[], method: string, target: string)
     .slice(1)
   if (segments.some(segment => segment === '')) return deny(404, 'empty path segment')
 
-  // A forge's API first, by its host: its paths are the forge's own, and one of
-  // them could end in what reads as a git endpoint. Then git, and only then
-  // inference: a git endpoint has a shape of its own, so trying it first keeps
-  // every refusal it makes — the push at the advertisement, the wrong method,
-  // the path that is not three segments — rather than letting an unrecognised
-  // git path fall through to a different profile's "no such endpoint".
+  // A forge's API and its uploads first, by their hosts: their paths are the
+  // forge's own, and one could end in what reads as a git endpoint. Then git,
+  // and only then inference: a git endpoint has a shape of its own, so trying
+  // it first keeps every refusal it makes — the push at the advertisement, the
+  // wrong method, the path that is not three segments — rather than letting an
+  // unrecognised git path fall through to a different profile's "no such
+  // endpoint".
   const api = routeApi(grants, method, segments, url.searchParams)
   if (api !== undefined) return api
+  const upload = routeUploads(grants, method, segments, url.searchParams)
+  if (upload !== undefined) return upload
   const git = routeGit(grants, method, segments, url.searchParams.get('service'))
   if (git !== undefined) return git
   const local = routeModelServer(grants, method, segments)
@@ -1177,7 +1247,8 @@ const unforwardedRequestHeaders: ReadonlySet<string> = new Set([
   'host',
   // How the guest framed its body for this connection. `fetch` frames it again
   // from the bytes it sends, in chunks, so no length the guest stated can
-  // disagree with what reaches the provider.
+  // disagree with what reaches the provider. An asset's upload is the one
+  // exception, and `uploadLength` says how it is kept from disagreeing.
   'content-length',
   // Set here, for the reason `upstreamHeaders` gives.
   'accept-encoding',
@@ -1189,6 +1260,65 @@ const unforwardedRequestHeaders: ReadonlySet<string> = new Set([
  * a request that sends no body carries neither.
  */
 const bodyHeaders = ['content-encoding', 'content-type'] as const
+
+/**
+ * The length an upload of a release's asset goes upstream with: the one its
+ * `Content-Length` declares, a whole number with no `Transfer-Encoding` beside
+ * it, or `undefined`, and then it goes in chunks as every other body does.
+ *
+ * An asset goes framed as the guest framed it. `fetch` sends a stated length
+ * and then every byte of the body, however many there are, so bytes past it
+ * would reach the upstream as the start of another request on the broker's
+ * connection: `heldTo` keeps the body to the length it is sent with.
+ */
+const uploadLength = (
+  decision: Exclude<Decision, { _tag: 'Deny' }>,
+  guest: Headers,
+): number | undefined => {
+  if (decision._tag !== 'Api' || decision.operation !== 'upload') return undefined
+  const length = guest.get('content-length')
+  if (length === null || guest.has('transfer-encoding') || !/^[0-9]{1,15}$/.test(length)) {
+    return undefined
+  }
+  return Number(length)
+}
+
+/**
+ * A body held to `length`: passed on as it arrives, and failed once it runs
+ * past `length` or ends short of it, which ends the upstream request and
+ * closes its connection rather than completing it with more or less than was
+ * stated.
+ */
+export const heldTo = (
+  source: ReadableStream<Uint8Array>,
+  length: number,
+): ReadableStream<Uint8Array> => {
+  const reader = source.getReader()
+  let bytes = 0
+  return new ReadableStream<Uint8Array>({
+    cancel(reason) {
+      return reader.cancel(reason)
+    },
+    async pull(controller) {
+      const chunk = await reader.read()
+      if (chunk.done && bytes !== length) {
+        controller.error(new Error(`the body ended at ${String(bytes)} of ${String(length)} bytes`))
+        return
+      }
+      if (chunk.done) {
+        controller.close()
+        return
+      }
+      bytes += chunk.value.byteLength
+      if (bytes > length) {
+        await reader.cancel()
+        controller.error(new Error(`the body ran past its ${String(length)} bytes`))
+        return
+      }
+      controller.enqueue(chunk.value)
+    },
+  })
+}
 
 /** What git calls the body it sends and the one it gets back, on a fetch and a push. */
 const packTypes = {
@@ -1222,7 +1352,8 @@ const packTypes = {
  * credential, since the URL is built from the grant and the credential is set
  * after the guest's are dropped. A model server's request is built the same
  * way, as is one through a forge's API, and so is an anonymous read, whose
- * credentials are dropped and none set.
+ * credentials are dropped and none set. An asset's upload carries the length
+ * `uploadLength` gives it, if any.
  *
  * `token` is the value of the credential the decision names, and `undefined`
  * only for a model server that takes none and an anonymous read: `handle`
@@ -1243,6 +1374,8 @@ export const upstreamHeaders = (
       if (!unforwardedRequestHeaders.has(name) && !named.has(name)) headers.append(name, value)
     }
     if (!sendsBody(decision.operation)) for (const name of bodyHeaders) headers.delete(name)
+    const length = uploadLength(decision, guest)
+    if (length !== undefined) headers.set('Content-Length', String(length))
     headers.set('Accept-Encoding', 'identity')
     if (token === undefined) return headers
     if (decision._tag === 'Inference' && decision.profile === 'anthropic-messages') {
@@ -1848,7 +1981,8 @@ const returnedHeaders = (
  *
  * A push's body is its pack, as large as what is pushed, and the upstream
  * answers only once it has all of it and has applied it, so a push is given
- * the minutes a model call is.
+ * the minutes a model call is. So is an asset's upload, whose body is the
+ * asset, for the same reason.
  */
 const headerTimeoutMs = { git: 30_000, inference: 600_000, push: 600_000 } as const
 
@@ -2000,16 +2134,22 @@ const handle = async (
     },
     decision._tag === 'Inference' || decision._tag === 'ModelServer'
       ? headerTimeoutMs.inference
-      : decision.operation === 'push'
+      : decision.operation === 'push' || decision.operation === 'upload'
         ? headerTimeoutMs.push
         : headerTimeoutMs.git,
   )
 
+  const length = uploadLength(decision, request.headers)
   let upstream: Response
   try {
     upstream = await send(decision.upstream, {
-      // Streamed as it arrives, never read.
-      body: sendsBody(decision.operation) ? request.body : undefined,
+      // Streamed as it arrives, never read, and held to its length where it is
+      // sent with one.
+      body: !sendsBody(decision.operation)
+        ? undefined
+        : length === undefined || request.body === null
+          ? request.body
+          : heldTo(request.body, length),
       headers: upstreamHeaders(decision, token, request.headers),
       method: request.method,
       // Never followed. A redirect chosen by the upstream is a destination this

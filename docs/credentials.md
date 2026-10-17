@@ -180,7 +180,8 @@ reachable there, never where "there" is. The one upstream policy places is a
 ### `github`
 
 - **Upstream:** `https://github.com`, over git's smart HTTP protocol, and GitHub's REST and GraphQL
-  APIs at `https://api.github.com`, with the token sent the way each takes a fine-grained personal
+  APIs at `https://api.github.com`, and its uploads of a release's assets at
+  `https://uploads.github.com`, with the token sent the way each takes a fine-grained personal
   access token or a GitHub App installation token.
 - **Operations:**
   - Fetching, `git clone`, `git fetch` and `git pull`, from the repositories in `repos` and `write`.
@@ -195,6 +196,8 @@ reachable there, never where "there" is. The one upstream policy places is a
     a workflow's dispatch, at `actions/runs/<id>/rerun`, `rerun-failed-jobs`, `cancel` and
     `force-cancel`, `actions/jobs/<id>/rerun` and `actions/workflows/<id>/dispatches`; and a
     commit's statuses and checks, at `statuses/<sha>`, `check-runs` and `check-suites`.
+  - Uploading a release's asset, `POST repos/<owner>/<repo>/releases/<id>/assets` at
+    `uploads.github.com`, for a repository in `write`, with its query, which names the asset.
   - A GraphQL query, `POST graphql`, whatever it reads or writes. The grant does not bound it: see
     [what a grant does not bound](#what-a-grant-does-not-bound).
   - Through the API, everything else is refused: a write to a repository only in `repos`; any other
@@ -208,11 +211,11 @@ reachable there, never where "there" is. The one upstream policy places is a
   `.git`, matched ignoring case.
 - **In the guest:** `git` is installed, and `GH_TOKEN=igloo-broker-holds-the-real-key`, a
   placeholder for GitHub's CLI, `gh`, which makes no request without a token. The broker answers
-  `github.com` and `api.github.com` itself: a connection to either through the
-  [tunnel](network.md#the-tunnel) reaches the broker rather than GitHub, under every network mode
-  and with no `tunnel` entry. So an ordinary GitHub URL just works, a remote reads as the URL it was
-  cloned from, and `gh` finds its repository from it. Its system configuration rewrites
-  `git@github.com:` and `ssh://git@github.com/` URLs to `https://github.com/`.
+  `github.com`, `api.github.com` and `uploads.github.com` itself: a connection to any of them
+  through the [tunnel](network.md#the-tunnel) reaches the broker rather than GitHub, under every
+  network mode and with no `tunnel` entry. So an ordinary GitHub URL just works, a remote reads as
+  the URL it was cloned from, and `gh` finds its repository from it. Its system configuration
+  rewrites `git@github.com:` and `ssh://git@github.com/` URLs to `https://github.com/`.
 
 A project has at most one `github` credential: a request to the API may name no repository, so the
 broker could not tell which of two pays. List every repository in the one.
@@ -231,13 +234,14 @@ repository: `gh run list`, `gh run view`, `gh release list`, `gh release view`, 
 of `gh pr`, `gh issue` and `gh repo` do, reach whatever the token reaches, listed or not, and those
 that write through it, as `gh issue create`, `gh pr comment` and `gh pr merge` do, work if the token
 can write. For a repository in `write`, so do those that write through the REST API:
-`gh release create` without assets, `gh release edit` and `gh release delete`, `gh run rerun`,
-`gh run cancel` and `gh workflow run`. `gh label`, `gh run delete`, `gh workflow enable` and
-`disable`, `gh cache delete`, `gh secret` and `gh variable` write what is refused. GitHub serves a
-run's logs and a release's assets as redirects to signed URLs on other hosts, which the broker
-passes back for the guest to follow through the tunnel; under `restricted`, list those hosts in
-`tunnel`. `gh run view --log` and `--log-failed` read a run's log archive from
-`results-receiver.actions.githubusercontent.com`.
+`gh release create`, assets included, `gh release upload`, `gh release edit` and
+`gh release delete`, `gh run rerun`, `gh run cancel` and `gh workflow run`. `gh label`,
+`gh run delete`, `gh workflow enable` and `disable`, `gh cache delete`, `gh secret` and
+`gh variable` write what is refused. GitHub serves a run's logs and a release's assets as redirects
+to signed URLs on other hosts, which the broker passes back for the guest to follow through the
+tunnel; under `restricted`, list those hosts in `tunnel`. `gh run view --log` and `--log-failed`
+read a run's log archive from `results-receiver.actions.githubusercontent.com`, and
+`gh release download` reads an asset from `release-assets.githubusercontent.com`.
 
 Scope the token itself to the same repositories. The grant bounds what the broker asks for over git
 and the REST API, and the token bounds what GitHub gives; a GraphQL query is bounded by the token
@@ -248,17 +252,17 @@ write.
 
 ### How the guest reaches GitHub
 
-The broker answers `github.com` and `api.github.com` over TLS with a certificate of its own, so the
-guest has to trust what issued it. On the first launch with a `github` grant, igloo makes a
-certificate authority for the project with `openssl`, and a certificate for both names signed by it.
-It keeps both in `.igloo/tls/`, with the certificate's key, readable only by you. The guest is built
-trusting that authority beside the system's own, and `NODE_EXTRA_CA_CERTS` points Node and Bun at
-the same list.
+The broker answers `github.com`, `api.github.com` and `uploads.github.com` over TLS with a
+certificate of its own, so the guest has to trust what issued it. On the first launch with a
+`github` grant, igloo makes a certificate authority for the project with `openssl`, and a
+certificate for those names signed by it. It keeps both in `.igloo/tls/`, with the certificate's
+key, readable only by you. The guest is built trusting that authority beside the system's own, and
+`NODE_EXTRA_CA_CERTS` points Node and Bun at the same list.
 
 - The authority can sign for `github.com` and its subdomains and nothing else: its name constraints
   say so, and its own key is deleted once it has signed the one certificate. What `.igloo/tls/`
   holds can answer GitHub's names to this project's guest, and sign nothing.
-- Every request the guest makes to either name over HTTPS reaches the broker. What the grant covers
+- Every request the guest makes to any of them over HTTPS reaches the broker. What the grant covers
   is served with the token. A read no grant covers, a release download, a clone of a public
   repository the grant does not list or an install script's read through the API, is sent to GitHub
   with no credential at all, when the VM's tunnel could reach that name itself: under `internet`, or
@@ -402,11 +406,13 @@ On every brokered request:
   `anthropic-version`, `anthropic-beta`, `x-session-id` and `X-GitHub-Api-Version` included. Those
   about the guest's connection do not: `Host`, `Connection` and the headers it names, the other
   hop-by-hop ones, and `Expect`. Nor do `Accept-Encoding` and `Content-Length`, which the broker
-  sets itself. A request that sends no body, a model listing or a read, carries no `Content-Type` or
+  sets itself: a body goes in chunks, but for a release's asset sent with a `Content-Length` and no
+  `Transfer-Encoding`, which goes with that length and is cut off if it runs past it or ends short.
+  A request that sends no body, a model listing or a read, carries no `Content-Type` or
   `Content-Encoding` either. On git's requests to `github.com`, the broker builds the headers and
   carries over only git's protocol version and request-body encoding, each checked first. A `github`
   request arrives over TLS and names no host in its path, so the host it was sent to is read
-  instead, and only `github.com` and `api.github.com` are answered.
+  instead, and only `github.com`, `api.github.com` and `uploads.github.com` are answered.
 - The response passes back with its status and body. On an inference profile, a model server or
   GitHub's API its headers pass too, `retry-after`, rate limits and request ids included, except
   `Set-Cookie`, `WWW-Authenticate`, `Proxy-Authenticate`, `Alt-Svc`, `Content-Length`,
@@ -420,9 +426,9 @@ On every brokered request:
   pass: an upstream that did not answer.
 - No request body is refused for its size. The upstream's own limit is the one a body meets, and on
   an inference profile the upstream's refusal comes back as it gave it. A call is given up on when
-  its upstream has not answered within 10 minutes of a model call or a push, or 30 seconds of any
-  other request, or when the guest leaves before it answers; a body still being sent then is cut
-  off.
+  its upstream has not answered within 10 minutes of a model call, a push or an asset's upload, or
+  30 seconds of any other request, or when the guest leaves before it answers; a body still being
+  sent then is cut off.
 - The broker serves as many requests and tunnels at once as the guest opens. Its memory is not
   bounded unless you set `brokerMem`; see [Configuration](configuration.md#policy-settings) and
   [when the broker is killed](troubleshooting.md#when-the-broker-is-killed).
@@ -530,14 +536,12 @@ that way, since it never enters the guest.
   carries, so there the guest's own client does the verifying, and a content module can give the
   guest the authority with `security.pki.certificates`.
 - `github` pushes and writes through the REST API only for the repositories in `write`, and through
-  the REST API writes only what its operations list. A release's assets are uploaded to
-  `uploads.github.com`, which the broker does not answer, so `gh release upload` and
-  `gh release create` with assets fail. Its GraphQL API is passed with the token, and the grant does
-  not bound what a query reads or writes.
-- With a `github` grant, nothing in the guest reaches `github.com` or `api.github.com` but through
-  the broker. Under `restricted` without them in `tunnel`, that means only the repositories listed:
-  a release download from `github.com`, a clone of any other repository, or an anonymous read
-  through the API, is refused.
+  the REST API writes only what its operations list. Its GraphQL API is passed with the token, and
+  the grant does not bound what a query reads or writes.
+- With a `github` grant, nothing in the guest reaches `github.com`, `api.github.com` or
+  `uploads.github.com` but through the broker. Under `restricted` without them in `tunnel`, that
+  means only the repositories listed: a release download from `github.com`, a clone of any other
+  repository, or an anonymous read through the API, is refused.
 - Under `restricted`, one job's log, read through the API at `actions/jobs/<id>/logs`, is out of
   reach. GitHub redirects it to one of a set of numbered storage hosts,
   `productionresultssa<n>.blob.core.windows.net`, which differs from job to job, and `tunnel` names
