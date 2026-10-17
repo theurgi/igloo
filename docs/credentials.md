@@ -238,7 +238,10 @@ can write. For a repository in `write`, so do those that write through the REST 
 `gh release create`, assets included, `gh release upload`, `gh release edit` and
 `gh release delete`, `gh run rerun`, `gh run cancel` and `gh workflow run`. `gh label`,
 `gh run delete`, `gh workflow enable` and `disable`, `gh cache delete`, `gh secret` and
-`gh variable` write what is refused. GitHub serves a run's logs and a release's assets as redirects
+`gh variable` write what is refused. So does deleting a ref through the API, which
+`gh release delete --cleanup-tag` and `gh pr close --delete-branch` do after their own work: the
+release is deleted and the pull request closed, and the tag or branch is left for
+`git push origin :<ref>` to delete. GitHub serves a run's logs and a release's assets as redirects
 to signed URLs on other hosts, which the broker passes back for the guest to follow through the
 tunnel; under `restricted`, list those hosts in `tunnel`. `gh run view --log` and `--log-failed`
 read a run's log archive from `results-receiver.actions.githubusercontent.com`, and
@@ -458,8 +461,9 @@ On every brokered request:
 
 For each inference grant, every login session in the guest gets the base URL and placeholder key
 listed under its profile. A model server is covered in
-[pointing an agent at a model server](#pointing-an-agent-at-a-model-server). These agents need
-nothing more:
+[pointing an agent at a model server](#pointing-an-agent-at-a-model-server), and a `github` grant
+needs no pointing: `git` and `gh` reach GitHub by its own names, which the broker answers, as
+[how the guest reaches GitHub](#how-the-guest-reaches-github) says. These agents need nothing more:
 
 - **Claude Code** reads `ANTHROPIC_BASE_URL`.
 - **opencode** reads the same base URLs from `/etc/igloo/opencode.json`, which `OPENCODE_CONFIG`
@@ -549,6 +553,9 @@ that way, since it never enters the guest.
   hosts exactly. A whole run's log archive comes from one host that can be listed.
 - A path holding a percent-escape is refused, so an API read naming a branch with a `/` in it, as
   `branches/feature%2Fx`, is refused.
+- `gh` shows a refusal of the broker's through GitHub's API as its status alone,
+  `HTTP 403: 403 Forbidden`: it reads the reason from a JSON body, as GitHub writes one, and the
+  broker's is plain text. The reason is in the broker's log, and `curl` shows it.
 - A client that verifies against a list of certificate authorities of its own, rather than the
   system's, does not trust the broker's, and fails to reach `github.com` from the guest. Node and
   Bun read `NODE_EXTRA_CA_CERTS`, which the guest sets; point any other at
