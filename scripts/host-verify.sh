@@ -26,9 +26,9 @@
 #
 #   IGLOO_VERIFY_GITHUB_TOKEN      a clone through the broker with a real token
 #   IGLOO_VERIFY_GITHUB_REPO       the repository it clones, git/git by default
-#   IGLOO_VERIFY_GITHUB_WRITE_REPO a scratch repository, not the one cloned,
-#                                  that the token can push to: a branch is
-#                                  pushed to it and deleted again
+#   IGLOO_VERIFY_GITHUB_WRITE_REPO a scratch repository with a commit, not the
+#                                  one cloned, that the token can push to: a
+#                                  branch is pushed to it and deleted again
 #   IGLOO_VERIFY_OPENROUTER_KEY    streaming model calls with a real key, which
 #                                  spend a few tokens of credit
 #   IGLOO_VERIFY_OPENROUTER_MODEL  the model they name
@@ -2297,31 +2297,43 @@ EOF
 						verdict FAIL github-graphql-read "read artifacts/github-git-clone.txt"
 					fi
 
-					# A new branch pushed, compared, and deleted again. Statuses and
-					# counts only: the repository is the user's.
+					# A new branch pushed, compared, and deleted again. Statuses,
+					# counts and GitHub's own reasons only: the repository is the
+					# user's. A repository with no commits makes the first branch
+					# pushed its default, which GitHub will not delete, so nothing is
+					# pushed to one.
 					if [ -n "$write_repo" ]; then
-						branch=igloo-verify-$(date +%Y%m%d%H%M%S)
-						{
-							echo "=== the push of a new branch: its status"
-							guest "cd /tmp && rm -rf pushed && git init -q pushed && cd pushed && git -c user.name=igloo-verify -c user.email=igloo-verify@invalid commit -q --allow-empty -m 'igloo host-verify' && GIT_TERMINAL_PROMPT=0 git push -q https://github.com/$write_repo HEAD:refs/heads/$branch >/dev/null 2>&1; echo \$?"
-							echo "=== the branch on GitHub against the commit pushed"
-							guest "cd /tmp/pushed && [ \"\$(GIT_TERMINAL_PROMPT=0 git ls-remote https://github.com/$write_repo refs/heads/$branch | cut -f1)\" = \"\$(git rev-parse HEAD)\" ] && echo same || echo different"
-							echo "=== the push deleting it: its status"
-							guest "cd /tmp/pushed && GIT_TERMINAL_PROMPT=0 git push -q https://github.com/$write_repo :refs/heads/$branch >/dev/null 2>&1; echo \$?"
-							echo "=== branches of that name left on GitHub"
-							guest "GIT_TERMINAL_PROMPT=0 git ls-remote https://github.com/$write_repo refs/heads/$branch | wc -l"
-							echo "=== pushes the broker allowed, from its log"
-							grep -c '"event":"allow".*"operation":"push"' "$(boot_log broker.log)"
-						} >"$out/artifacts/github-push-live.txt" 2>&1
-						said() { awk -v header="=== $1" 'index($0, header) == 1 { getline; print; exit }' "$out/artifacts/github-push-live.txt"; }
-						if [ "$(said 'the push of a new branch')" = 0 ] &&
-							[ "$(said 'the branch on GitHub')" = same ] &&
-							[ "$(said 'the push deleting it')" = 0 ] &&
-							[ "$(said 'branches of that name')" = 0 ] &&
-							[ "$(said 'pushes the broker allowed')" = 2 ]; then
-							verdict PASS github-push-live "a real token pushes a new branch to a repository in write through the broker, and deletes it again"
+						refs_before=$(guest "GIT_TERMINAL_PROMPT=0 git ls-remote https://github.com/$write_repo >/tmp/scratch-refs 2>/dev/null && wc -l </tmp/scratch-refs || echo unreadable")
+						if [ "$refs_before" = 0 ]; then
+							verdict NOTE github-push-live "not run: the scratch repository has no commits, so a branch pushed there would become its default, which GitHub will not delete — give it a first commit, such as a README"
+						elif [ "$refs_before" = unreadable ]; then
+							verdict FAIL github-push-live "the scratch repository could not be read through the broker, so nothing was pushed — is IGLOO_VERIFY_GITHUB_WRITE_REPO a repository the token can reach?"
 						else
-							verdict FAIL github-push-live "read artifacts/github-push-live.txt, then logs/up-token/broker.log; a branch named igloo-verify-… may be left in the scratch repository"
+							branch=igloo-verify-$(date +%Y%m%d%H%M%S)
+							{
+								echo "=== the push of a new branch: its status"
+								guest "cd /tmp && rm -rf pushed && git init -q pushed && cd pushed && git -c user.name=igloo-verify -c user.email=igloo-verify@invalid commit -q --allow-empty -m 'igloo host-verify' && GIT_TERMINAL_PROMPT=0 git push -q https://github.com/$write_repo HEAD:refs/heads/$branch >/tmp/pushed.out 2>&1; echo \$?"
+								echo "=== the branch on GitHub against the commit pushed"
+								guest "cd /tmp/pushed && [ \"\$(GIT_TERMINAL_PROMPT=0 git ls-remote https://github.com/$write_repo refs/heads/$branch | cut -f1)\" = \"\$(git rev-parse HEAD)\" ] && echo same || echo different"
+								echo "=== the push deleting it: its status"
+								guest "cd /tmp/pushed && GIT_TERMINAL_PROMPT=0 git push -q https://github.com/$write_repo :refs/heads/$branch >>/tmp/pushed.out 2>&1; echo \$?"
+								echo "=== branches of that name left on GitHub"
+								guest "GIT_TERMINAL_PROMPT=0 git ls-remote https://github.com/$write_repo refs/heads/$branch | wc -l"
+								echo "=== pushes the broker allowed, from its log"
+								grep -c '"event":"allow".*"operation":"push"' "$(boot_log broker.log)"
+								echo "=== what GitHub rejected, if anything, the branch's name left out"
+								guest "grep -o '\[remote rejected\].*' /tmp/pushed.out | sed 's/igloo-verify-[0-9]*/<branch>/g'"
+							} >"$out/artifacts/github-push-live.txt" 2>&1
+							said() { awk -v header="=== $1" 'index($0, header) == 1 { getline; print; exit }' "$out/artifacts/github-push-live.txt"; }
+							if [ "$(said 'the push of a new branch')" = 0 ] &&
+								[ "$(said 'the branch on GitHub')" = same ] &&
+								[ "$(said 'the push deleting it')" = 0 ] &&
+								[ "$(said 'branches of that name')" = 0 ] &&
+								[ "$(said 'pushes the broker allowed')" = 2 ]; then
+								verdict PASS github-push-live "a real token pushes a new branch to a repository in write through the broker, and deletes it again"
+							else
+								verdict FAIL github-push-live "read artifacts/github-push-live.txt; a branch named igloo-verify-… may be left in the scratch repository"
+							fi
 						fi
 					else
 						verdict NOTE github-push-live "not run: set IGLOO_VERIFY_GITHUB_WRITE_REPO to a scratch repository the token can push to"
