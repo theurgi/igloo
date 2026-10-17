@@ -7,7 +7,7 @@
  * grants refuses everything, and that is a configuration rather than a stub: it
  * holds no upstream it is authorized to construct a request to.
  *
- * There are two kinds of profile. `github-git` fetches over git's smart HTTP
+ * There are two kinds of profile. `github` fetches over git's smart HTTP
  * protocol from a fixed set of repositories; `anthropic-messages` and
  * `openrouter` call a provider's models. Beside them, a `model-server` grant
  * calls a model server on this host's loopback, at a port the grant names. In
@@ -65,7 +65,7 @@ const usage =
 export const profiles = {
   // Anthropic's own, for the messages endpoint and for counting tokens.
   'anthropic-messages': { host: 'api.anthropic.com', kind: 'inference' },
-  'github-git': { host: 'github.com', kind: 'git' },
+  github: { host: 'github.com', kind: 'git' },
   openrouter: { host: 'openrouter.ai', kind: 'inference' },
 } as const
 
@@ -118,7 +118,7 @@ export const tlsNamesCovered: readonly string[] = [
 export interface GitGrant {
   /** The credential to inject, under the name systemd loaded it as. */
   readonly credential: string
-  readonly profile: 'github-git'
+  readonly profile: 'github'
   /** `owner/repo`, the complete set this grant may fetch. */
   readonly repos: readonly string[]
 }

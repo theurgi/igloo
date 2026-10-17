@@ -1452,7 +1452,7 @@ EOF
     IGLOO_VERIFY_BROKERED = {
       source = { file = "$broker_config/from-file"; };
       mode = "broker";
-      profile = "github-git";
+      profile = "github";
       repos = [ "git/git" ];
       projects = [ "$project" ];
     };
@@ -1787,14 +1787,14 @@ EOF
 				verdict FAIL tether-reaches-broker "the guest did not reach the broker — artifacts/tether.txt says whether the port was even bound"
 			fi
 
-			# ------------------------------------------------ the github-git profile --
+			# ------------------------------------------------ the github profile's git --
 			#
 			# Everything from here reaches a real upstream, which no test does.
 			# The token is deliberately invalid: that leaves exactly one link
 			# unproven — that a *valid* token authenticates — and proves every
 			# other one, including that the broker's own TLS egress works and
 			# that a 401 does not reach git.
-			section "the github-git profile"
+			section "the github profile's git"
 			{
 				echo "=== the rewrite the guest was given"
 				guest 'git config --list --system 2>&1 | grep -i insteadof'
@@ -2126,7 +2126,7 @@ GUEST
     IGLOO_VERIFY_BROKERED = {
       source = { file = "$broker_config/from-file"; };
       mode = "broker";
-      profile = "github-git";
+      profile = "github";
       repos = [ "$real_repo" ];
       projects = [ "$project" ];
     };

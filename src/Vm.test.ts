@@ -654,7 +654,7 @@ describe('Vm.brokerArgv', () => {
   const spec: VmSpec = {
     ...specIn('/tmp/x', 'demo'),
     broker: true,
-    grants: [{ credential: 'GITHUB_TOKEN', profile: 'github-git', repos: ['you/api'] }],
+    grants: [{ credential: 'GITHUB_TOKEN', profile: 'github', repos: ['you/api'] }],
   }
 
   it('runs the broker under Landlock, connecting to its own ports and no others', () => {
@@ -685,7 +685,7 @@ describe('Vm.brokerArgv', () => {
       '8080',
     ])
     assert.deepStrictEqual(JSON.parse(brokerOf(argv)[3] ?? ''), [
-      { credential: 'GITHUB_TOKEN', profile: 'github-git', repos: ['you/api'] },
+      { credential: 'GITHUB_TOKEN', profile: 'github', repos: ['you/api'] },
       { name: 'llama-swap', port: 8080, profile: 'model-server' },
     ])
   })
@@ -703,7 +703,7 @@ describe('Vm.brokerArgv', () => {
     const argv = brokerOf(Vm.brokerArgv(bins, spec))
     assert.strictEqual(argv[2], '--grants')
     assert.deepStrictEqual(JSON.parse(argv[3] ?? ''), [
-      { credential: 'GITHUB_TOKEN', profile: 'github-git', repos: ['you/api'] },
+      { credential: 'GITHUB_TOKEN', profile: 'github', repos: ['you/api'] },
     ])
   })
 
@@ -773,7 +773,7 @@ describe('Vm.tetherOptions, with a tunnel', () => {
   it('opens both for a name the broker answers, with nowhere to tunnel to', () => {
     const args = Vm.tetherOptions({
       ...spec,
-      grants: [{ credential: 'GITHUB_TOKEN', profile: 'github-git', repos: ['you/api'] }],
+      grants: [{ credential: 'GITHUB_TOKEN', profile: 'github', repos: ['you/api'] }],
       tunnel: [],
     })
     assert.strictEqual(args.filter(arg => arg === '-R').length, 2)
@@ -1384,9 +1384,7 @@ describe('Vm, when the broker is killed', () => {
               source: { _tag: 'File', path: sourceFile } as const,
             },
           ],
-          grants: [
-            { credential: 'GITHUB_TOKEN', profile: 'github-git', repos: ['you/api'] } as const,
-          ],
+          grants: [{ credential: 'GITHUB_TOKEN', profile: 'github', repos: ['you/api'] } as const],
           runtimeDir,
         }
         yield* Effect.addFinalizer(() => Systemd.stopSlice('systemctl', sliceOf(spec)))

@@ -38,7 +38,7 @@ describe('Spec.fromConfig, on where each credential goes', () => {
     secrets: [
       { layer: 'project', mode: 'deliver', name: 'NPM_TOKEN', source: file('/secrets/npm') },
       {
-        grant: { profile: 'github-git', repos: ['you/api'] },
+        grant: { profile: 'github', repos: ['you/api'] },
         layer: 'user',
         mode: 'broker',
         name: 'GITHUB_TOKEN',
@@ -70,7 +70,7 @@ describe('Spec.fromConfig, on where each credential goes', () => {
       },
     ])
     assert.deepStrictEqual(plan.grants, [
-      { credential: 'GITHUB_TOKEN', profile: 'github-git', repos: ['you/api'] },
+      { credential: 'GITHUB_TOKEN', profile: 'github', repos: ['you/api'] },
     ])
     assert.isTrue(plan.broker)
   })
@@ -91,7 +91,7 @@ describe('Spec.fromConfig, on the rest of what it decides', () => {
 
   const gitGrant = (repos: readonly string[], name: string) =>
     ({
-      grant: { profile: 'github-git', repos },
+      grant: { profile: 'github', repos },
       layer: 'project',
       mode: 'broker',
       name,
@@ -175,7 +175,7 @@ describe('Spec.fromConfig, on the rest of what it decides', () => {
 describe('Spec.fromConfig, on what the drift report hashes', () => {
   const grant = (repos: readonly string[], name: string) =>
     ({
-      grant: { profile: 'github-git', repos },
+      grant: { profile: 'github', repos },
       layer: 'project',
       mode: 'broker',
       name,
