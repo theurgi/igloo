@@ -215,14 +215,15 @@ was addressed to is read as well, and only as one of the hosts the broker's git 
 stands where the path form puts the host, and the rest is `decide`'s (`decideAddressed`). The
 upstream URL is built from the profile's fixed host and the grant's own copy of what it allows: a
 git request for the repository as the grant spells it (`routeGit`), a read through a git grant's API
-under `repos/` and that repository, or a `POST` to the API's fixed `graphql` path (`routeApi`), a
-model provider's request for an endpoint its profile lists in `inferenceEndpoints`
-(`routeInference`), and a model server's on loopback, at the port its grant names
-(`routeModelServer`). Nothing the guest sends reaches the upstream URL but an OpenRouter model
+under `repos/` and that repository or of the API's root, or a `POST` to the API's fixed `graphql`
+path (`routeApi`), a model provider's request for an endpoint its profile lists in
+`inferenceEndpoints` (`routeInference`), and a model server's on loopback, at the port its grant
+names (`routeModelServer`). Nothing the guest sends reaches the upstream URL but an OpenRouter model
 listing's query, and an API read's path past its repository and its query: each query rebuilt so
 that each name and value is encoded, and the path's segments as the URL parser left them, with every
 `.` and `..` resolved, so that none leaves the repository. A path holding a percent-escape or an
-empty segment is refused, and so is a push, and a write through the API's REST paths.
+empty segment is refused, but for the one ending a host's root, and so is a push, and a write
+through the API's REST paths.
 
 A GraphQL query is the one request a grant's repositories do not bound. It names what it reads and
 writes in its body, much of it by node IDs that say which repository they belong to only after a

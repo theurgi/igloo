@@ -1900,6 +1900,9 @@ EOF
 				echo
 				echo "=== a GraphQL query"
 				guest 'timeout 30 curl -sS -H "Content-Type: application/json" -d "{\"query\":\"query{viewer{login}}\"}" https://api.github.com/graphql 2>&1 | head -3'
+				echo
+				echo "=== the API's root"
+				guest 'timeout 30 curl -sS https://api.github.com/ 2>&1 | head -3'
 			} >"$out/artifacts/github-api.txt" 2>&1
 			if grep -qx 'igloo-broker-holds-the-real-key' "$out/artifacts/github-api.txt"; then
 				verdict PASS github-api-placeholder "the guest's GH_TOKEN is the placeholder, which the broker replaces"
@@ -1918,6 +1921,16 @@ EOF
 			else
 				verdict FAIL github-graphql-reaches-upstream "read artifacts/github-api.txt, then logs/up-broker/broker.log"
 			fi
+			# Sent without the credential, the root would be GitHub's own answer.
+			root_said=$(awk '/^=== the API.s root/ { getline; print; exit }' "$out/artifacts/github-api.txt")
+			case $root_said in
+			*'api.github.com refused IGLOO_VERIFY_BROKERED'*)
+				verdict PASS github-api-root "the API's root, where gh auth status reads a token's scopes, is asked with the broker's credential"
+				;;
+			*)
+				verdict FAIL github-api-root "read artifacts/github-api.txt"
+				;;
+			esac
 			if grep -q 'torvalds/linux is not a repository this VM may read' "$out/artifacts/github-api.txt" &&
 				grep -q 'not POST /gists' "$out/artifacts/github-api.txt" &&
 				grep -q '/user/repos is not something this VM may read' "$out/artifacts/github-api.txt"; then
