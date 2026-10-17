@@ -546,7 +546,7 @@ const readGrant = (
     const write = yield* listed('write')
     if (repos.length + write.length === 0) {
       return yield* bad(
-        `${where}: \`secrets.${name}\` lists no repositories in \`repos\` or \`write\`, so the grant reaches nothing. List those this credential may fetch in \`repos\`, and those it may push to as well in \`write\`, as \`owner/repo\`.`,
+        `${where}: \`secrets.${name}\` lists no repositories in \`repos\` or \`write\`, so the grant reaches nothing. List those this credential may fetch in \`repos\`, and those it may push to and write through the API as well in \`write\`, as \`owner/repo\`.`,
       )
     }
     for (const repo of [...repos, ...write]) {

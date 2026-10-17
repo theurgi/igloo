@@ -7,12 +7,13 @@
  * grants refuses everything, and that is a configuration rather than a stub: it
  * holds no upstream it is authorized to construct a request to.
  *
- * There are two kinds of profile. `github` fetches over git's smart HTTP
- * protocol from a fixed set of repositories; `anthropic-messages` and
- * `openrouter` call a provider's models. Beside them, a `model-server` grant
- * calls a model server on this host's loopback, at a port the grant names. In
- * each case the upstream request is *constructed* — from a fixed template and
- * the grant's own copy of what it permits — so nothing a guest sends reaches
+ * There are two kinds of profile. `github` fetches and pushes over git's smart
+ * HTTP protocol, and reads and writes through GitHub's API, for a fixed set of
+ * repositories; `anthropic-messages` and `openrouter` call a provider's models.
+ * Beside them, a `model-server` grant calls a model server on this host's
+ * loopback, at a port the grant names. In each case the upstream request is
+ * *constructed* — from a fixed template and the grant's own copy of what it
+ * permits — so nothing a guest sends reaches
  * the upstream URL, and the credential header, where there is one, is always
  * this file's. A git request's other headers are built here too; an inference
  * or model server request carries the guest's, less its credentials and what
@@ -54,7 +55,8 @@ const usage =
  *
  * The kind decides which half of this file answers a request: a `git` profile
  * fetches from the repositories a grant lists, and reads its forge's API, at
- * `api`, for them; an `inference` profile calls the endpoints
+ * `api`, for them, and pushes to and writes through the API for those in its
+ * `write`; an `inference` profile calls the endpoints
  * `inferenceEndpoints` lists.
  *
  * No profile limits a body's size. A body is streamed, so the broker holds
@@ -118,9 +120,9 @@ export const tlsNamesCovered: readonly string[] = [
 
 /**
  * Fetch over git's smart HTTP, and read through the forge's API, for a fixed
- * set of repositories, and push to those of them in `write`. At most one per
- * profile: a request to the API may name no repository, so nothing in it could
- * choose between two.
+ * set of repositories, and push to and write through the API those of them in
+ * `write`. At most one per profile: a request to the API may name no
+ * repository, so nothing in it could choose between two.
  *
  * `repos` and `write` are the broker's own copy of what is permitted. They are
  * compared against a request, never built from one.
@@ -131,7 +133,7 @@ export interface GitGrant {
   readonly profile: 'github'
   /** `owner/repo`, the repositories this grant may fetch and read, and no more. */
   readonly repos: readonly string[]
-  /** `owner/repo`, the repositories it may push to as well, each fetched and read as one in `repos` is. */
+  /** `owner/repo`, the repositories it may push to and write through the API as well, each fetched and read as one in `repos` is. */
   readonly write?: readonly string[]
 }
 
@@ -232,8 +234,8 @@ export type ModelServerOperation = Extract<
  */
 export type AnonymousOperation = FetchOperation | 'read'
 
-/** A request through a forge's API: a read under a repository, or a GraphQL query. */
-export type ApiOperation = 'graphql' | 'read'
+/** A request through a forge's API: a read or a write under a repository, or a GraphQL query. */
+export type ApiOperation = 'graphql' | 'read' | 'write'
 
 export type Operation = AnonymousOperation | ApiOperation | GitOperation | InferenceOperation
 
@@ -282,7 +284,7 @@ export type Decision =
       readonly host: string
       readonly operation: ApiOperation
       readonly profile: GitGrant['profile']
-      /** The repository as the *grant* spells it, for a read under one. */
+      /** The repository as the *grant* spells it, for a request under one. */
       readonly repo?: string
       readonly upstream: string
     }
@@ -695,18 +697,68 @@ const sendsBody = (operation: Operation): boolean =>
 const methodOf = (operation: InferenceOperation): 'GET' | 'POST' =>
   sendsBody(operation) ? 'POST' : 'GET'
 
+/** The methods that write through a forge's API. */
+const writeMethods: ReadonlySet<string> = new Set(['DELETE', 'PATCH', 'POST', 'PUT'])
+
+/**
+ * What a repository in a grant's `write` may be written at through the REST
+ * API, and by which methods: a path under `repos/<owner>/<repo>/`, a segment at
+ * a time, where `*` is any one segment and a last `**` any number of them, none
+ * included.
+ *
+ * What GitHub's CLI writes: issues and pull requests, with their comments,
+ * labels, reviews and merges; releases and their assets; a workflow run's rerun
+ * and cancel, and a workflow's dispatch; and a commit's statuses and checks.
+ * The rest of what a token that writes a repository may write is left out, its
+ * settings, collaborators, webhooks, deploy keys, Actions secrets and variables
+ * and runner registration among it: each reaches past the repository, to the
+ * people it lets in, the hosts a webhook calls, the machines a key opens, or
+ * the jobs a runner is given.
+ */
+const apiWrites: Readonly<Record<string, readonly string[]>> = {
+  'actions/jobs/*/rerun': ['POST'],
+  'actions/runs/*/cancel': ['POST'],
+  'actions/runs/*/force-cancel': ['POST'],
+  'actions/runs/*/rerun': ['POST'],
+  'actions/runs/*/rerun-failed-jobs': ['POST'],
+  'actions/workflows/*/dispatches': ['POST'],
+  'check-runs': ['POST'],
+  'check-runs/*': ['PATCH'],
+  'check-runs/*/rerequest': ['POST'],
+  'check-suites': ['POST'],
+  'check-suites/*/rerequest': ['POST'],
+  'issues/**': [...writeMethods],
+  'pulls/**': [...writeMethods],
+  'releases/**': [...writeMethods],
+  'statuses/*': ['POST'],
+}
+
+/** Whether `apiWrites` lets `method` write at `tail`, the path past a repository. */
+const writesTo = (method: string, tail: readonly string[]): boolean =>
+  Object.entries(apiWrites).some(([path, methods]) => {
+    if (!methods.includes(method)) return false
+    const pattern = path.split('/')
+    const open = pattern.at(-1) === '**'
+    const fixed = open ? pattern.slice(0, -1) : pattern
+    return (
+      (open ? tail.length >= fixed.length : tail.length === fixed.length) &&
+      fixed.every((segment, at) => segment === '*' || segment === tail[at])
+    )
+  })
+
 /**
  * Route a request for a git grant's API, or `undefined` if the path's host is
  * no held grant's API.
  *
  * A read under `repos/<owner>/<repo>/` for a repository a grant lists is sent
- * with that grant's credential. The upstream path is the grant's spelling of
- * the repository, then the rest of the path as the request had it, segment by
- * segment: `decide` has already refused a percent-escape and an empty segment,
- * and the URL parser has resolved every `.` and `..`, so no segment can leave
- * the repository it follows. The query is carried, rebuilt so that each name
- * and value is encoded. A read of the API's root is sent with the credential
- * too, and without its query.
+ * with that grant's credential, and so is a write there that `apiWrites` lists,
+ * for a repository in the grant's `write`. The upstream path is the grant's
+ * spelling of the repository, then the rest of the path as the request had it,
+ * segment by segment: `decide` has already refused a percent-escape and an
+ * empty segment, and the URL parser has resolved every `.` and `..`, so no
+ * segment can leave the repository it follows. The query is carried, rebuilt
+ * so that each name and value is encoded. A read of the API's root is sent with
+ * the credential too, and without its query.
  *
  * A GraphQL query, a `POST` to `graphql`, is sent with the credential too, and
  * its body as it arrived. It names what it reads and writes in that body, some
@@ -740,15 +792,16 @@ const routeApi = (
       upstream: `https://${lowered}/graphql`,
     }
   }
-  if (method !== 'GET' && method !== 'HEAD') {
-    return deny(403, `this VM may read through ${lowered}, not ${method} /${rest.join('/')}`, {
+  const writes = writeMethods.has(method)
+  if (!writes && method !== 'GET' && method !== 'HEAD') {
+    return deny(405, `${method} is not a method this VM may use through ${lowered}`, {
       host: lowered,
     })
   }
   const [area, owner, repo, ...tail] = rest
   // The API's root names its endpoints and, asked with a token, that token's
   // scopes, which is what `gh auth status` reads once it has a login.
-  if (area === undefined) {
+  if (area === undefined && !writes) {
     return {
       _tag: 'Api',
       credential: grant.credential,
@@ -759,31 +812,44 @@ const routeApi = (
     }
   }
   if (area !== 'repos') {
-    return deny(403, `/${rest.join('/')} is not something this VM may read through ${lowered}`, {
-      host: lowered,
-    })
+    return deny(
+      403,
+      `/${rest.join('/')} is not something this VM may ${writes ? 'write' : 'read'} through ${lowered}`,
+      { host: lowered },
+    )
   }
   if (owner === undefined || repo === undefined) {
-    return deny(404, 'a repository is read at /repos/<owner>/<repo>')
+    return deny(404, 'a repository is named at /repos/<owner>/<repo>')
   }
 
   const wanted = `${owner}/${repo}`.toLowerCase()
   for (const candidate of held) {
-    const allowed = grantedAs(candidate.write, wanted) ?? grantedAs(candidate.repos, wanted)
+    const writable = grantedAs(candidate.write, wanted)
+    const allowed = writable ?? grantedAs(candidate.repos, wanted)
     if (allowed === undefined) continue
+    if (writes && writable === undefined) {
+      return deny(403, `this VM may read ${wanted}, not write to it`, { scope: wanted })
+    }
+    if (writes && !writesTo(method, tail)) {
+      return deny(403, `${method} /${rest.join('/')} is not a write this VM may make`, {
+        scope: wanted,
+      })
+    }
     const path = withoutGit(allowed)
     const filter = new URLSearchParams(query).toString()
     return {
       _tag: 'Api',
       credential: candidate.credential,
       host: lowered,
-      operation: 'read',
+      operation: writes ? 'write' : 'read',
       profile: candidate.profile,
       repo: path,
       upstream: `https://${lowered}/repos/${[path, ...tail].join('/')}${filter === '' ? '' : `?${filter}`}`,
     }
   }
-  return deny(403, `${wanted} is not a repository this VM may read`, { scope: wanted })
+  return deny(403, `${wanted} is not a repository this VM may ${writes ? 'write to' : 'read'}`, {
+    scope: wanted,
+  })
 }
 
 /**
@@ -961,7 +1027,7 @@ const routeModelServer = (
  *
  * Pure. `target` is the request URL as received; nothing is taken from it except
  * the path, as a sequence of segments matched against a fixed shape, git's
- * `service`, a model listing's filter, and an API read's query.
+ * `service`, a model listing's filter, and an API request's query.
  */
 export const decide = (grants: readonly Grant[], method: string, target: string): Decision => {
   if (grants.length === 0) return deny(403, 'this VM has no brokered credential')
