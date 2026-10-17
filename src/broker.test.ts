@@ -363,6 +363,29 @@ describe('Broker.decide, on GitHub’s API', () => {
     assert.strictEqual(outcome(api('/gists', 'POST')), 403)
   })
 
+  it('sends a GraphQL query with its credential, naming no repository', () => {
+    // Its body names what it reads, which the broker does not read.
+    const query = {
+      _tag: 'Api',
+      credential: 'GITHUB_TOKEN',
+      host: 'api.github.com',
+      operation: 'graphql',
+      profile: 'github',
+      upstream: 'https://api.github.com/graphql',
+    } as const
+    assert.deepStrictEqual(api('/graphql', 'POST'), query)
+    assert.deepStrictEqual(api('/graphql?owner=someone', 'POST'), query)
+  })
+
+  it('takes a GraphQL query at /graphql alone, and by POST alone', () => {
+    for (const method of ['GET', 'HEAD', 'PUT']) {
+      assert.strictEqual(outcome(api('/graphql', method)), 405, method)
+    }
+    for (const path of ['/graphql/x', '/api/graphql', '/repos/you/api/graphql']) {
+      assert.strictEqual(outcome(api(path, 'POST')), 403, path)
+    }
+  })
+
   it('is not served without a github grant', () => {
     assert.strictEqual(outcome(api('/repos/you/api', 'GET', inference)), 404)
   })
@@ -483,6 +506,12 @@ describe('Broker.decideAddressed, on a read no grant covers', () => {
     assert.strictEqual(read(latest, 'GET', ['github.com'])._tag, 'Deny')
     assert.strictEqual(read('https://api.github.com/repos/you/api/releases/latest')._tag, 'Api')
     assert.strictEqual(read('https://api.github.com/gists', 'POST', 'any')._tag, 'Deny')
+  })
+
+  it('sends a GraphQL query with the grant’s credential, and none on github.com', () => {
+    const query = read('https://api.github.com/graphql', 'POST', [])
+    assert.strictEqual(query._tag === 'Api' ? query.operation : '', 'graphql')
+    assert.strictEqual(read('https://github.com/graphql', 'POST', 'any')._tag, 'Deny')
   })
 
   it('answers no other name, reached or not', () => {
@@ -2463,6 +2492,46 @@ describe('Broker.serveRequests, on GitHub’s API', () => {
         assert.strictEqual(response.status, 302)
         assert.strictEqual(response.headers.get('Location'), 'https://logs.example/run.zip?sig=s')
         assert.strictEqual(sent.length, 1)
+      }),
+    ))
+
+  it('sends a GraphQL query on with its body and type, and the broker’s token', () =>
+    auditing(audited =>
+      serving(grants, held, github, async server => {
+        sent.length = 0
+        const query = '{"query":"query{viewer{login}}"}'
+        const response = await server.fetch(
+          new Request('http://broker/api.github.com/graphql', {
+            body: query,
+            headers: {
+              Authorization: 'bearer igloo-broker-holds-the-real-key',
+              'Content-Type': 'application/json; charset=utf-8',
+              'GraphQL-Features': 'merge_queue',
+            },
+            method: 'POST',
+          }),
+        )
+        assert.strictEqual(response.status, 200)
+        await response.text()
+
+        assert.strictEqual(sent[0]?.url, 'https://api.github.com/graphql')
+        assert.strictEqual(sent[0]?.init.method, 'POST')
+        assert.strictEqual(await new Response(sent[0]?.init.body).text(), query)
+        const headers = new Headers(sent[0]?.init.headers)
+        assert.strictEqual(headers.get('Authorization'), 'Bearer ghp-test')
+        assert.strictEqual(headers.get('Content-Type'), 'application/json; charset=utf-8')
+        assert.strictEqual(headers.get('GraphQL-Features'), 'merge_queue')
+        // Logged with its credential and no repository, since none bounded it.
+        const allowed = audited.find(
+          (event): event is Record<string, unknown> =>
+            typeof event === 'object' &&
+            event !== null &&
+            'event' in event &&
+            event.event === 'allow',
+        )
+        assert.strictEqual(allowed?.['operation'], 'graphql')
+        assert.strictEqual(allowed?.['credential'], 'GITHUB_TOKEN')
+        assert.notProperty(allowed, 'scope')
       }),
     ))
 })
