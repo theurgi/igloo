@@ -426,6 +426,10 @@ On every brokered request:
   as a `502` on git's requests to `github.com`, so that git does not prompt for credentials the
   guest must not have. A redirect is not followed. One from GitHub's API comes back to the guest,
   which follows it to a signed URL elsewhere without the credential.
+- A refusal the broker writes itself gives its reason as `broker: <reason>`, in text, which git
+  prints as `remote: broker: …`. On GitHub's API, at `api.github.com` and `uploads.github.com`, it
+  is JSON instead, `{"message":"broker: <reason>"}`, as GitHub writes an error of its own, and `gh`
+  shows it as `HTTP <status>: broker: <reason> (<URL>)`.
 - Every refusal the broker writes itself carries `x-should-retry: false`, except the one that may
   pass: an upstream that did not answer.
 - No request body is refused for its size. The upstream's own limit is the one a body meets, and on
@@ -553,9 +557,6 @@ that way, since it never enters the guest.
   hosts exactly. A whole run's log archive comes from one host that can be listed.
 - A path holding a percent-escape is refused, so an API read naming a branch with a `/` in it, as
   `branches/feature%2Fx`, is refused.
-- `gh` shows a refusal of the broker's through GitHub's API as its status alone,
-  `HTTP 403: 403 Forbidden`: it reads the reason from a JSON body, as GitHub writes one, and the
-  broker's is plain text. The reason is in the broker's log, and `curl` shows it.
 - A client that verifies against a list of certificate authorities of its own, rather than the
   system's, does not trust the broker's, and fails to reach `github.com` from the guest. Node and
   Bun read `NODE_EXTRA_CA_CERTS`, which the guest sets; point any other at

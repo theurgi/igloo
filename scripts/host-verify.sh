@@ -1909,16 +1909,19 @@ EOF
 			else
 				verdict FAIL github-push-reaches-upstream "read artifacts/github-push.txt, then logs/up-broker/broker.log"
 			fi
-			if grep -q 'may fetch, not push' "$out/artifacts/github-push.txt" &&
+			if grep -qx 'remote: broker: this VM may fetch, not push' "$out/artifacts/github-push.txt" &&
 				grep -q 'torvalds/linux is not a repository this VM may push to' "$out/artifacts/github-push.txt"; then
-				verdict PASS github-push-refuses "a push to a repository the grant may only fetch, and to one it does not name, is refused at the first request, each with its reason"
+				verdict PASS github-push-refuses "a push to a repository the grant may only fetch, and to one it does not name, is refused at the first request, each with its reason, which git prints as text"
 			else
 				verdict FAIL github-push-refuses "read artifacts/github-push.txt"
 			fi
 
 			# GitHub's REST API, answered by the broker as github.com is. The
 			# token is the same invalid one, so a granted read reaching GitHub
-			# comes back as GitHub refusing the broker's credential.
+			# comes back as GitHub refusing the broker's credential. The broker
+			# refuses there in JSON, {"message":"broker: <reason>"}, so a reason
+			# that has to end where the message does is matched to its closing
+			# quote.
 			{
 				echo "=== the token gh is given"
 				guest 'printenv GH_TOKEN 2>&1'
@@ -1961,7 +1964,7 @@ EOF
 			fi
 			# A read is refused as scoped to its repository, a GraphQL query as
 			# scoped to no repository, since nothing in its path names one.
-			if grep -q 'api.github.com refused IGLOO_VERIFY_BROKERED; .* not scoped to git/git$' "$out/artifacts/github-api.txt"; then
+			if grep -q 'api.github.com refused IGLOO_VERIFY_BROKERED; .* not scoped to git/git"' "$out/artifacts/github-api.txt"; then
 				verdict PASS github-api-reaches-upstream "a read through the API reaches api.github.com through the broker, which reports its own credential being refused"
 			else
 				verdict FAIL github-api-reaches-upstream "read artifacts/github-api.txt, then logs/up-broker/broker.log"
@@ -1981,16 +1984,16 @@ EOF
 				verdict FAIL github-api-root "read artifacts/github-api.txt"
 				;;
 			esac
-			if grep -q 'torvalds/linux is not a repository this VM may read' "$out/artifacts/github-api.txt" &&
+			if grep -qxF '{"message":"broker: torvalds/linux is not a repository this VM may read"}' "$out/artifacts/github-api.txt" &&
 				grep -q '/gists is not something this VM may write through api.github.com' "$out/artifacts/github-api.txt" &&
 				grep -q '/user/repos is not something this VM may read' "$out/artifacts/github-api.txt"; then
-				verdict PASS github-api-refuses "another repository, a new gist and the account's repositories are refused through the API, each with its reason"
+				verdict PASS github-api-refuses "another repository, a new gist and the account's repositories are refused through the API, each with its reason as the message of a JSON body, as GitHub writes an error"
 			else
 				verdict FAIL github-api-refuses "read artifacts/github-api.txt"
 			fi
 			write_said=$(awk '/^=== a write under the repository the grant may write/ { getline; print; exit }' "$out/artifacts/github-api.txt")
 			case $write_said in
-			*'api.github.com refused IGLOO_VERIFY_BROKERED; '*' not scoped to git/git-scm.com')
+			*'api.github.com refused IGLOO_VERIFY_BROKERED; '*' not scoped to git/git-scm.com"'*)
 				verdict PASS github-api-write-reaches-upstream "a write under a repository in write reaches api.github.com through the broker, which reports its own credential being refused"
 				;;
 			*)
@@ -2007,7 +2010,7 @@ EOF
 			fi
 			upload_said=$(awk '/^=== an asset uploaded to a release of the repository/ { getline; print; exit }' "$out/artifacts/github-api.txt")
 			case $upload_said in
-			*'uploads.github.com refused IGLOO_VERIFY_BROKERED; '*' not scoped to git/git-scm.com')
+			*'uploads.github.com refused IGLOO_VERIFY_BROKERED; '*' not scoped to git/git-scm.com"'*)
 				verdict PASS github-upload-reaches-upstream "an asset uploaded to a release of a repository in write reaches uploads.github.com through the broker, which reports its own credential being refused"
 				;;
 			*)

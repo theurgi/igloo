@@ -341,6 +341,7 @@ describe('Broker.decide, on GitHub’s API', () => {
     assert.deepStrictEqual(refused, {
       _tag: 'Deny',
       asked: { scope: 'someone/else' },
+      json: true,
       reason: 'someone/else is not a repository this VM may read',
       status: 403,
     })
@@ -386,6 +387,7 @@ describe('Broker.decide, on GitHub’s API', () => {
       assert.deepStrictEqual(api('/repos/you/api/issues', method), {
         _tag: 'Deny',
         asked: { scope: 'you/api' },
+        json: true,
         reason: 'this VM may read you/api, not write to it',
         status: 403,
       })
@@ -393,6 +395,7 @@ describe('Broker.decide, on GitHub’s API', () => {
     assert.deepStrictEqual(api('/gists', 'POST'), {
       _tag: 'Deny',
       asked: { host: 'api.github.com' },
+      json: true,
       reason: '/gists is not something this VM may write through api.github.com',
       status: 403,
     })
@@ -593,6 +596,7 @@ describe('Broker.decide, on a write through GitHub’s API', () => {
         {
           _tag: 'Deny',
           asked: { scope: 'you/web' },
+          json: true,
           reason: `${method} /repos/you/web${path} is not a write this VM may make`,
           status: 403,
         },
@@ -605,6 +609,7 @@ describe('Broker.decide, on a write through GitHub’s API', () => {
     assert.deepStrictEqual(api('/repos/someone/else/issues', 'POST'), {
       _tag: 'Deny',
       asked: { scope: 'someone/else' },
+      json: true,
       reason: 'someone/else is not a repository this VM may write to',
       status: 403,
     })
@@ -666,12 +671,14 @@ describe('Broker.decide, on an upload of a release’s asset', () => {
     assert.deepStrictEqual(upload('/repos/you/api/releases/42/assets'), {
       _tag: 'Deny',
       asked: { scope: 'you/api' },
+      json: true,
       reason: 'this VM may read you/api, not write to it',
       status: 403,
     })
     assert.deepStrictEqual(upload('/repos/someone/else/releases/42/assets'), {
       _tag: 'Deny',
       asked: { scope: 'someone/else' },
+      json: true,
       reason: 'someone/else is not a repository this VM may write to',
       status: 403,
     })
@@ -704,6 +711,60 @@ describe('Broker.decide, on an upload of a release’s asset', () => {
       ),
       404,
     )
+  })
+})
+
+describe('Broker.decide, on how a refusal is written', () => {
+  const granted: readonly Broker.Grant[] = [
+    { credential: 'GITHUB_TOKEN', profile: 'github', repos: ['you/api'], write: ['you/web'] },
+    { credential: 'OPENROUTER_API_KEY', profile: 'openrouter' },
+    { name: 'llama-swap', port: 8080, profile: 'model-server' },
+  ]
+  /** Whether a refusal is set to be written in JSON, or `undefined` for no refusal. */
+  const json = (decision: Broker.Decision): boolean | undefined =>
+    decision._tag === 'Deny' ? decision.json === true : undefined
+
+  it('sets every refusal on GitHub’s API and its uploads to JSON, whichever rule refused it', () => {
+    for (const [method, path] of [
+      ['POST', '/api.github.com/repos/you/web/labels'],
+      ['POST', '/api.github.com/repos/you/api/issues'],
+      ['GET', '/api.github.com/repos/someone/else'],
+      ['GET', '/API.GitHub.com/user/repos'],
+      ['GET', '/api.github.com/repos/you'],
+      ['GET', '/api.github.com/graphql'],
+      ['OPTIONS', '/api.github.com/repos/you/api'],
+      ['DELETE', '/api.github.com/repos/you/web/git/refs/tags%2Fv1'],
+      ['GET', '/api.github.com/repos//api'],
+      ['POST', '/uploads.github.com/repos/you/api/releases/1/assets'],
+      ['GET', '/uploads.github.com/repos/you/web/releases/1/assets'],
+      ['POST', '/uploads.github.com/repos/you/web/issues'],
+    ] as const) {
+      assert.isTrue(json(Broker.decide(granted, method, `${base}${path}`)), `${method} ${path}`)
+    }
+  })
+
+  it('leaves git’s refusals, an inference profile’s and a model server’s as text', () => {
+    for (const [method, path] of [
+      ['GET', '/github.com/you/api/info/refs?service=git-receive-pack'],
+      ['POST', '/github.com/someone/else/git-upload-pack'],
+      ['GET', '/github.com/you/api%2Fx/info/refs?service=git-upload-pack'],
+      ['POST', '/openrouter.ai/api/v1/keys'],
+      ['GET', '/openrouter.ai/api/v1/chat/completions'],
+      ['POST', '/local/llama-swap/slots'],
+      ['GET', '/elsewhere.example/'],
+    ] as const) {
+      assert.isFalse(json(Broker.decide(granted, method, `${base}${path}`)), `${method} ${path}`)
+    }
+  })
+
+  it('reads the name a request was addressed to as the path form’s host', () => {
+    const addressed = (url: string, method = 'GET') => Broker.decideAddressed(granted, method, url)
+    assert.isTrue(json(addressed('https://api.github.com/repos/you/web/labels', 'POST')))
+    assert.isTrue(json(addressed('https://API.github.com./repos/you/web/git/refs/tags%2Fv1')))
+    // Refused for the tunnel's scope, by a rule of decideAddressed's own.
+    assert.isTrue(json(addressed('https://api.github.com/repos/you')))
+    assert.isFalse(json(addressed('https://github.com/you/api/info/refs?service=git-receive-pack')))
+    assert.isFalse(json(addressed('https://github.com/someone/tool/releases/download/v1/x.tgz')))
   })
 })
 
@@ -3007,6 +3068,144 @@ describe('Broker.serveRequests, on GitHub’s API', () => {
       }),
     )
   })
+})
+
+describe('Broker.serveRequests, on how a refusal is written', () => {
+  const granted: readonly Broker.Grant[] = [
+    {
+      credential: 'GITHUB_TOKEN',
+      profile: 'github',
+      repos: ['you/api', 'you/gone'],
+      write: ['you/web'],
+    },
+    { credential: 'OPENROUTER_API_KEY', profile: 'openrouter' },
+  ]
+  const credentials: ReadonlyMap<string, string> = new Map([
+    ['GITHUB_TOKEN', 'ghp-test'],
+    ['OPENROUTER_API_KEY', 'sk-or-test'],
+  ])
+  /** Every upstream refusing the broker's credential, but `you/gone`'s, which does not answer. */
+  const refusing = (url: string): Promise<Response> =>
+    url.includes('/you/gone')
+      ? Promise.reject(new Error('ECONNREFUSED'))
+      : Promise.resolve(new Response('Bad credentials', { status: 401 }))
+  const ask = (server: ReturnType<typeof Broker.serveRequests>, method: string, path: string) =>
+    server.fetch(new Request(`http://broker${path}`, { method }))
+
+  it('writes one on GitHub’s API as GitHub writes an error, with its reason as the message', () =>
+    auditing(() =>
+      serving(granted, credentials, refusing, async server => {
+        for (const [method, path, status, reason] of [
+          [
+            'POST',
+            '/api.github.com/repos/you/web/labels',
+            403,
+            'POST /repos/you/web/labels is not a write this VM may make',
+          ],
+          [
+            'POST',
+            '/api.github.com/repos/you/api/issues',
+            403,
+            'this VM may read you/api, not write to it',
+          ],
+          [
+            'GET',
+            '/api.github.com/user/repos',
+            403,
+            '/user/repos is not something this VM may read through api.github.com',
+          ],
+          [
+            'DELETE',
+            '/api.github.com/repos/you/web/git/refs/tags%2Fv1',
+            400,
+            'percent-encoding is not accepted in a path',
+          ],
+          [
+            'POST',
+            '/uploads.github.com/repos/you/api/releases/1/assets?name=a',
+            403,
+            'this VM may read you/api, not write to it',
+          ],
+          // The upstream's 401, as the broker's own refusal.
+          [
+            'GET',
+            '/api.github.com/repos/you/api',
+            403,
+            'api.github.com refused GITHUB_TOKEN; the credential the host holds is wrong, expired, or not scoped to you/api',
+          ],
+          [
+            'POST',
+            '/uploads.github.com/repos/you/web/releases/1/assets?name=a',
+            403,
+            'uploads.github.com refused GITHUB_TOKEN; the credential the host holds is wrong, expired, or not scoped to you/web',
+          ],
+        ] as const) {
+          const response = await ask(server, method, path)
+          assert.strictEqual(response.status, status, path)
+          assert.strictEqual(
+            response.headers.get('Content-Type'),
+            'application/json; charset=utf-8',
+            path,
+          )
+          assert.strictEqual(response.headers.get('x-should-retry'), 'false', path)
+          assert.strictEqual(
+            await response.text(),
+            `${JSON.stringify({ message: `broker: ${reason}` })}\n`,
+            path,
+          )
+        }
+
+        // An upstream that did not answer may answer next time.
+        const gone = await ask(server, 'GET', '/api.github.com/repos/you/gone')
+        assert.strictEqual(gone.status, 502)
+        assert.isNull(gone.headers.get('x-should-retry'))
+        assert.deepStrictEqual(await gone.json(), {
+          message: 'broker: api.github.com did not answer',
+        })
+      }),
+    ))
+
+  it('writes git’s and an inference profile’s as text', () =>
+    auditing(() =>
+      serving(granted, credentials, refusing, async server => {
+        for (const [method, path, status, reason] of [
+          [
+            'GET',
+            '/github.com/you/api/info/refs?service=git-receive-pack',
+            403,
+            'this VM may fetch, not push',
+          ],
+          [
+            'GET',
+            '/github.com/you/api/info/refs?service=git-upload-pack',
+            502,
+            'github.com refused GITHUB_TOKEN; the credential the host holds is wrong, expired, or not scoped to you/api',
+          ],
+          [
+            'POST',
+            '/openrouter.ai/api/v1/keys',
+            404,
+            'openrouter.ai is brokered, but /api/v1/keys is not an endpoint this VM may call',
+          ],
+          [
+            'POST',
+            '/openrouter.ai/api/v1/chat/completions',
+            403,
+            'openrouter.ai refused OPENROUTER_API_KEY; the credential the host holds is wrong, expired, or not scoped to this request',
+          ],
+        ] as const) {
+          const response = await ask(server, method, path)
+          assert.strictEqual(response.status, status, path)
+          assert.strictEqual(
+            response.headers.get('Content-Type'),
+            'text/plain; charset=utf-8',
+            path,
+          )
+          assert.strictEqual(response.headers.get('x-should-retry'), 'false', path)
+          assert.strictEqual(await response.text(), `broker: ${reason}\n`, path)
+        }
+      }),
+    ))
 })
 
 describe('Broker.serveRequests, on a push', () => {

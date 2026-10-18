@@ -121,6 +121,16 @@ export const tlsNamesCovered: readonly string[] = [
 ]
 
 /**
+ * Every git profile's API and the host it takes uploads at. Their clients read
+ * an error's reason from the `message` of a JSON body, as the forge writes one,
+ * and show a response with none as its status alone.
+ */
+const apiNames: readonly string[] = profileNames
+  .filter(isProfileName)
+  .filter((name): name is GitGrant['profile'] => profiles[name].kind === 'git')
+  .flatMap(name => [profiles[name].api, profiles[name].uploads])
+
+/**
  * Fetch over git's smart HTTP, and read through the forge's API, for a fixed
  * set of repositories, and push to and write through the API those of them in
  * `write`. At most one per profile: a request to the API may name no
@@ -308,6 +318,8 @@ export type Decision =
        * rather than only inside a sentence.
        */
       readonly asked?: Asked
+      /** Set for a request addressed to one of `apiNames`, whose refusal is written in JSON. */
+      readonly json?: true
       readonly reason: string
       readonly status: number
     }
@@ -325,6 +337,10 @@ const deny = (status: number, reason: string, asked?: Asked): Decision => ({
   reason,
   status,
 })
+
+/** `decision`, set to be written in JSON if it refuses a request addressed to one of `apiNames`. */
+const refusedAt = (host: string, decision: Decision): Decision =>
+  decision._tag === 'Deny' && apiNames.includes(host) ? { ...decision, json: true } : decision
 
 /** `owner/repo`, with no path traversal and nothing that needs encoding. */
 const REPO = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/
@@ -1094,11 +1110,11 @@ const routeModelServer = (
  *
  * Pure. `target` is the request URL as received; nothing is taken from it except
  * the path, as a sequence of segments matched against a fixed shape, git's
- * `service`, a model listing's filter, and an API request's query.
+ * `service`, a model listing's filter, and an API request's query. A refusal is
+ * set to be written in JSON when the path's first segment, the host the request
+ * is for, is one of `apiNames`, whatever refused it.
  */
 export const decide = (grants: readonly Grant[], method: string, target: string): Decision => {
-  if (grants.length === 0) return deny(403, 'this VM has no brokered credential')
-
   // Parsed against a base, because a request target is not always a URL: a
   // client that sends no `Host` — anything speaking HTTP/1.0 — leaves the server
   // reporting the bare path, which is not one on its own. The base is inert
@@ -1111,6 +1127,12 @@ export const decide = (grants: readonly Grant[], method: string, target: string)
   } catch {
     return deny(400, 'unparseable request target')
   }
+  return refusedAt(url.pathname.split('/')[1]?.toLowerCase() ?? '', route(grants, method, url))
+}
+
+/** `decide`, once the target is parsed. */
+const route = (grants: readonly Grant[], method: string, url: URL): Decision => {
+  if (grants.length === 0) return deny(403, 'this VM has no brokered credential')
 
   // Refused rather than decoded. A repository name never needs an escape, so the
   // only thing percent-encoding can express here is a segment that means one
@@ -1180,7 +1202,7 @@ export const decideAddressed = (
   const host = parsed.hostname.toLowerCase()
   const name = host.endsWith('.') ? host.slice(0, -1) : host
   if (!tlsNames(grants).includes(name)) {
-    return deny(421, `${name} is not answered here for this VM`, { host: name })
+    return refusedAt(name, deny(421, `${name} is not answered here for this VM`, { host: name }))
   }
   const granted = decide(grants, method, `/${name}${parsed.pathname}${parsed.search}`)
   if (granted._tag !== 'Deny') return granted
@@ -1192,10 +1214,13 @@ export const decideAddressed = (
     // A refusal that names a repository says enough. One that says only that
     // this is no git endpoint hides why a read was not sent on.
     return granted.status === 404
-      ? deny(
-          403,
-          `no grant covers this, and the tunnel does not reach ${name}, so it is not sent without one either`,
-          { host: name },
+      ? refusedAt(
+          name,
+          deny(
+            403,
+            `no grant covers this, and the tunnel does not reach ${name}, so it is not sent without one either`,
+            { host: name },
+          ),
         )
       : granted
   }
@@ -2053,24 +2078,39 @@ const audit = (event: Readonly<Record<string, Fact>>): void => {
 }
 
 /**
+ * An answer of the broker's own, `broker: <message>`: as text, which git prints
+ * as `remote: broker: …`, or with `json` as `{"message":"broker: <message>"}`,
+ * the shape a forge's API writes its own errors in.
+ */
+const answer = (
+  status: number,
+  message: string,
+  json: boolean,
+  headers: Readonly<Record<string, string>>,
+): Response =>
+  json
+    ? new Response(`${JSON.stringify({ message: `broker: ${message}` })}\n`, {
+        headers: { 'Content-Type': 'application/json; charset=utf-8', ...headers },
+        status,
+      })
+    : new Response(`broker: ${message}\n`, {
+        headers: { 'Content-Type': 'text/plain; charset=utf-8', ...headers },
+        status,
+      })
+
+/**
  * A refusal of the broker's own, which asking again will not change.
  *
  * `x-should-retry: false` is for the clients that read it; the others decide by
  * status alone, and retry a 5xx for minutes. So a refusal the guest could see
  * end is a 4xx where one is true, and the 5xx left are the broker's own faults.
  */
-const text = (status: number, message: string): Response =>
-  new Response(`broker: ${message}\n`, {
-    headers: { 'Content-Type': 'text/plain; charset=utf-8', 'x-should-retry': 'false' },
-    status,
-  })
+const refusal = (status: number, message: string, json = false): Response =>
+  answer(status, message, json, { 'x-should-retry': 'false' })
 
 /** A failure that may not happen again, which a client is right to retry. */
-const transient = (status: number, message: string): Response =>
-  new Response(`broker: ${message}\n`, {
-    headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-    status,
-  })
+const transient = (status: number, message: string, json: boolean): Response =>
+  answer(status, message, json, {})
 
 /** How a constructed request is sent: `fetch`, unless a test stands in for the provider. */
 type Upstream = (url: string, init: RequestInit) => Promise<Response>
@@ -2097,8 +2137,11 @@ const handle = async (
       reason: decision.reason,
       status: decision.status,
     })
-    return text(decision.status, decision.reason)
+    return refusal(decision.status, decision.reason, decision.json === true)
   }
+  // The broker's own answers below are written as its refusals for the same
+  // host are.
+  const json = apiNames.includes(decision.host)
 
   // Which credential pays and what it was expected to cover, both settled by
   // the path: a git request is for a repository, and an inference request
@@ -2124,7 +2167,7 @@ const handle = async (
     // Fail closed rather than forwarding without the credential: an authorized
     // request that quietly becomes an anonymous one has changed meaning.
     audit({ event: 'error', id, reason: 'credential not held' })
-    return text(500, `${credential} was not delivered to this broker`)
+    return refusal(500, `${credential} was not delivered to this broker`, json)
   }
 
   const started = Date.now()
@@ -2171,10 +2214,10 @@ const handle = async (
       // ends the call and a body still being sent. The upstream was not at
       // fault, and there is no one left to answer.
       audit({ event: 'error', id, ms, reason: 'guest disconnected' })
-      return text(400, 'the request was abandoned')
+      return refusal(400, 'the request was abandoned', json)
     }
     audit({ event: 'error', id, ms, reason: 'upstream unreachable' })
-    return transient(502, `${decision.host} did not answer`)
+    return transient(502, `${decision.host} did not answer`, json)
   }
   clearTimeout(timer)
 
@@ -2187,7 +2230,7 @@ const handle = async (
     // The upstream's own status is recorded, because what the guest is told and
     // what the upstream said are different facts and the log is where they meet.
     audit({ event: 'error', id, ms, reason: refused.reason, upstream: upstream.status })
-    return text(refused.status, refused.reason)
+    return refusal(refused.status, refused.reason, json)
   }
 
   if (upstream.body === null) {
@@ -2642,7 +2685,7 @@ const listen = (
       const id = ids()
       return handle(request, decideFor, credentials, id, send).catch(error => {
         audit({ event: 'error', id, reason: String(error) })
-        return text(500, 'the request could not be completed')
+        return refusal(500, 'the request could not be completed')
       })
     },
     // Off. Bun's default closes a connection that has had nothing written to
