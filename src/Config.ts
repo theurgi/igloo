@@ -500,6 +500,43 @@ const readSource = (
 const KEY_LIMITS =
   'Which models a key may call and what it may spend are set on the key, at the provider: OpenRouter has a credit limit and guardrails per key, Anthropic a spend limit per workspace.'
 
+/** A Nix list literal of these strings. */
+const nixList = (items: readonly string[]): string =>
+  `[ ${items.map(item => `"${nixString(item)}" `).join('')}]`
+
+/**
+ * Refuses a grant listing its repositories in a list `repos`, a `write` beside
+ * it, or both, with the line that lists the same ones as `repos` takes them, to
+ * be copied in their place.
+ */
+const refuseFlatRepos = (
+  where: string,
+  name: string,
+  entry: Record<string, unknown>,
+): Result.Result<never, ConfigError> =>
+  Result.gen(function* () {
+    const read = Array.isArray(entry['repos'])
+      ? yield* readStringList(where, `secrets.${name}.repos`, entry['repos'])
+      : undefined
+    const write =
+      'write' in entry
+        ? yield* readStringList(where, `secrets.${name}.write`, entry['write'])
+        : undefined
+    const line =
+      read === undefined
+        ? `repos.write = ${nixList(write ?? [])};`
+        : write === undefined
+          ? `repos.read = ${nixList(read)};`
+          : `repos = { read = ${nixList(read)}; write = ${nixList(write)}; };`
+    const fields = [
+      ...(read === undefined ? [] : ['`repos`']),
+      ...(write === undefined ? [] : ['`write`']),
+    ]
+    return yield* bad(
+      `${where}: \`secrets.${name}\` lists its repositories in ${fields.join(' and ')}, and \`repos\` takes them by access now, as \`read\` and \`write\`. Write \`${line}\` in ${fields.length === 1 ? 'its' : 'their'} place.`,
+    )
+  })
+
 /**
  * A brokered credential's grant: which profile, and what it may reach.
  *
@@ -528,25 +565,37 @@ const readGrant = (
     // Refused rather than ignored: `repos` on a model grant is someone believing
     // they narrowed something.
     if (isInferenceProfile(profile)) {
-      for (const key of ['repos', 'write']) {
-        if (key in entry) {
-          return yield* bad(
-            `${where}: \`secrets.${name}.${key}\` does not apply to the ${profile} profile, which calls whichever model a request names. ${KEY_LIMITS}`,
-          )
-        }
+      if ('repos' in entry) {
+        return yield* bad(
+          `${where}: \`secrets.${name}.repos\` does not apply to the ${profile} profile, which calls whichever model a request names. ${KEY_LIMITS}`,
+        )
       }
       return { profile }
     }
 
-    const listed = (key: 'repos' | 'write') =>
-      entry[key] === undefined
+    if (Array.isArray(entry['repos'])) return yield* refuseFlatRepos(where, name, entry)
+    const byAccess = entry['repos'] === undefined ? {} : asRecord(entry['repos'])
+    if (byAccess === undefined) {
+      return yield* bad(
+        `${where}: \`secrets.${name}.repos\` must be an attribute set, \`{ read = [ … ]; write = [ … ]; }\`, not ${JSON.stringify(entry['repos'])}.`,
+      )
+    }
+    for (const key of Object.keys(byAccess)) {
+      if (key !== 'read' && key !== 'write') {
+        return yield* bad(
+          `${where}: \`secrets.${name}.repos.${key}\` is not a setting. \`repos\` takes \`read\`, the repositories to fetch and read, and \`write\`, those to push to and write through the API as well.`,
+        )
+      }
+    }
+    const listed = (key: 'read' | 'write') =>
+      byAccess[key] === undefined
         ? Result.succeed([])
-        : readStringList(where, `secrets.${name}.${key}`, entry[key])
-    const repos = yield* listed('repos')
+        : readStringList(where, `secrets.${name}.repos.${key}`, byAccess[key])
+    const repos = yield* listed('read')
     const write = yield* listed('write')
     if (repos.length + write.length === 0) {
       return yield* bad(
-        `${where}: \`secrets.${name}\` lists no repositories in \`repos\` or \`write\`, so the grant reaches nothing. List those this credential may fetch in \`repos\`, and those it may push to and write through the API as well in \`write\`, as \`owner/repo\`.`,
+        `${where}: \`secrets.${name}\` lists no repositories in \`repos.read\` or \`repos.write\`, so the grant reaches nothing. List those this credential may fetch in \`repos.read\`, and those it may push to and write through the API as well in \`repos.write\`, as \`owner/repo\`.`,
       )
     }
     for (const repo of [...repos, ...write]) {
@@ -556,14 +605,14 @@ const readGrant = (
         )
       }
     }
-    // Refused rather than merged: listed in `repos` as well, a repository in
+    // Refused rather than merged: listed in `read` as well, a repository in
     // `write` reads as one someone meant to keep from being pushed to.
     const twice = write.find(repo =>
       repos.some(read => normaliseRepo(read) === normaliseRepo(repo)),
     )
     if (twice !== undefined) {
       return yield* bad(
-        `${where}: \`${twice}\` is in both \`secrets.${name}.repos\` and \`secrets.${name}.write\`. One in \`write\` is fetched and read as well as pushed to, so list it there alone, or in \`repos\` alone to keep it from being pushed to.`,
+        `${where}: \`${twice}\` is in both \`secrets.${name}.repos.read\` and \`secrets.${name}.repos.write\`. One in \`write\` is fetched and read as well as pushed to, so list it there alone, or in \`read\` alone to keep it from being pushed to.`,
       )
     }
     return { profile, repos, ...(write.length === 0 ? {} : { write }) }
@@ -580,10 +629,9 @@ interface Shared {
   readonly projects: readonly string[]
 }
 
-const BODY_KEYS = new Set(['mode', 'profile', 'repos', 'source', 'write'])
+const BODY_KEYS = new Set(['mode', 'profile', 'repos', 'source'])
 
-const BODY_SHAPE =
-  'plus `profile` when the mode is "broker", and `repos` or `write` for a git profile'
+const BODY_SHAPE = 'plus `profile` when the mode is "broker", and `repos` for a git profile'
 
 /** A declaration's fields that are gone, and what to do instead. */
 const removedFromBody = new Map<string, string>([
@@ -600,7 +648,8 @@ const removedFromBody = new Map<string, string>([
 /**
  * A declaration's name and attribute set, before anything in it is read — but
  * not one still setting a field that is gone, which is refused with what to do
- * instead.
+ * instead. `write` is among those, and refused with the repositories it lists
+ * written out under `repos`.
  */
 const readEntry = (
   where: string,
@@ -620,7 +669,7 @@ const readEntry = (
       return bad(`${where}: \`secrets.${name}.${key}\` is no longer a setting: ${gone}`)
     }
   }
-  return Result.succeed(entry)
+  return 'write' in entry ? refuseFlatRepos(where, name, entry) : Result.succeed(entry)
 }
 
 const readBody = (
@@ -638,7 +687,7 @@ const readBody = (
 
     const source = yield* readSource(where, `secrets.${name}.source`, entry['source'])
     if (mode === 'deliver') {
-      for (const key of ['profile', 'repos', 'write']) {
+      for (const key of ['profile', 'repos']) {
         if (key in entry) {
           return yield* bad(
             `${where}: \`secrets.${name}.${key}\` only means something for a brokered credential. A delivered one is handed to the guest whole, so there is nothing left to scope — set \`mode = "broker"\` to have the host hold it and make the requests.`,

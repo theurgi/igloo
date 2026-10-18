@@ -1457,8 +1457,10 @@ EOF
       source = { file = "$broker_config/from-file"; };
       mode = "broker";
       profile = "github";
-      repos = [ "git/git" ];
-      write = [ "git/git-scm.com" ];
+      repos = {
+        read = [ "git/git" ];
+        write = [ "git/git-scm.com" ];
+      };
       projects = [ "$project" ];
     };
     IGLOO_VERIFY_INFERENCE = {
@@ -1887,9 +1889,9 @@ EOF
 			fi
 
 			# Pushes, each a dry run: git asks for the push's ref advertisement
-			# and sends nothing more. The one to the repository in `write` goes to
-			# GitHub with the same invalid token, so it comes back refused; the
-			# others never leave the broker.
+			# and sends nothing more. The one to the repository in `repos.write`
+			# goes to GitHub with the same invalid token, so it comes back
+			# refused; the others never leave the broker.
 			{
 				echo "=== a push to the repository the grant may push to"
 				guest 'cd /tmp && rm -rf pushing && git init -q pushing && cd pushing && git -c user.name=igloo-verify -c user.email=igloo-verify@invalid commit -q --allow-empty -m probe && GIT_TERMINAL_PROMPT=0 git push --dry-run https://github.com/git/git-scm.com HEAD:refs/heads/igloo-verify-probe 2>&1 | head -5'
@@ -1905,7 +1907,7 @@ EOF
 			} >"$out/artifacts/github-push.txt" 2>&1
 			if grep -q 'refused IGLOO_VERIFY_BROKERED; .* not scoped to git/git-scm.com' "$out/artifacts/github-push.txt" &&
 				grep -q '"operation":"push-refs","scope":"git/git-scm.com"' "$out/artifacts/github-push.txt"; then
-				verdict PASS github-push-reaches-upstream "a push to a repository in write reaches github.com through the broker, which reports its own credential being refused"
+				verdict PASS github-push-reaches-upstream "a push to a repository in repos.write reaches github.com through the broker, which reports its own credential being refused"
 			else
 				verdict FAIL github-push-reaches-upstream "read artifacts/github-push.txt, then logs/up-broker/broker.log"
 			fi
@@ -1994,7 +1996,7 @@ EOF
 			write_said=$(awk '/^=== a write under the repository the grant may write/ { getline; print; exit }' "$out/artifacts/github-api.txt")
 			case $write_said in
 			*'api.github.com refused IGLOO_VERIFY_BROKERED; '*' not scoped to git/git-scm.com"'*)
-				verdict PASS github-api-write-reaches-upstream "a write under a repository in write reaches api.github.com through the broker, which reports its own credential being refused"
+				verdict PASS github-api-write-reaches-upstream "a write under a repository in repos.write reaches api.github.com through the broker, which reports its own credential being refused"
 				;;
 			*)
 				verdict FAIL github-api-write-reaches-upstream "read artifacts/github-api.txt, then logs/up-broker/broker.log"
@@ -2011,7 +2013,7 @@ EOF
 			upload_said=$(awk '/^=== an asset uploaded to a release of the repository/ { getline; print; exit }' "$out/artifacts/github-api.txt")
 			case $upload_said in
 			*'uploads.github.com refused IGLOO_VERIFY_BROKERED; '*' not scoped to git/git-scm.com"'*)
-				verdict PASS github-upload-reaches-upstream "an asset uploaded to a release of a repository in write reaches uploads.github.com through the broker, which reports its own credential being refused"
+				verdict PASS github-upload-reaches-upstream "an asset uploaded to a release of a repository in repos.write reaches uploads.github.com through the broker, which reports its own credential being refused"
 				;;
 			*)
 				verdict FAIL github-upload-reaches-upstream "read artifacts/github-api.txt, then logs/up-broker/broker.log"
@@ -2288,8 +2290,10 @@ GUEST
       source = { file = "$broker_config/from-file"; };
       mode = "broker";
       profile = "github";
-      repos = [ "$real_repo" ];
-      $write_line
+      repos = {
+        read = [ "$real_repo" ];
+        $write_line
+      };
       projects = [ "$project" ];
     };
   };
@@ -2385,7 +2389,7 @@ EOF
 								[ "$(said 'the push deleting it')" = 0 ] &&
 								[ "$(said 'branches of that name')" = 0 ] &&
 								[ "$(said 'pushes the broker allowed')" = 2 ]; then
-								verdict PASS github-push-live "a real token pushes a new branch to a repository in write through the broker, and deletes it again"
+								verdict PASS github-push-live "a real token pushes a new branch to a repository in repos.write through the broker, and deletes it again"
 							else
 								verdict FAIL github-push-live "read artifacts/github-push-live.txt; a branch named igloo-verify-… may be left in the scratch repository"
 							fi
@@ -2427,7 +2431,7 @@ EOF
 								[ "$(released 'the release read again')" = 404 ] &&
 								[ "$(released 'uploads the broker allowed')" = 2 ] &&
 								[ "$(released 'writes the broker allowed')" = 2 ]; then
-								verdict PASS github-release-live "a real token makes a draft release in a repository in write through the broker, uploads an asset to it, reads it back, and deletes it — the asset is served from $(released 'the asset read back' | cut -d' ' -f2)"
+								verdict PASS github-release-live "a real token makes a draft release in a repository in repos.write through the broker, uploads an asset to it, reads it back, and deletes it — the asset is served from $(released 'the asset read back' | cut -d' ' -f2)"
 							else
 								verdict FAIL github-release-live "read artifacts/github-release-live.txt; a draft release named igloo host-verify may be left in the scratch repository"
 							fi
@@ -2597,7 +2601,7 @@ EOF
     source = { file = "$broker_config/from-file"; };
     mode = "broker";
     profile = "github";
-    repos = [ "git/git" ];
+    repos.read = [ "git/git" ];
     projects = [ "$project" ];
   };
 }

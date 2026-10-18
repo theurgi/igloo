@@ -58,7 +58,7 @@ The user layer declares credentials once and lists the projects each one goes to
     ];
     mode = "broker";
     profile = "github";
-    repos = [ "alice/demo" ];
+    repos.read = [ "alice/demo" ];
     projects = [ "${config.home.homeDirectory}/projects/demo" ];
   };
 }
@@ -77,17 +77,17 @@ holds its own TLS certificate and key under them.
 
 ### Fields
 
-| Field      | Applies to         | Value                                                                       |
-| ---------- | ------------------ | --------------------------------------------------------------------------- |
-| `source`   | every credential   | `{ file = "…"; }` or `{ command = [ … ]; }`                                 |
-| `mode`     | every credential   | `"broker"` or `"deliver"`                                                   |
-| `profile`  | brokered           | `"anthropic-messages"`, `"openrouter"` or `"github"`                        |
-| `repos`    | brokered, `github` | Repositories to fetch and read, as `owner/repo`.                            |
-| `write`    | brokered, `github` | Repositories to push to and write through the API as well, as `owner/repo`. |
-| `projects` | user layer only    | Absolute paths of the projects' root directories.                           |
+| Field         | Applies to         | Value                                                                       |
+| ------------- | ------------------ | --------------------------------------------------------------------------- |
+| `source`      | every credential   | `{ file = "…"; }` or `{ command = [ … ]; }`                                 |
+| `mode`        | every credential   | `"broker"` or `"deliver"`                                                   |
+| `profile`     | brokered           | `"anthropic-messages"`, `"openrouter"` or `"github"`                        |
+| `repos.read`  | brokered, `github` | Repositories to fetch and read, as `owner/repo`.                            |
+| `repos.write` | brokered, `github` | Repositories to push to and write through the API as well, as `owner/repo`. |
+| `projects`    | user layer only    | Absolute paths of the projects' root directories.                           |
 
-A field that does not apply is refused rather than ignored: `repos` or `write` on a model grant, or
-`profile` on a delivered credential, would be someone believing they had narrowed something.
+A field that does not apply is refused rather than ignored: `repos` on a model grant, or `profile`
+on a delivered credential, would be someone believing they had narrowed something.
 
 A project has at most one brokered credential per profile. A request names no credential, and one to
 GitHub's API may name no repository, so the broker would have no way to choose between two.
@@ -184,32 +184,34 @@ reachable there, never where "there" is. The one upstream policy places is a
   `https://uploads.github.com`, with the token sent the way each takes a fine-grained personal
   access token or a GitHub App installation token.
 - **Operations:**
-  - Fetching, `git clone`, `git fetch` and `git pull`, from the repositories in `repos` and `write`.
-  - Pushing, `git push`, to those in `write`. A push to any other is refused at the first request
-    git makes for it, before anything is sent.
+  - Fetching, `git clone`, `git fetch` and `git pull`, from the repositories in `repos.read` and
+    `repos.write`.
+  - Pushing, `git push`, to those in `repos.write`. A push to any other is refused at the first
+    request git makes for it, before anything is sent.
   - Reading through the REST API, with `GET` or `HEAD`, anything under `repos/<owner>/<repo>/` for a
     repository in either list, with its query, and the API's root, where GitHub gives a token's
     scopes.
-  - Writing through the REST API, under `repos/<owner>/<repo>/` for a repository in `write`, what
-    `gh` writes: issues and pull requests, with their comments, labels, reviews and merges, anywhere
-    under `issues/` and `pulls/`; releases, anywhere under `releases/`; a run's rerun and cancel and
-    a workflow's dispatch, at `actions/runs/<id>/rerun`, `rerun-failed-jobs`, `cancel` and
-    `force-cancel`, `actions/jobs/<id>/rerun` and `actions/workflows/<id>/dispatches`; and a
+  - Writing through the REST API, under `repos/<owner>/<repo>/` for a repository in `repos.write`,
+    what `gh` writes: issues and pull requests, with their comments, labels, reviews and merges,
+    anywhere under `issues/` and `pulls/`; releases, anywhere under `releases/`; a run's rerun and
+    cancel and a workflow's dispatch, at `actions/runs/<id>/rerun`, `rerun-failed-jobs`, `cancel`
+    and `force-cancel`, `actions/jobs/<id>/rerun` and `actions/workflows/<id>/dispatches`; and a
     commit's statuses and checks, at `statuses/<sha>`, `check-runs` and `check-suites`.
   - Uploading a release's asset, `POST repos/<owner>/<repo>/releases/<id>/assets` at
-    `uploads.github.com`, for a repository in `write`, with its query, which names the asset. GitHub
-    takes an asset only with its `Content-Length`, as `gh` sends it, and refuses one sent in chunks.
+    `uploads.github.com`, for a repository in `repos.write`, with its query, which names the asset.
+    GitHub takes an asset only with its `Content-Length`, as `gh` sends it, and refuses one sent in
+    chunks.
   - A GraphQL query, `POST graphql`, whatever it reads or writes. The grant does not bound it: see
     [what a grant does not bound](#what-a-grant-does-not-bound).
-  - Through the API, everything else is refused: a write to a repository only in `repos`; any other
-    write to one in `write`, its settings, collaborators, webhooks, deploy keys, Actions secrets,
-    variables and runners, its contents and refs and its labels among them, even where the token
-    could make it; another repository; and everything outside `repos/` but the root and `graphql`,
-    `gists`, `user/repos` and `search` among it.
-- **Grant:** `repos`, the repositories to fetch and read, and `write`, those to push to and write
-  through the API as well, which are fetched and read without being listed twice. Either may be left
-  out, but not both, and a repository in both is refused. Each is `owner/repo`, with or without
-  `.git`, matched ignoring case.
+  - Through the API, everything else is refused: a write to a repository only in `repos.read`; any
+    other write to one in `repos.write`, its settings, collaborators, webhooks, deploy keys, Actions
+    secrets, variables and runners, its contents and refs and its labels among them, even where the
+    token could make it; another repository; and everything outside `repos/` but the root and
+    `graphql`, `gists`, `user/repos` and `search` among it.
+- **Grant:** `repos.read`, the repositories to fetch and read, and `repos.write`, those to push to
+  and write through the API as well, which are fetched and read without being listed twice. Either
+  may be left out, but not both, and a repository in both is refused. Each is `owner/repo`, with or
+  without `.git`, matched ignoring case.
 - **In the guest:** `git` is installed, and `GH_TOKEN=igloo-broker-holds-the-real-key`, a
   placeholder for GitHub's CLI, `gh`, which makes no request without a token. The broker answers
   `github.com`, `api.github.com` and `uploads.github.com` itself: a connection to any of them
@@ -221,20 +223,20 @@ reachable there, never where "there" is. The one upstream policy places is a
 A project has at most one `github` credential: a request to the API may name no repository, so the
 broker could not tell which of two pays. List every repository in the one.
 
-A push to a repository in `write` reaches every branch and tag the token can write to. Which ones it
-updates is in its body, which the broker does not read, so the bound is the repository's own: its
-rulesets, such as no force-push and no deletion on `main`. A token acts as its account, so the token
-of an account a ruleset lets bypass it bypasses it from the guest too. To keep an agent off `main`,
-use a token of an account that is not on the bypass list. A GitHub App's installation token expires
-within an hour, and the broker reads a credential only when the VM boots, so it does not last a
-working session.
+A push to a repository in `repos.write` reaches every branch and tag the token can write to. Which
+ones it updates is in its body, which the broker does not read, so the bound is the repository's
+own: its rulesets, such as no force-push and no deletion on `main`. A token acts as its account, so
+the token of an account a ruleset lets bypass it bypasses it from the guest too. To keep an agent
+off `main`, use a token of an account that is not on the bypass list. A GitHub App's installation
+token expires within an hour, and the broker reads a credential only when the VM boots, so it does
+not last a working session.
 
 With `gh` in the guest, `gh auth status` works, and so do its commands that read a listed
 repository: `gh run list`, `gh run view`, `gh release list`, `gh release view`, `gh repo view`,
 `gh issue list`, `gh pr list`, and `gh api` under `repos/`. Those that read through GraphQL, as most
 of `gh pr`, `gh issue` and `gh repo` do, reach whatever the token reaches, listed or not, and those
 that write through it, as `gh issue create`, `gh pr comment` and `gh pr merge` do, work if the token
-can write. For a repository in `write`, so do those that write through the REST API:
+can write. For a repository in `repos.write`, so do those that write through the REST API:
 `gh release create`, assets included, `gh release upload`, `gh release edit` and
 `gh release delete`, `gh run rerun`, `gh run cancel` and `gh workflow run`. `gh label`,
 `gh run delete`, `gh workflow enable` and `disable`, `gh cache delete`, `gh secret` and
@@ -249,10 +251,10 @@ read a run's log archive from `results-receiver.actions.githubusercontent.com`, 
 
 Scope the token itself to the same repositories. The grant bounds what the broker asks for over git
 and the REST API, and the token bounds what GitHub gives; a GraphQL query is bounded by the token
-alone. Without `write`, make the token read-only. With it, the token needs Contents write, which a
-fine-grained token holds for every repository it reaches, so a GraphQL query can write to one in
-`repos` too. A repository that must not be written belongs in neither `write` nor a token that can
-write.
+alone. Without `repos.write`, make the token read-only. With it, the token needs Contents write,
+which a fine-grained token holds for every repository it reaches, so a GraphQL query can write to
+one in `repos.read` too. A repository that must not be written belongs in neither `repos.write` nor
+a token that can write.
 
 ### How the guest reaches GitHub
 
@@ -280,7 +282,7 @@ key, readable only by you. The guest is built trusting that authority beside the
   days of expiring after ten years. Delete it to have it made again; the next launch rebuilds the
   guest, since the authority is part of it.
 
-Without a repository in `write`, pushing happens from the host, in a repository the agent has
+Without a repository in `repos.write`, pushing happens from the host, in a repository the agent has
 written. Before running `git` there, look at `.git/config` and `.git/hooks`: git runs what they
 name, as you.
 
@@ -454,8 +456,8 @@ On every brokered request:
   only after a lookup, so not even reading it could bound one to the repositories listed. The
   token's own permissions are all that bound it: scope a fine-grained token to exactly the
   repositories listed, with no permission you would not give the agent.
-- **Which refs a push updates.** A push to a repository in `write` reaches every branch and tag the
-  token can write to. The repository's rulesets bound it, and the grant does not.
+- **Which refs a push updates.** A push to a repository in `repos.write` reaches every branch and
+  tag the token can write to. The repository's rulesets bound it, and the grant does not.
 - **What a write through the REST API sets.** A write is allowed by its method and its path, and
   what it sets is in its body. A merge lands on whatever branch the pull request targets, and a
   release creates the tag it names, on the commit it names. The repository's rulesets bound those,
@@ -544,9 +546,9 @@ that way, since it never enters the guest.
   every request to a profile's upstream fails verification. The tunnel does not open the TLS it
   carries, so there the guest's own client does the verifying, and a content module can give the
   guest the authority with `security.pki.certificates`.
-- `github` pushes and writes through the REST API only for the repositories in `write`, and through
-  the REST API writes only what its operations list. Its GraphQL API is passed with the token, and
-  the grant does not bound what a query reads or writes.
+- `github` pushes and writes through the REST API only for the repositories in `repos.write`, and
+  through the REST API writes only what its operations list. Its GraphQL API is passed with the
+  token, and the grant does not bound what a query reads or writes.
 - With a `github` grant, nothing in the guest reaches `github.com`, `api.github.com` or
   `uploads.github.com` but through the broker. Under `restricted` without them in `tunnel`, that
   means only the repositories listed: a release download from `github.com`, a clone of any other
