@@ -56,6 +56,40 @@ jobs:
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
 
+      # The runner's QEMU is nixpkgs' qemu_kvm with microvm.nix's overrides
+      # for a smaller closure, which no binary cache holds, and compiling it
+      # is most of this job. GitHub's cache keeps its closure from one run to
+      # the next, as a binary cache under its store path, so an entry serves
+      # until the derivation changes. microvm.nix does not expose the
+      # derivation, so it is found in testVm's closure by name.
+      - name: Find QEMU
+        id: qemu
+        run: |
+          runner=$(nix eval --raw .#testVm.drvPath)
+          drv=$(nix-store --query --requisites "$runner" | grep -e '-qemu-host-cpu-only-[^/]*\.drv$' || true)
+          if [ -z "$drv" ] || [ "$(wc -l <<<"$drv")" -ne 1 ]; then
+            echo "::error::testVm's closure does not hold exactly one derivation named qemu-host-cpu-only"
+            exit 1
+          fi
+          out=$(nix-store --query --binding out "$drv")
+          echo "out=$out" >>"$GITHUB_OUTPUT"
+          echo "key=${out#/nix/store/}" >>"$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: restore
+        with:
+          path: ${{ runner.temp }}/qemu
+          key: ${{ steps.qemu.outputs.key }}
+
+      # Only a run on main saves an entry, and a run on main restores only
+      # main's, so an entry holds what this job built on main. QEMU from that
+      # build carries no signature, so this copy alone skips the check; the
+      # substituters keep theirs.
+      - name: Import QEMU
+        if: steps.restore.outputs.cache-hit == 'true'
+        env:
+          QEMU: ${{ steps.qemu.outputs.out }}
+        run: nix copy --from "file://$RUNNER_TEMP/qemu" --no-check-sigs "$QEMU"
+
       # The checks build every package. testVm is a mkRunner call, so building
       # it runs the pin comparison and checkBootFile, and the rest are testVm
       # with a content module that has to be refused or change nothing.
@@ -63,3 +97,15 @@ jobs:
       # outputHash that no longer matches bun.lock.
       - name: nix flake check
         run: nix flake check --print-build-logs
+
+      # Uncompressed, since the cache compresses what it saves.
+      - name: Export QEMU
+        if: github.ref == 'refs/heads/main' && steps.restore.outputs.cache-hit != 'true'
+        env:
+          QEMU: ${{ steps.qemu.outputs.out }}
+        run: nix copy --to "file://$RUNNER_TEMP/qemu?compression=none" "$QEMU"
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: github.ref == 'refs/heads/main' && steps.restore.outputs.cache-hit != 'true'
+        with:
+          path: ${{ runner.temp }}/qemu
+          key: ${{ steps.qemu.outputs.key }}
