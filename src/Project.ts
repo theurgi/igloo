@@ -126,6 +126,39 @@ const readMarker = Effect.fnUntraced(function* (markerPath: string) {
   )
 })
 
+const within = (dir: string, parent: string): boolean =>
+  dir === parent || dir.startsWith(`${parent}${path.sep}`)
+
+/**
+ * Refuse a canonical root inside a directory another project's guest writes:
+ * its `workspace/` or `.igloo/home/`. That guest could write the marker there
+ * and the `igloo-policy.nix` beside it, and a root it made would hand the host
+ * its policy, credential commands included.
+ *
+ * Every marker above is checked, not just the nearest, which the guest may have
+ * planted too, placed so that its own workspace does not hold this root. A
+ * marker's presence is enough: that is what makes a directory a project.
+ */
+const refuseNested = Effect.fnUntraced(function* (root: string) {
+  const fs = yield* FileSystem.FileSystem
+  let previous = root
+  let current = path.dirname(root)
+
+  while (current !== previous) {
+    if (yield* fs.exists(path.join(current, MARKER)).pipe(Effect.orElseSucceed(() => false))) {
+      const outer = forRoot(current)
+      const written = [outer.workspaceDir, outer.homeDir].find(dir => within(root, dir))
+      if (written !== undefined) {
+        return yield* new ProjectError({
+          message: `refusing the project at ${root}: it is inside ${written}, which the VM of the project at ${outer.root} writes, so that VM could write its marker and its policy. A project cannot be inside another project's workspace or home.`,
+        })
+      }
+    }
+    previous = current
+    current = path.dirname(current)
+  }
+})
+
 /**
  * Walk up from `startDir` for the marker, so the commands work from any
  * subdirectory of a project the way `git` does.
@@ -143,6 +176,7 @@ export const find = Effect.fnUntraced(function* (startDir: string) {
   while (current !== previous) {
     const markerPath = path.join(current, MARKER)
     if (yield* fs.exists(markerPath).pipe(Effect.orElseSucceed(() => false))) {
+      yield* refuseNested(current)
       yield* readMarker(markerPath)
       return forRoot(current)
     }
@@ -158,7 +192,7 @@ export const find = Effect.fnUntraced(function* (startDir: string) {
 /**
  * Create the project skeleton. Idempotent: an existing marker is left alone, but
  * a missing `.gitignore` is backfilled so a project made by an older version
- * picks it up.
+ * picks it up. Refused where `find` would refuse the result.
  *
  * `.igloo/.gitignore` is `*` because none of this belongs in the project's own
  * history — it is a keypair, a gc-root, logs, and a home directory an agent
@@ -170,6 +204,7 @@ export const init = Effect.fnUntraced(function* (dir: string) {
     Effect.andThen(() => fs.realPath(dir)),
     Effect.mapError(() => new ProjectError({ message: `cannot create ${dir}` })),
   )
+  yield* refuseNested(root)
   const project = forRoot(root)
 
   const make = (target: string) =>

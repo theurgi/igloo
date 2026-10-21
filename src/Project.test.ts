@@ -1,6 +1,6 @@
 import { BunServices } from '@effect/platform-bun'
 import { assert, describe, it } from '@effect/vitest'
-import { Effect, FileSystem, Scope } from 'effect'
+import { Effect, FileSystem, Result, Scope } from 'effect'
 import * as path from 'node:path'
 
 import * as Cid from './Cid.ts'
@@ -161,6 +161,108 @@ describe('Project.init and find', () => {
       }),
     ),
   )
+
+  describe('inside another project', () => {
+    const plant = Effect.fnUntraced(function* (root: string) {
+      const fs = yield* FileSystem.FileSystem
+      yield* fs.makeDirectory(path.join(root, '.igloo'), { recursive: true })
+      yield* fs.writeFileString(
+        path.join(root, '.igloo/project.json'),
+        '{"createdAt":"2026-01-01T00:00:00.000Z","version":1}\n',
+      )
+    })
+
+    const refusal = <A>(result: Result.Result<A, Project.ProjectError>) =>
+      Result.isFailure(result) ? result.failure.message : ''
+
+    // The guest writes the workspace and /root, so a marker there could be its
+    // own, with an igloo-policy.nix beside it that the host would then trust.
+    it.effect('refuses a marker in a checkout in the workspace, naming both projects', () =>
+      provided(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const outer = yield* Project.init(path.join(yield* fs.makeTempDirectoryScoped(), 'api'))
+          const checkout = path.join(outer.workspaceDir, 'repo')
+          yield* plant(checkout)
+          yield* fs.makeDirectory(path.join(checkout, 'src'))
+
+          const message = refusal(
+            yield* Project.find(path.join(checkout, 'src')).pipe(Effect.result),
+          )
+          assert.include(message, `refusing the project at ${checkout}:`)
+          assert.include(message, `the project at ${outer.root} writes`)
+        }),
+      ),
+    )
+
+    it.effect('refuses one at the workspace itself and one in the home directory', () =>
+      provided(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const outer = yield* Project.init(path.join(yield* fs.makeTempDirectoryScoped(), 'api'))
+          const inHome = path.join(outer.homeDir, 'src')
+          yield* plant(outer.workspaceDir)
+          yield* plant(inHome)
+
+          assert.include(
+            refusal(yield* Project.find(outer.workspaceDir).pipe(Effect.result)),
+            `inside ${outer.workspaceDir},`,
+          )
+          assert.include(
+            refusal(yield* Project.find(inHome).pipe(Effect.result)),
+            `inside ${outer.homeDir},`,
+          )
+        }),
+      ),
+    )
+
+    it.effect('looks past a nearer marker whose own workspace does not hold the root', () =>
+      provided(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const outer = yield* Project.init(path.join(yield* fs.makeTempDirectoryScoped(), 'api'))
+          const middle = path.join(outer.workspaceDir, 'repo')
+          const inner = path.join(middle, 'tools')
+          yield* plant(middle)
+          yield* plant(inner)
+
+          assert.include(
+            refusal(yield* Project.find(inner).pipe(Effect.result)),
+            `the project at ${outer.root} writes`,
+          )
+        }),
+      ),
+    )
+
+    it.effect('allows one beside the workspace, whatever its name begins with', () =>
+      provided(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const outer = yield* Project.init(path.join(yield* fs.makeTempDirectoryScoped(), 'api'))
+          const beside = `${outer.workspaceDir}-old`
+          yield* plant(beside)
+
+          assert.strictEqual((yield* Project.find(beside)).root, beside)
+        }),
+      ),
+    )
+
+    it.effect('is refused by init, which leaves no marker', () =>
+      provided(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const outer = yield* Project.init(path.join(yield* fs.makeTempDirectoryScoped(), 'api'))
+          const nested = path.join(outer.workspaceDir, 'repo')
+
+          assert.include(
+            refusal(yield* Project.init(nested).pipe(Effect.result)),
+            `refusing the project at ${nested}:`,
+          )
+          assert.isFalse(yield* fs.exists(path.join(nested, '.igloo')))
+        }),
+      ),
+    )
+  })
 
   it.effect('resolves the starting path, so a symlinked route gives one identity', () =>
     provided(

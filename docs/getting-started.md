@@ -29,7 +29,9 @@ more, so it has no agent yet: [Configuration](configuration.md) covers adding pa
 
 A project is a directory holding the marker `.igloo/project.json`. Every command except `init` finds
 its project by walking up from the current directory, the way `git` finds a repository, so they work
-from any subdirectory.
+from any subdirectory. A project cannot be inside another project's `workspace/` or `.igloo/home/`:
+that project's guest writes there, so it could write the marker and a policy beside it. Every
+command refuses one, `init` included.
 
 ```text
 demo/

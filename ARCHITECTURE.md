@@ -79,9 +79,10 @@ In `$XDG_RUNTIME_DIR/igloo/`, a tmpfs:
 
 `igloo up`, and `igloo attach` before it opens a shell:
 
-1. `Project.find` walks up from the working directory to the marker. `Config.resolve` refuses a
-   policy file in the workspace, reads the policy files in one confined `nix eval`, composes them
-   (`Config.compose`) and lists the content layers that exist.
+1. `Project.find` walks up from the working directory to the marker, refusing one inside another
+   project's workspace or home. `Config.resolve` refuses a policy file in the workspace, reads the
+   policy files in one confined `nix eval`, composes them (`Config.compose`) and lists the content
+   layers that exist.
 2. For a broker that answers a name, `Tls.ensure` makes or finds the project's certificate.
    `Spec.fromConfig` decides where each credential goes, the broker's grants, what the guest is told
    about the broker, and the runner's arguments, the authority the guest trusts among them.
@@ -167,7 +168,9 @@ What a VM may do — its network mode and tunnel destinations, published ports, 
 grants, model servers, memory and CPUs — is read from two files only: the user layer's
 `igloo-policy.nix`, in the directory `IGLOO_USER_LAYER` names, which home-manager builds into the
 store, and the project's, at the project root beside `workspace/` rather than in it. A policy file
-in the workspace is refused, not ignored (`Config.resolve`, through `auditWorkspace`). A project
+in the workspace is refused, not ignored (`Config.resolve`, through `auditWorkspace`). So is a
+project inside another project's `workspace/` or `.igloo/home/`, whose guest could have written its
+marker and the policy beside it (`Project.find`, and `Project.init` before it makes one). A project
 cannot set what is the user layer's to set — memory, CPUs, the broker's memory and the ceilings — or
 ask for a network mode or a tunnel destination above a ceiling the user layer set (`Config.compose`,
 through `settings` and `checkKeys`). A credential or a model server the user layer declares reaches
@@ -182,8 +185,8 @@ pin and throws if any differs, so a content module, one imported from the worksp
 override, widen or add to policy at any priority. Content may come from the workspace: it decides
 what is in the VM, not what the VM may do.
 
-**Held by:** `Config.resolve`, `Config.compose`, and `pins` and the comparison after it in
-`mkRunner` (`nix/runner.nix`).
+**Held by:** `Project.find`, `Config.resolve`, `Config.compose`, and `pins` and the comparison after
+it in `mkRunner` (`nix/runner.nix`).
 
 ### No guest has a network card
 
