@@ -558,7 +558,7 @@ section "a real launch"
 
 project="$scratch/igloo-verify"
 vm_up=""
-own_name=""
+own_dashed=""
 
 # Units belonging to VMs the host already had up. A check that counts or picks
 # `igloo-*` units counts only what this script's own launches added, since
@@ -684,9 +684,10 @@ cleanup() {
 		done
 		[ -z "${IGLOO_VERIFY_GITHUB_REPO:-}" ] || printf 'repository=%s\n' "$IGLOO_VERIFY_GITHUB_REPO"
 		[ -z "${IGLOO_VERIFY_GITHUB_WRITE_REPO:-}" ] || printf 'repository=%s\n' "$IGLOO_VERIFY_GITHUB_WRITE_REPO"
-		# A name that spells one of this machine's addresses, which the address
-		# scrub cannot recognise in that spelling.
-		[ -z "$own_name" ] || printf 'own-address=%s\n' "$own_name"
+		# One of this machine's addresses as the wildcard-DNS names spell it,
+		# which the address scrub cannot recognise in that spelling. Bare, so
+		# that it goes from every name it is part of.
+		[ -z "$own_dashed" ] || printf 'own-address=%s\n' "$own_dashed"
 	} | "$repo/scripts/redact.sh" "$out"
 }
 trap cleanup EXIT
@@ -2700,7 +2701,28 @@ EOF
 			# refuse, since the address is as public as anyone's. IPv6, because a
 			# machine behind NAT has no public IPv4 of its own.
 			own=$(ip -6 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | grep -E '^[23]' | head -1)
-			[ -z "$own" ] || own_name="$(printf '%s' "$own" | tr ':' '-').sslip.io"
+			[ -z "$own" ] || own_dashed=$(printf '%s' "$own" | tr ':' '-')
+
+			# Each address is spelled under these services in turn, since one can
+			# be out of reach from here while another answers. A name the broker
+			# cannot resolve says only that its service is unavailable — whether
+			# the broker resolves names at all is internet-reaches-any-name's to
+			# say — so the first name it does resolve decides, refused or not.
+			wildcard_dns=(sslip.io nip.io)
+			tried_dns=${wildcard_dns[*]}
+			tried_dns=${tried_dns// /, }
+			first_resolving() { # first_resolving <name>... — sets resolving to the first the broker resolved, or to nothing
+				resolving=""
+				local name answer
+				for name in "$@"; do
+					answer=$(guest "$(connect_via_tunnel "$name:443")" 2>&1 | head -5)
+					printf '%s\n' "--- $name" "$answer"
+					if ! grep -qF "broker: $name does not resolve" <<<"$answer"; then
+						resolving=$name
+						return
+					fi
+				done
+			}
 
 			step down-for-internet -- "$repo/bin/igloo" down
 			if step up-internet -- "$repo/bin/igloo" up; then
@@ -2715,12 +2737,15 @@ EOF
 					echo "=== a public name no ceiling lists, through the tunnel"
 					guest 'timeout 30 curl -sS -o /dev/null -w "example %{http_code}\n" https://example.com/ 2>&1'
 					echo
-					echo "=== a name that resolves to loopback"
-					guest "$(connect_via_tunnel 127-0-0-1.sslip.io:443)" 2>&1 | head -5
+					echo "=== a name that resolves to loopback, under each service until one resolves"
+					first_resolving "${wildcard_dns[@]/#/127-0-0-1.}"
+					inside_name=$resolving
 					echo
-					echo "=== a name that resolves to one of this machine's own public addresses"
-					if [ -n "$own_name" ]; then
-						guest "$(connect_via_tunnel "$own_name:443")" 2>&1 | head -5
+					echo "=== a name that resolves to one of this machine's own public addresses, the same way"
+					own_name=""
+					if [ -n "$own_dashed" ]; then
+						first_resolving "${wildcard_dns[@]/#/$own_dashed.}"
+						own_name=$resolving
 					else
 						echo "none: this machine holds no global IPv6 address"
 					fi
@@ -2776,15 +2801,19 @@ EOF
 					verdict FAIL internet-reaches-any-name "example.com was not reached — read artifacts/internet.txt, then logs/up-internet/broker.log"
 				fi
 
-				if grep -q "127-0-0-1.sslip.io resolves only to addresses inside this machine's own networks" "$out/artifacts/internet.txt"; then
+				if [ -z "$inside_name" ]; then
+					verdict NOTE internet-refuses-inside "not checked: a name for loopback under each of $tried_dns does not resolve"
+				elif grep -qF "$inside_name resolves only to addresses inside this machine's own networks" "$out/artifacts/internet.txt"; then
 					verdict PASS internet-refuses-inside "a name resolving inside this machine is refused, whatever the name"
 				else
 					verdict FAIL internet-refuses-inside "a name resolving to loopback was not refused — read artifacts/internet.txt"
 				fi
 
-				if [ -z "$own_name" ]; then
+				if [ -z "$own_dashed" ]; then
 					verdict NOTE internet-refuses-own-address "not checked: this machine holds no global IPv6 address to point a name at"
-				elif grep -q "resolves only to this machine's own addresses" "$out/artifacts/internet.txt"; then
+				elif [ -z "$own_name" ]; then
+					verdict NOTE internet-refuses-own-address "not checked: a name for this machine's own address under each of $tried_dns does not resolve"
+				elif grep -qF "$own_name resolves only to this machine's own addresses" "$out/artifacts/internet.txt"; then
 					verdict PASS internet-refuses-own-address "a name resolving to this machine's own public address is refused"
 				else
 					verdict FAIL internet-refuses-own-address "a name resolving to this machine's own address was not refused — read artifacts/internet.txt"

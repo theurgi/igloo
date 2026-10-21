@@ -106,7 +106,9 @@ verdict, such as a timing or a check that was skipped.
   no user layer.
 - The devshell. The script checks for it before it does anything else.
 - Network: for the builds, and for checks that reach public hosts such as github.com,
-  api.anthropic.com and pypi.org through the broker.
+  api.anthropic.com and pypi.org through the broker. The tunnel's refusals are checked with names
+  that sslip.io, or failing it nip.io, resolves to an address of this machine's; with neither, a
+  `NOTE` says they were not checked.
 - 5 to 20 minutes, most of it the first guest build. It runs one VM at a time.
 
 ### Opting in
