@@ -82,7 +82,8 @@ It checks on a real host what the tests cannot reach:
 - **The builds.** `testVm`, the broker, `igloo-landlock` and the package build, and the package's
   `igloo doctor` passes with its environment stripped.
 - **What Landlock keeps.** A process under `igloo-landlock` reaches none of the user's abstract
-  sockets, and only the TCP ports it is allowed.
+  sockets, and only the TCP ports it is allowed, and can make none of the sockets Landlock does not
+  govern.
 - **Launches.** A scratch project is launched about a dozen times: in the fallback sandbox, with
   layers that try to read past what evaluation may, with a networked derivation, a published port,
   delivered and brokered credentials, and under `restricted` and `internet`. Each launch is checked

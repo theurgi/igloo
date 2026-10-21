@@ -270,7 +270,8 @@ section "what Landlock keeps"
 # be: an abstract socket and a loopback port to reach, and a TCP port to listen
 # on. Run plainly, the probe reaches all three, which shows it can; under the
 # helper, none of them. Then once more with the loopback port allowed by name,
-# which it must reach while the abstract socket stays refused.
+# which it must reach while the abstract socket stays refused. A second probe
+# tries the same loopback port with the sockets Landlock does not govern.
 landlock_bin=""
 started=$EPOCHREALTIME
 landlock_out=$(nix build --impure --no-link --print-out-paths "$repo#landlock" 2>"$out/steps/build-landlock.txt")
@@ -333,6 +334,62 @@ if [ -n "$landlock_bin" ]; then
 		// its own choosing.
 		outcome('unbound listen', libc.symbols.listen(libc.symbols.socket(2, 1, 0), 1))
 	EOF
+	cat >"$scratch/landlock-mptcp.ts" <<-'EOF'
+		// landlock-mptcp <port> — one line per socket Landlock does not govern,
+		// made to connect to the loopback port or to bind a port of its own, and
+		// for an io_uring ring, which could make one without socket(); then a UDP
+		// send, which Landlock leaves alone. Each with the kernel's errno when it
+		// was refused, read through libc as landlock-probe's are.
+		import { dlopen, ptr, read } from 'bun:ffi'
+		const libc = dlopen('libc.so.6', {
+			__errno_location: { args: [], returns: 'ptr' },
+			bind: { args: ['i32', 'ptr', 'u32'], returns: 'i32' },
+			connect: { args: ['i32', 'ptr', 'u32'], returns: 'i32' },
+			sendto: { args: ['i32', 'ptr', 'u64', 'i32', 'ptr', 'u32'], returns: 'i32' },
+			socket: { args: ['i32', 'i32', 'i32'], returns: 'i32' },
+			syscall: { args: ['i64', 'i64', 'ptr'], returns: 'i32' },
+		})
+		const names: Record<number, string> = {
+			1: 'EPERM',
+			13: 'EACCES',
+			92: 'ENOPROTOOPT',
+			93: 'EPROTONOSUPPORT',
+			97: 'EAFNOSUPPORT',
+			111: 'ECONNREFUSED',
+		}
+		const [AF_INET, AF_SMC, SOCK_STREAM, SOCK_DGRAM] = [2, 43, 1, 2]
+		const [IPPROTO_SCTP, IPPROTO_SMC, IPPROTO_MPTCP] = [132, 256, 262]
+		const io_uring_setup = 425
+		const loopback = (at: number) => {
+			const address = new Uint8Array(16)
+			new DataView(address.buffer).setUint16(0, AF_INET, true)
+			new DataView(address.buffer).setUint16(2, at, false)
+			address.set([127, 0, 0, 1], 4)
+			return address
+		}
+		const outcome = (what: string, result: number) => {
+			if (result >= 0) return console.log(`${what} reached`)
+			const errno = read.i32(libc.symbols.__errno_location()!, 0)
+			console.log(`${what} refused: ${names[errno] ?? `errno ${errno}`}`)
+		}
+		// A socket and then the call, reported as one: a refused socket is the
+		// call refused.
+		const tried = (what: string, protocol: number, call: 'bind' | 'connect', address: Uint8Array) => {
+			const fd = libc.symbols.socket(AF_INET, SOCK_STREAM, protocol)
+			if (fd < 0) return outcome(what, fd)
+			outcome(what, libc.symbols[call](fd, ptr(address), address.length))
+		}
+		const [port = '0'] = process.argv.slice(2)
+		tried('mptcp connect', IPPROTO_MPTCP, 'connect', loopback(Number(port)))
+		tried('mptcp bind', IPPROTO_MPTCP, 'bind', loopback(0))
+		outcome('sctp socket', libc.symbols.socket(AF_INET, SOCK_STREAM, IPPROTO_SCTP))
+		outcome('smc socket', libc.symbols.socket(AF_INET, SOCK_STREAM, IPPROTO_SMC))
+		outcome('af_smc socket', libc.symbols.socket(AF_SMC, SOCK_STREAM, 0))
+		outcome('io_uring', libc.symbols.syscall(io_uring_setup, 1, ptr(new Uint8Array(120))))
+		const udp = libc.symbols.socket(AF_INET, SOCK_DGRAM, 0)
+		const to = loopback(Number(port))
+		outcome('udp send', udp < 0 ? udp : libc.symbols.sendto(udp, ptr(new Uint8Array(1)), 1, 0, ptr(to), to.length))
+	EOF
 	bun "$scratch/landlock-listen.ts" "$abstract" >"$scratch/landlock-port" &
 	listener=$!
 	for _ in $(seq 50); do [ -s "$scratch/landlock-port" ] && break; sleep 0.1; done
@@ -352,6 +409,14 @@ if [ -n "$landlock_bin" ]; then
 		echo "=== igloo-landlock --check"
 		"$landlock_bin" --check && echo "exit 0"
 	} >"$out/artifacts/landlock-reach.txt" 2>&1
+	{
+		echo "=== plain"
+		bun "$scratch/landlock-mptcp.ts" "$port"
+		echo "=== under igloo-landlock --connect-tcp 443"
+		"$landlock_bin" --connect-tcp 443 -- bun "$scratch/landlock-mptcp.ts" "$port"
+		echo "=== under igloo-landlock --bind-tcp <its own port>"
+		"$landlock_bin" --bind-tcp "$own_port" -- bun "$scratch/landlock-mptcp.ts" "$port"
+	} >"$out/artifacts/landlock-mptcp.txt" 2>&1
 	kill "$listener" 2>/dev/null
 
 	# The kernel's own refusals, so that nothing listening — ECONNREFUSED —
@@ -371,6 +436,28 @@ if [ -n "$landlock_bin" ]; then
 	# the kernel picks, which Landlock does not see. landlock.c lists it as left
 	# open; a kernel that closes it shows here as refused.
 	verdict NOTE landlock-unbound-listen "under --bind-tcp, $(grep '^unbound listen ' "$out/artifacts/landlock-reach.txt" | tail -1) — artifacts/landlock-reach.txt has it for each run"
+
+	# Sockets no Landlock rule sees: MPTCP and SMC reach a TCP port, SCTP a
+	# port of its own. Under the helper each is refused as it is made, and so
+	# is an io_uring ring, which would make one without socket(); a UDP send is
+	# not. Run plainly, an MPTCP connect reaches the loopback port, which shows
+	# the probe can, unless no MPTCP socket can be made here at all.
+	mptcp_refused=$(printf '%s\n' \
+		'mptcp connect refused: EPERM' 'mptcp bind refused: EPERM' 'sctp socket refused: EPERM' 'smc socket refused: EPERM' \
+		'af_smc socket refused: EPERM' 'io_uring refused: EPERM' 'udp send reached')
+	mptcp_under=$(sed -n '/^=== under/,$p' "$out/artifacts/landlock-mptcp.txt" | grep -E '^(mptcp|sctp|smc|af_smc|io_uring|udp) ')
+	mptcp_plain=$(sed -n '/^=== plain/,/^=== under/p' "$out/artifacts/landlock-mptcp.txt" | grep '^mptcp connect ')
+	mptcp_proves="under igloo-landlock an MPTCP, SCTP or SMC socket reaches no port the helper does not name: none can be made, nor an io_uring ring that would make one, and UDP still sends"
+	if [ "$mptcp_under" != "$(printf '%s\n%s' "$mptcp_refused" "$mptcp_refused")" ]; then
+		verdict FAIL landlock-mptcp "read artifacts/landlock-mptcp.txt"
+	elif [ "$mptcp_plain" = 'mptcp connect reached' ]; then
+		verdict PASS landlock-mptcp "$mptcp_proves"
+	elif [ "$mptcp_plain" = 'mptcp connect refused: EPROTONOSUPPORT' ] || [ "$mptcp_plain" = 'mptcp connect refused: ENOPROTOOPT' ]; then
+		verdict PASS landlock-mptcp "$mptcp_proves"
+		verdict NOTE landlock-mptcp-plain "no MPTCP socket can be made here even without the helper (${mptcp_plain#mptcp connect }), so the probe could not show one reaching the loopback port"
+	else
+		verdict FAIL landlock-mptcp "without the helper, $mptcp_plain — read artifacts/landlock-mptcp.txt"
+	fi
 fi
 
 # ---------------------------------------------------------- the packaged CLI --

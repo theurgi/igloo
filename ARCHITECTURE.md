@@ -29,8 +29,9 @@ checked there, and a claim here that the code does not bear out is a bug in one 
   It is packaged from that one file and Bun, and imports nothing: not Effect, and nothing else in
   `src/`.
 - **`igloo-landlock`** (`src/landlock.c`). Runs a command under a Landlock ruleset: TCP connections
-  only to the ports named, TCP binds only on the ports named, and no abstract Unix socket. The
-  broker and the published ports run under it.
+  only to the ports named, TCP binds only on the ports named, and no abstract Unix socket; and under
+  a seccomp filter that refuses the sockets Landlock does not govern. The broker and the published
+  ports run under it.
 - **`igloo-store-view`** (`src/store-view.c`). Runs a command in a user and mount namespace whose
   `/nix/store` holds only the store paths listed. The store's virtio-fs daemon runs under it.
 
@@ -302,8 +303,11 @@ own guest and sign nothing.
 The broker runs under `igloo-landlock` (`Vm.brokerArgv`). It may connect over TCP only to the ports
 `connectPorts` names — 443, for every profile and the tunnel; 53, for a resolver that retries over
 TCP; and each granted model server's port — on any address. It may bind no TCP port, and connect to
-no abstract Unix socket made outside its restriction. `igloo-landlock` refuses to run it on a kernel
-without Landlock ABI 6 rather than run it unrestricted.
+no abstract Unix socket made outside its restriction. Landlock governs TCP sockets alone, so
+`igloo-landlock` also refuses the sockets that would reach a port without it: every IP socket that
+is neither TCP nor UDP, among them MPTCP's, SCTP's and SMC's, every `AF_SMC` socket, and io_uring,
+which would make one without `socket()`. It refuses to run the broker on a kernel without Landlock
+ABI 6 or seccomp filters rather than run it unrestricted.
 
 Its unit has user, mount, PID and IPC namespaces of its own and no capabilities, and an empty root.
 In that root are the store, read-only, which holds bun, the broker and `igloo-landlock`; the files
@@ -424,15 +428,16 @@ store, and the tether's also holds the broker's socket directory. The project's 
 `LoadCredential=`, so nothing of the project is in either root. Each has user, mount, PID and IPC
 namespaces of its own and no capabilities. The tether also has its own network, with no IP. The
 ports unit keeps the host's network to listen on its loopback, under `igloo-landlock`, which lets it
-bind the ports it publishes and connect to nothing over TCP; each port is bound on `127.0.0.1`
-alone.
+bind the ports it publishes, connect to nothing over TCP, and make none of the sockets Landlock does
+not govern; each port is bound on `127.0.0.1` alone.
 
 Left open: a `listen()` on a socket never bound still gets a port the kernel picks, which Landlock
 does not see, as the broker's does; and UDP, for the ports unit. Both units keep `AF_VSOCK`, which
 reaches every CID: other VMs' sshd, which refuses them without that project's key, and any vsock
 service on the host.
 
-**Held by:** `Systemd.Forwarder`, `Vm.ts`'s `forwardUnit`, `Vm.portsArgv`, `Vm.portsOptions`.
+**Held by:** `Systemd.Forwarder`, `Vm.ts`'s `forwardUnit`, `Vm.portsArgv`, `Vm.portsOptions`,
+`landlock.c`.
 
 ### The runner is igloo's own, and only its `microvm-run` runs
 

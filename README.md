@@ -41,16 +41,18 @@ The broker holds the project's credentials and serves the guest's requests. Of t
 sees the Nix store, its own sockets and credentials, and the files the host resolves names from:
 none of yours, and none of the sockets the system serves under `/run`. Its network is the host's,
 under Landlock: it connects over TCP only to port 443, port 53 and any granted model server's port,
-and to no abstract socket. It could still use UDP, which Landlock does not cover, or listen on a
+and to no abstract socket. It cannot open the other kinds of socket that would slip past those
+rules, such as MPTCP's, but it could still use UDP, which Landlock does not cover, or listen on a
 port the kernel picks, which Landlock does not see.
 
 The `ssh` sessions that carry the broker's tether and the published ports talk to the guest's sshd,
 which the guest controls, so they are confined too: each sees the Nix store, the user database and
 its project's key, the tether the broker's sockets as well, and none of your files or processes. The
 tether has no IP network at all. The published ports' session shares your network to listen on its
-loopback, and may bind only its own ports and connect to nothing over TCP; like the broker, it could
-still listen on a port the kernel picks. Both sessions can still reach anything listening on vsock:
-other VMs' sshd, which refuses them without that project's key, and any vsock service on the host.
+loopback, and may bind only its own ports and connect to nothing over TCP; like the broker, it
+cannot open a socket that would slip past those rules, and could still listen on a port the kernel
+picks. Both sessions can still reach anything listening on vsock: other VMs' sshd, which refuses
+them without that project's key, and any vsock service on the host.
 
 [`ARCHITECTURE.md`](ARCHITECTURE.md#invariants) says how: each guarantee as an invariant, with the
 code that holds it. A way to break one is a vulnerability; [`SECURITY.md`](SECURITY.md) says how to
