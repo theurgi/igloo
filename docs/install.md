@@ -41,7 +41,7 @@ as a NixOS module:
       url = "github:nix-community/home-manager";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    igloo.url = "github:theurgi/igloo/v0.2.0";
+    igloo.url = "github:theurgi/igloo/v0.2.1";
   };
 
   outputs =
@@ -81,7 +81,7 @@ half goes in the home configuration:
       url = "github:nix-community/home-manager";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    igloo.url = "github:theurgi/igloo/v0.2.0";
+    igloo.url = "github:theurgi/igloo/v0.2.1";
   };
 
   outputs =
@@ -187,7 +187,7 @@ its VMs get the guest core and their project's own layer only.
 ## Other flake outputs
 
 - `packages.x86_64-linux.default`, also named `igloo`: the CLI.
-  `nix run github:theurgi/igloo/v0.2.0 -- doctor` checks a host before anything is installed.
+  `nix run github:theurgi/igloo/v0.2.1 -- doctor` checks a host before anything is installed.
 - `nixosModules.guest`: the guest core, the NixOS module every VM starts from. It is described in
   [Configuration](configuration.md#the-guest-core).
 - `lib.mkRunner`, and the `broker`, `landlock`, `storeView` and `testVm` packages: the pieces the
