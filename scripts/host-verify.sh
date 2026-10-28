@@ -87,16 +87,34 @@ pass=0
 fail=0
 warn=0
 
-say() { printf '%s\n' "$*" >&2; }
+# Text without the control characters a terminal acts on, C1 ones written as
+# UTF-8 among them. Some of what a check reports is what the guest printed.
+printable() { LC_ALL=C sed -e 's/[\x01-\x08\x0b-\x1f\x7f]//g' -e 's/\xc2[\x80-\x9f]//g'; }
+
+say() { printf '%s\n' "$*" | printable >&2; }
 
 verdict() { # verdict PASS|FAIL|NOTE <slug> <what it proves>
-	printf '%s\t%s\t%s\n' "$1" "$2" "$3" >>"$results"
+	local what
+	what=$(printf '%s' "$3" | tr '\t\n' '  ' | printable)
+	printf '%s\t%s\t%s\n' "$1" "$2" "$what" >>"$results"
 	case "$1" in
 	PASS) pass=$((pass + 1)) ;;
 	FAIL) fail=$((fail + 1)) ;;
 	*) warn=$((warn + 1)) ;;
 	esac
-	say "  $1  $2 — $3"
+	say "  $1  $2 — $what"
+}
+
+# The line after <header> in <file>, a file whose headers this script writes
+# with the guest's output between them. A guest that printed a header of its own
+# ahead of the real one would have its next line read as the answer, so a
+# header found more than once gives an answer no check expects.
+after_header() { # after_header <file> <header>
+	awk -v header="$2" '
+		index($0, header) == 1 { n++; want = 1; next }
+		want { value = $0; want = 0 }
+		END { print (n == 1 ? value : "<header repeated>") }
+	' "$1"
 }
 
 # How long the run took, in milliseconds: each section of this script whole,
@@ -2099,7 +2117,7 @@ EOF
 				verdict FAIL github-graphql-reaches-upstream "read artifacts/github-api.txt, then logs/up-broker/broker.log"
 			fi
 			# Sent without the credential, the root would be GitHub's own answer.
-			root_said=$(awk '/^=== the API.s root/ { getline; print; exit }' "$out/artifacts/github-api.txt")
+			root_said=$(after_header "$out/artifacts/github-api.txt" "=== the API's root")
 			case $root_said in
 			*'api.github.com refused IGLOO_VERIFY_BROKERED'*)
 				verdict PASS github-api-root "the API's root, where gh auth status reads a token's scopes, is asked with the broker's credential"
@@ -2115,7 +2133,7 @@ EOF
 			else
 				verdict FAIL github-api-refuses "read artifacts/github-api.txt"
 			fi
-			write_said=$(awk '/^=== a write under the repository the grant may write/ { getline; print; exit }' "$out/artifacts/github-api.txt")
+			write_said=$(after_header "$out/artifacts/github-api.txt" "=== a write under the repository the grant may write")
 			case $write_said in
 			*'api.github.com refused IGLOO_VERIFY_BROKERED; '*' not scoped to git/git-scm.com"'*)
 				verdict PASS github-api-write-reaches-upstream "a write under a repository in repos.write reaches api.github.com through the broker, which reports its own credential being refused"
@@ -2132,7 +2150,7 @@ EOF
 			else
 				verdict FAIL github-api-write-refuses "read artifacts/github-api.txt"
 			fi
-			upload_said=$(awk '/^=== an asset uploaded to a release of the repository/ { getline; print; exit }' "$out/artifacts/github-api.txt")
+			upload_said=$(after_header "$out/artifacts/github-api.txt" "=== an asset uploaded to a release of the repository")
 			case $upload_said in
 			*'uploads.github.com refused IGLOO_VERIFY_BROKERED; '*' not scoped to git/git-scm.com"'*)
 				verdict PASS github-upload-reaches-upstream "an asset uploaded to a release of a repository in repos.write reaches uploads.github.com through the broker, which reports its own credential being refused"
@@ -2141,7 +2159,7 @@ EOF
 				verdict FAIL github-upload-reaches-upstream "read artifacts/github-api.txt, then logs/up-broker/broker.log"
 				;;
 			esac
-			upload_refused=$(awk '/^=== an asset uploaded to a release of one it may only read/ { getline; print; exit }' "$out/artifacts/github-api.txt")
+			upload_refused=$(after_header "$out/artifacts/github-api.txt" "=== an asset uploaded to a release of one it may only read")
 			case $upload_refused in
 			*'this VM may read git/git, not write to it'*)
 				verdict PASS github-upload-refuses "an asset uploaded to a release of a repository the grant may only read is refused, with its reason"
@@ -2460,8 +2478,8 @@ EOF
 
 					# The repository's own answer, once, and its next page named in the
 					# form the grant matches rather than by the repository's number.
-					api_named=$(awk '/^=== the repository read through the API/ { getline; print; exit }' "$out/artifacts/github-git-clone.txt")
-					api_pages=$(awk '/^=== the forms its commits/ { f = 1; next } /^===/ { f = 0 } f && NF' "$out/artifacts/github-git-clone.txt" | tr '\n' ' ')
+					api_named=$(after_header "$out/artifacts/github-git-clone.txt" "=== the repository read through the API")
+					api_pages=$(awk -v header="=== the forms its commits" 'index($0, header) == 1 { n++; f = 1; next } /^===/ { f = 0 } f && NF { s = s $0 " " } END { print (n == 1 ? s : "<header repeated>") }' "$out/artifacts/github-git-clone.txt")
 					if [ "$api_named" = 1 ] && [ "$api_pages" = "/repos/ " ]; then
 						verdict PASS github-api-read "a real token reads a real repository through the API, and its next page is named so that it stays within the grant"
 					else
@@ -2469,7 +2487,7 @@ EOF
 					fi
 					# Data back means the broker's token went with it: the guest holds
 					# only the placeholder, which GitHub refuses.
-					graphql_named=$(awk '/^=== the repository read through GraphQL/ { getline; print; exit }' "$out/artifacts/github-git-clone.txt")
+					graphql_named=$(after_header "$out/artifacts/github-git-clone.txt" "=== the repository read through GraphQL")
 					if [ "$graphql_named" = 1 ]; then
 						verdict PASS github-graphql-read "a real token reads a real repository through GraphQL, sent on by the broker"
 					else
@@ -2505,7 +2523,7 @@ EOF
 								echo "=== what GitHub rejected, if anything, the branch's name left out"
 								guest "grep -o '\[remote rejected\].*' /tmp/pushed.out | sed 's/igloo-verify-[0-9]*/<branch>/g'"
 							} >"$out/artifacts/github-push-live.txt" 2>&1
-							said() { awk -v header="=== $1" 'index($0, header) == 1 { getline; print; exit }' "$out/artifacts/github-push-live.txt"; }
+							said() { after_header "$out/artifacts/github-push-live.txt" "=== $1"; }
 							if [ "$(said 'the push of a new branch')" = 0 ] &&
 								[ "$(said 'the branch on GitHub')" = same ] &&
 								[ "$(said 'the push deleting it')" = 0 ] &&
@@ -2544,8 +2562,8 @@ EOF
 								echo "=== writes the broker allowed, from its log"
 								grep -c '"event":"allow".*"operation":"write"' "$(boot_log broker.log)"
 							} >"$out/artifacts/github-release-live.txt" 2>&1
-							released() { awk -v header="=== $1" 'index($0, header) == 1 { getline; print; exit }' "$out/artifacts/github-release-live.txt"; }
-							chunked_said=$(awk '/^=== an asset uploaded in chunks/ { getline; s = $0; if ((getline) > 0 && $0 !~ /^===/) s = s " " $0; print s; exit }' "$out/artifacts/github-release-live.txt")
+							released() { after_header "$out/artifacts/github-release-live.txt" "=== $1"; }
+							chunked_said=$(awk -v header="=== an asset uploaded in chunks" 'index($0, header) == 1 { n++; want = 2; next } want == 2 { s = $0; want = 1; next } want == 1 { if ($0 !~ /^===/) s = s " " $0; want = 0 } END { print (n == 1 ? s : "<header repeated>") }' "$out/artifacts/github-release-live.txt")
 							if [ "$(released 'the draft release made')" = 201 ] &&
 								[ "$(released 'an asset uploaded with its length')" = 201 ] &&
 								case $(released 'the asset read back') in 302\ https://*) true ;; *) false ;; esac &&
@@ -3067,7 +3085,7 @@ run_time=$(printf '%dm%02ds' $((run_ms / 60000)) $((run_ms / 1000 % 60)))
 	echo "| verdict | check | what it proves |"
 	echo "| --- | --- | --- |"
 	while IFS=$'\t' read -r v s w; do
-		echo "| $v | \`$s\` | $w |"
+		echo "| $v | \`$s\` | ${w//|/\\|} |"
 	done <"$results"
 	echo
 	echo "## Where the time went"
