@@ -82,6 +82,15 @@ const Message = Schema.fromJsonString(
 const lineLimit = 64 * 1024
 
 /**
+ * Text QEMU wrote, with each control character a `?`. The message it goes into
+ * is printed to the user's terminal, and a QEMU the guest has escaped into
+ * chooses the text.
+ */
+const visible = (text: string): string =>
+  // oxlint-disable-next-line no-control-regex -- control characters are what this replaces
+  text.replaceAll(/[\u0000-\u001f\u007f-\u009f]/g, '?')
+
+/**
  * Ask the QEMU at `dir`/`name` to power the guest off, if it is the process
  * `pid`, and return once QEMU has accepted the request. The guest's shutdown
  * takes longer than that; waiting on it is the caller's.
@@ -193,7 +202,9 @@ export const powerdown = Effect.fnUntraced(function* (options: {
     for (;;) {
       const reply = yield* message()
       if (reply.error !== undefined) {
-        return yield* new QmpError({ message: `QEMU refused ${command}: ${reply.error.desc}` })
+        return yield* new QmpError({
+          message: `QEMU refused ${command}: ${visible(reply.error.desc)}`,
+        })
       }
       if ('return' in reply) break
     }

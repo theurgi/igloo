@@ -101,6 +101,29 @@ describe('Qmp.powerdown', () => {
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
   )
 
+  it.live('reports what QEMU said with its control characters made visible', () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped()
+      // A title sequence, a line break and an 8-bit CSI, each of which a
+      // terminal would act on.
+      yield* serve(`${dir}/control.socket`, command =>
+        command === 'system_powerdown'
+          ? String.raw`{"error": {"class": "GenericError", "desc": "\u001b]0;x\u0007no\nACPI\u009b2J"}}`
+          : '{"return": {}}',
+      )
+
+      const result = yield* Effect.result(
+        Qmp.powerdown({ dir, name: 'control.socket', pid: process.pid }),
+      )
+
+      assert.strictEqual(
+        Result.isFailure(result) ? result.failure.message : '',
+        'QEMU refused system_powerdown: ?]0;x?no?ACPI?2J',
+      )
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+  )
+
   it.live('reaches a socket whose path is longer than a socket address holds', () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
