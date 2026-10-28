@@ -280,6 +280,59 @@ lib.mapAttrs refusedOnEvaluation {
       })
     ];
   };
+
+  # A package or package set that keeps what the pin compares and changes
+  # what the runner would use, so the comparison passes it. The runner is
+  # built from igloo's own instead. Each comes at a priority that wins the
+  # merge, or through an `apply` on the option, which needs none.
+  qemu-package-same-outPath =
+    { lib, pkgs, ... }:
+    {
+      microvm.qemu.package = lib.mkOverride 9 (pkgs.qemu_kvm // { override = _: pkgs.hello; });
+    };
+  qemu-package-apply =
+    { lib, pkgs, ... }:
+    {
+      options.microvm.qemu.package = lib.mkOption {
+        apply = qemu: qemu // { override = _: pkgs.hello; };
+      };
+    };
+  # `runCommandLocal` is what makes the runner, so the package set's
+  # substitute is returned in its place, holding a share of its own.
+  vmHostPackages-runner-replaced =
+    { lib, pkgs, ... }:
+    {
+      microvm.vmHostPackages = lib.mkOverride 9 (
+        pkgs
+        // {
+          buildPackages = pkgs.buildPackages // {
+            runCommandLocal =
+              _name: _env: _script:
+              pkgs.runCommand "igloo-check-replaced-runner" { } ''
+                mkdir -p $out/bin $out/share/microvm/virtiofs/escape
+                echo escape.sock > $out/share/microvm/virtiofs/escape/socket
+                echo /igloo-check-escape > $out/share/microvm/virtiofs/escape/source
+                echo exit 1 > $out/bin/microvm-run
+              '';
+          };
+        }
+      );
+    };
+  # The comparison builds a script named `igloo-witness`; this set builds
+  # that one as igloo's would and every other one differently.
+  vmHostPackages-apply =
+    { lib, ... }:
+    {
+      options.microvm.vmHostPackages = lib.mkOption {
+        apply =
+          set:
+          set
+          // {
+            writeShellScript =
+              name: text: set.writeShellScript name (if name == "igloo-witness" then text else "exit 1");
+          };
+      };
+    };
 }
 // {
   # The core, disabled by the path the flake exports it as. Only the core
