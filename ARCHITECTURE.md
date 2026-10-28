@@ -463,13 +463,15 @@ service on the host.
 ### The runner is igloo's own, and only its `microvm-run` runs
 
 `mkRunner` builds the runner with microvm.nix's `buildRunner`, from the configuration it checked
-against the pins and from igloo's own `pkgs`. It reads neither `microvm.runner` nor
-`microvm.declaredRunner`, which a content module could set. The options the runner's host-side
-scripts are built from — `preStart`, `extraArgsScript`, `credentialFiles` and `volumes` — are pinned
-empty, and the programs the host runs from it, QEMU, virtiofsd and the package set its scripts come
-from, are pinned to igloo's. Of the runner, the host reads the share metadata, which is policy, and
-runs `bin/microvm-run` under QEMU's confinement; the daemons' arguments are igloo's own
-(`Virtiofs.argv`).
+against the pins, but with igloo's own QEMU and igloo's own `pkgs` as the package set its scripts
+come from, whatever the merged configuration holds; the pins on both refuse a content module that
+names another. It reads neither `microvm.runner` nor `microvm.declaredRunner`, which a content
+module could set. The options the runner's host-side scripts are built from — `preStart`,
+`extraArgsScript`, `credentialFiles` and `volumes` — are pinned empty. Of the runner, the host reads
+the share metadata, which is policy, and runs `bin/microvm-run` under QEMU's confinement. The
+virtio-fs daemons are igloo's own binary with igloo's own arguments (`Virtiofs.argv`): the runner's
+virtiofsd is pinned only so that binary is in its closure, which the store's daemon needs, and a
+launch refuses a runner whose closure lacks it.
 
 `down` sends the power event over QMP itself, to the QEMU unit's `MainPID` alone, checked on the
 connection with `SO_PEERCRED` (`Qmp.powerdown`), and then waits on the unit rather than the socket.

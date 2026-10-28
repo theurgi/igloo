@@ -322,16 +322,25 @@ let
         "microvm.preStart".value = "";
         "microvm.volumes".value = [ ];
 
-        # The binaries the host runs, and the package set the runner's
+        # The hypervisor the host runs, and the package set the runner's
         # scripts are built from. `pkgs` here is igloo's own, resolved
         # outside the guest evaluation — the guest's `pkgs` carries whatever
         # overlays `contentModules` added, so taking these from a guest
-        # module's arguments would hand the hypervisor, the virtiofs daemon
-        # and the scripts' shell to content.
+        # module's arguments would hand the hypervisor and the scripts' shell
+        # to content. The runner below is built from igloo's whatever the
+        # merged values are; the comparison refuses a module that names
+        # another.
         "microvm.qemu.package" = {
           value = pkgs.qemu_kvm;
           same = held: held.outPath == pkgs.qemu_kvm.outPath;
         };
+        # The daemons serving the shares are igloo's own binary, not the
+        # runner's, whose virtiofsd reaches only `bin/virtiofsd-run`, which
+        # nothing runs. Pinned so that the binary the host runs is in the
+        # runner's closure: the store's daemon sees nothing else of the
+        # store. A value that keeps the `outPath` and changes what
+        # `lib.getExe` finds still drops it, and the launch refuses that
+        # runner.
         "microvm.virtiofsd.package" = {
           value = pkgs.virtiofsd;
           same = held: held.outPath == pkgs.virtiofsd.outPath;
@@ -443,12 +452,24 @@ let
       # The arguments microvm.nix's module passes, but with igloo's `pkgs`:
       # `buildRunner` takes `lib` and the kernel image's file name from it,
       # and the guest's carries whatever overlays content added.
+      #
+      # The package set and QEMU are igloo's too, rather than the merged
+      # values `pins` compared. The comparison reads one derivation of each
+      # — QEMU's `outPath`, the package set's `writeShellScript` — and a
+      # value that keeps that and changes anything else passes it, while
+      # `buildRunner` uses the rest: QEMU through its `override`, and the
+      # package set through every script and the `runCommandLocal` that
+      # makes the runner itself.
       runner =
         (microvm.lib.buildRunner {
           inherit pkgs;
           microvmConfig = guest.config.microvm // {
             inherit hostName;
             hypervisor = "qemu";
+            vmHostPackages = pkgs;
+            qemu = guest.config.microvm.qemu // {
+              package = pkgs.qemu_kvm;
+            };
           };
           inherit (guest.config.system.build) toplevel;
         }).overrideAttrs
