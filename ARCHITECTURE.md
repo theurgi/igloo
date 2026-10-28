@@ -95,9 +95,9 @@ In `$XDG_RUNTIME_DIR/igloo/`, a tmpfs:
 6. The runner is evaluated once, confined, to a `.drv` (`Vm.ts`'s `instantiate`). The build plan is
    checked (`BuildPlan.check`) and that same `.drv` built (`Vm.ts`'s `build`), pinned by the
    gc-root.
-7. The shares are read off the runner (`Virtiofs.shares`) and its closure listed
-   (`StoreView.closure`). A virtio-fs daemon starts for each share, and once every socket exists,
-   QEMU. The launch waits until `ssh` over vsock answers.
+7. The shares are read off the runner (`Virtiofs.shares`) and held to the ones the launch asked for
+   (`Virtiofs.match`), and its closure listed (`StoreView.closure`). A virtio-fs daemon starts for
+   each share, and once every socket exists, QEMU. The launch waits until `ssh` over vsock answers.
 8. The broker, then the tether, then the published ports.
 
 Each step is timed into the launch's boot record (`BootLog`), which keeps the units' logs beside it.
@@ -120,7 +120,7 @@ Every module but `index.ts` has its tests beside it, in `src/<Module>.test.ts`.
 | `BuildPlan.ts`                 | What building a runner would run, and which of it igloo refuses.                              |
 | `Vm.ts`                        | The launch, `attach`, `down` and `ls`, and the command lines of the broker and the forwards.  |
 | `Systemd.ts`                   | The transient user units a VM runs as, and their three confinements.                          |
-| `Virtiofs.ts`                  | One virtio-fs daemon per share: the shares, read off the runner, and each daemon's arguments. |
+| `Virtiofs.ts`                  | One virtio-fs daemon per share: the runner's shares, checked, and each daemon's command line. |
 | `StoreView.ts`, `store-view.c` | The guest's closure-only `/nix/store`, through `igloo-store-view`.                            |
 | `landlock.c`                   | `igloo-landlock`.                                                                             |
 | `Qmp.ts`                       | `down`'s power event, sent only to QEMU's own process.                                        |
@@ -210,9 +210,12 @@ with a grant or somewhere to tunnel to. The broker does not know the network mod
 `microvm.volumes` empty. The store's virtio-fs daemon runs under `igloo-store-view`, in a mount
 namespace whose `/nix/store` holds the runner's closure and nothing else, each path bound read-only,
 and serves it with `--readonly`. An empty closure stops the launch rather than serving the whole
-store. The rest of the project, the host's key in `.igloo/ssh/` among it, is not shared.
+store. The rest of the project, the host's key in `.igloo/ssh/` among it, is not shared. A launch
+serves a runner's shares only if they are those three, each by its tag with its source exactly and
+its socket a bare file name, and which one is the store's is decided by that comparison.
 
-**Held by:** `mkRunner`'s `pins`, `Spec.fromConfig`, `Vm.launch`, `store-view.c`, `Virtiofs.argv`.
+**Held by:** `mkRunner`'s `pins`, `Spec.fromConfig`, `Vm.launch`, `Virtiofs.match`, `store-view.c`,
+`Virtiofs.argv`.
 
 ### The broker constructs every upstream request from its grants
 
@@ -468,15 +471,17 @@ come from, whatever the merged configuration holds; the pins on both refuse a co
 names another. It reads neither `microvm.runner` nor `microvm.declaredRunner`, which a content
 module could set. The options the runner's host-side scripts are built from — `preStart`,
 `extraArgsScript`, `credentialFiles` and `volumes` — are pinned empty. Of the runner, the host reads
-the share metadata, which is policy, and runs `bin/microvm-run` under QEMU's confinement. The
-virtio-fs daemons are igloo's own binary with igloo's own arguments (`Virtiofs.argv`): the runner's
-virtiofsd is pinned only so that binary is in its closure, which the store's daemon needs, and a
-launch refuses a runner whose closure lacks it.
+the share metadata, refused unless it names exactly the shares the launch asked for
+(`Virtiofs.match`), and runs `bin/microvm-run` under QEMU's confinement. The virtio-fs daemons are
+igloo's own binary with igloo's own arguments (`Virtiofs.argv`): the runner's virtiofsd is pinned
+only so that binary is in its closure, which the store's daemon needs, and a launch refuses a runner
+whose closure lacks it.
 
 `down` sends the power event over QMP itself, to the QEMU unit's `MainPID` alone, checked on the
 connection with `SO_PEERCRED` (`Qmp.powerdown`), and then waits on the unit rather than the socket.
 
-**Held by:** `mkRunner`'s `runner` and `pins`, `Vm.launch`, `Qmp.powerdown`, `Vm.down`.
+**Held by:** `mkRunner`'s `runner` and `pins`, `Vm.launch`, `Virtiofs.match`, `Qmp.powerdown`,
+`Vm.down`.
 
 ### The CLI does not own a VM's lifetime
 

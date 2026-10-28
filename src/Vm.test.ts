@@ -41,6 +41,18 @@ const runnerShown = json({
   version: 4,
 })
 
+/** A share as the fake runner declares it, under its tag. */
+interface Declared {
+  readonly socket: string
+  readonly source: string
+}
+
+/** What the fake runner declares unless told otherwise: what `specIn` asks for. */
+const declaredShares = (dir: string): Record<string, Declared> => ({
+  'ro-store': { socket: 'igloo-test-virtiofs-ro-store.sock', source: '/nix/store' },
+  workspace: { socket: 'igloo-test-virtiofs-workspace.sock', source: `${dir}/workspace` },
+})
+
 /**
  * A tool by a path inside the store, which is all QEMU's confined unit can run.
  * Resolved through its directory rather than to the file itself: a multi-call
@@ -122,6 +134,8 @@ const writeFakes = Effect.fnUntraced(function* (
     readonly runnerBuilt?: boolean
     /** The spec's, when it is not `specIn`'s. */
     readonly runtimeDir?: string
+    /** The shares the runner declares. By default, `declaredShares`. */
+    readonly shares?: Record<string, Declared>
     /** What `nix derivation show` prints. By default, `runnerShown`. */
     readonly shown?: string
     /**
@@ -199,12 +213,14 @@ if [ "$1" = "build" ]; then
   done
   printf 'x' >> '${buildCount}'
   mkdir -p '${store}/bin'
-  mkdir -p '${store}/share/microvm/virtiofs/ro-store' '${store}/share/microvm/virtiofs/workspace'
-  echo 'igloo-test-virtiofs-ro-store.sock' > '${store}/share/microvm/virtiofs/ro-store/socket'
-  echo '/nix/store' > '${store}/share/microvm/virtiofs/ro-store/source'
-  echo 'igloo-test-virtiofs-workspace.sock' > '${store}/share/microvm/virtiofs/workspace/socket'
-  echo '${workspace}' > '${store}/share/microvm/virtiofs/workspace/source'
-  cat > '${store}/bin/microvm-run' <<'EOS'
+${Object.entries(options?.shares ?? declaredShares(dir))
+  .map(
+    ([tag, { socket, source }]) => `  mkdir -p '${store}/share/microvm/virtiofs/${tag}'
+  echo '${socket}' > '${store}/share/microvm/virtiofs/${tag}/socket'
+  echo '${source}' > '${store}/share/microvm/virtiofs/${tag}/source'
+`,
+  )
+  .join('')}  cat > '${store}/bin/microvm-run' <<'EOS'
 #!${bash}
 for p in ${unreachable.map(path => `'${path}'`).join(' ')}; do [ -r "$p" ] && echo "$p"; done > sight
 exec ${perl} '${store}/qmp.pl'
@@ -461,6 +477,7 @@ const specIn = (dir: string, label: string, cid = 42): VmSpec => ({
   projectRoot: `${dir}/project`,
   runnerRootLink: `${dir}/project/.igloo/runners/current`,
   runtimeDir: `${dir}/run`,
+  shares: [{ source: `${dir}/workspace`, tag: 'workspace' }],
   unitEnv: { PATH },
   owner: { gid: 100, uid: 1000 },
   virtiofsdThreads: 2,
@@ -1144,6 +1161,74 @@ describe('Vm.up', () => {
         assert.include(Result.isFailure(result) ? result.failure.message : '', 'does not read')
         assert.isFalse(yield* fs.exists(fakes.buildCount))
       }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+    30_000,
+  )
+
+  // A runner whose shares are not the ones asked for is not one `mkRunner`
+  // built, so nothing it names is served, and QEMU does not start.
+  const refusedForShares = (
+    label: string,
+    shares: (dir: string) => Record<string, Declared>,
+    message: string,
+  ) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped()
+      const fakes = yield* writeFakes(dir, { shares: shares(dir) })
+      const spec = specIn(dir, label)
+      yield* Effect.addFinalizer(() => Systemd.stopSlice('systemctl', sliceOf(spec)))
+
+      const result = yield* Effect.result(Vm.up(fakes.binaries, spec))
+
+      assert.include(Result.isFailure(result) ? result.failure.message : '', message)
+      for (const tag of Object.keys(shares(dir))) {
+        assert.isFalse(
+          yield* Systemd.isActive('systemctl', `igloo-${spec.id}-virtiofsd-${tag}.service`),
+          `${tag} daemon started`,
+        )
+      }
+      assert.isFalse(yield* Systemd.isActive('systemctl', `igloo-${spec.id}-qemu.service`))
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer))
+
+  it.live(
+    'refuses a runner declaring a share nothing asked for',
+    () =>
+      refusedForShares(
+        'selftest-share-extra',
+        dir => ({
+          ...declaredShares(dir),
+          escape: { socket: 'escape.sock', source: `${dir}/project` },
+        }),
+        'declares a share igloo did not ask for: escape',
+      ),
+    30_000,
+  )
+
+  it.live(
+    'refuses a runner declaring the store by another spelling of its path',
+    () =>
+      refusedForShares(
+        'selftest-share-store',
+        dir => ({
+          ...declaredShares(dir),
+          'ro-store': { socket: 'igloo-test-virtiofs-ro-store.sock', source: '/nix/store/' },
+        }),
+        'declares ro-store as /nix/store/, where igloo asked for /nix/store',
+      ),
+    30_000,
+  )
+
+  it.live(
+    'refuses a runner naming a socket outside the runtime directory',
+    () =>
+      refusedForShares(
+        'selftest-share-socket',
+        dir => ({
+          ...declaredShares(dir),
+          workspace: { socket: '../escape.sock', source: `${dir}/workspace` },
+        }),
+        "names workspace's socket ../escape.sock, which is not a file name",
+      ),
     30_000,
   )
 

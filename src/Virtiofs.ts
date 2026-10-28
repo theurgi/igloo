@@ -1,4 +1,4 @@
-import { Effect, FileSystem } from 'effect'
+import { Effect, FileSystem, Result } from 'effect'
 
 import { storeDir } from './StoreView.ts'
 
@@ -44,6 +44,64 @@ export const shares = Effect.fnUntraced(function* (outPath: string) {
   }
   return found
 })
+
+/**
+ * A share a runner has to declare, as the launch asked for it: its tag and its
+ * source. Not its socket, which is named after the guest's hostname.
+ */
+export interface Expected {
+  readonly source: string
+  readonly tag: string
+}
+
+/** The store's share, which `mkRunner` adds to every runner. */
+export const storeShare: Expected = { source: storeDir, tag: 'ro-store' }
+
+/**
+ * A share to serve, and whether it is the store's: the one whose daemon is
+ * read-only and sees a single closure.
+ */
+export interface Served extends Share {
+  readonly store: boolean
+}
+
+/**
+ * The shares a runner declares, held to the ones the launch asked for: the
+ * store's and `expected`, each by its tag with exactly that source, and no
+ * others. The shares are policy, so a runner that differs is not one `mkRunner`
+ * built, and a daemon serving what it names would hand the guest a host
+ * directory nobody chose.
+ *
+ * Each socket has to be a bare file name: the daemon binds it relative to the
+ * runtime directory, so a name with a slash in it is a path elsewhere on the
+ * host.
+ *
+ * Which share is the store's is decided here, by its tag and its source
+ * together, rather than by a source alone.
+ */
+export const match = (
+  declared: readonly Share[],
+  expected: readonly Expected[],
+): Result.Result<Array<Served>, string> => {
+  const wanted = new Map([storeShare, ...expected].map(share => [share.tag, share.source]))
+  for (const share of declared) {
+    const source = wanted.get(share.tag)
+    if (source === undefined) {
+      return Result.fail(`declares a share igloo did not ask for: ${share.tag}, of ${share.source}`)
+    }
+    if (share.source !== source) {
+      return Result.fail(
+        `declares ${share.tag} as ${share.source}, where igloo asked for ${source}`,
+      )
+    }
+    if (share.socket === '.' || share.socket === '..' || share.socket.includes('/')) {
+      return Result.fail(`names ${share.tag}'s socket ${share.socket}, which is not a file name`)
+    }
+  }
+  const missing = [...wanted.keys()].filter(tag => !declared.some(share => share.tag === tag))
+  if (missing.length > 0) return Result.fail(`declares no share for ${missing.join(', ')}`)
+  return Result.succeed(declared.map(share => ({ ...share, store: share.tag === storeShare.tag })))
+}
 
 /**
  * The argument vector for one share's daemon.
@@ -93,7 +151,7 @@ export const shares = Effect.fnUntraced(function* (outPath: string) {
 export const argv = (options: {
   /** The ids the daemon runs as, which are the invoking user's. */
   readonly owner: { readonly gid: number; readonly uid: number }
-  readonly share: Share
+  readonly share: Served
   readonly threads: number
   readonly virtiofsd: string
 }): [string, ...string[]] => [
@@ -104,7 +162,7 @@ export const argv = (options: {
   '--seccomp=kill',
   '--thread-pool-size',
   String(options.threads),
-  ...(options.share.source === storeDir
+  ...(options.share.store
     ? [
         '--readonly',
         '--translate-uid=host:65534:0:1',

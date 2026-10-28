@@ -1,12 +1,13 @@
 import { BunServices } from '@effect/platform-bun'
 import { assert, describe, it } from '@effect/vitest'
-import { Effect, FileSystem } from 'effect'
+import { Effect, FileSystem, Result } from 'effect'
 
 import * as Virtiofs from './Virtiofs.ts'
 
-const share: Virtiofs.Share = {
+const share: Virtiofs.Served = {
   socket: 'guest-virtiofs-ro-store.sock',
   source: '/nix/store',
+  store: true,
   tag: 'ro-store',
 }
 
@@ -28,7 +29,12 @@ describe('Virtiofs.argv', () => {
   it('asks for its own sandbox on every share, rather than relying on the default', () => {
     const home = Virtiofs.argv({
       owner,
-      share: { socket: 'guest-virtiofs-home.sock', source: '/host/proj/.igloo/home', tag: 'home' },
+      share: {
+        socket: 'guest-virtiofs-home.sock',
+        source: '/host/proj/.igloo/home',
+        store: false,
+        tag: 'home',
+      },
       threads: 8,
       virtiofsd: '/store/bin/virtiofsd',
     })
@@ -68,7 +74,12 @@ describe('Virtiofs.argv', () => {
   it('translates nothing on a share the invoking user owns', () => {
     const home = Virtiofs.argv({
       owner,
-      share: { socket: 'guest-virtiofs-home.sock', source: '/host/proj/.igloo/home', tag: 'home' },
+      share: {
+        socket: 'guest-virtiofs-home.sock',
+        source: '/host/proj/.igloo/home',
+        store: false,
+        tag: 'home',
+      },
       threads: 8,
       virtiofsd: '/store/bin/virtiofsd',
     })
@@ -81,6 +92,78 @@ describe('Virtiofs.argv', () => {
     // Without it the guest auto-mounts a virtiofs per closure path, and tearing
     // those down at poweroff hangs the shutdown job.
     assert.include(argv, '--no-announce-submounts')
+  })
+})
+
+describe('Virtiofs.match', () => {
+  const expected = [
+    { source: '/p/home', tag: 'home' },
+    { source: '/p/workspace', tag: 'workspace' },
+  ]
+  const declared: Virtiofs.Share[] = [
+    { socket: 'g-virtiofs-home.sock', source: '/p/home', tag: 'home' },
+    { socket: 'g-virtiofs-ro-store.sock', source: '/nix/store', tag: 'ro-store' },
+    { socket: 'g-virtiofs-workspace.sock', source: '/p/workspace', tag: 'workspace' },
+  ]
+  const refusal = (shares: readonly Virtiofs.Share[]): string => {
+    const result = Virtiofs.match(shares, expected)
+    return Result.isFailure(result) ? result.failure : ''
+  }
+
+  it('serves the shares asked for, in the order declared, marking the store’s', () => {
+    const result = Virtiofs.match(declared, expected)
+    assert.isTrue(Result.isSuccess(result))
+    assert.deepStrictEqual(
+      Result.isSuccess(result) ? result.success.map(({ store, tag }) => ({ store, tag })) : [],
+      [
+        { store: false, tag: 'home' },
+        { store: true, tag: 'ro-store' },
+        { store: false, tag: 'workspace' },
+      ],
+    )
+  })
+
+  it('refuses a share nothing asked for', () => {
+    assert.include(
+      refusal([...declared, { socket: 'escape.sock', source: '/home', tag: 'escape' }]),
+      'did not ask for: escape, of /home',
+    )
+  })
+
+  it('refuses a share asked for, from another source', () => {
+    assert.include(
+      refusal(
+        declared.map(entry => (entry.tag === 'home' ? { ...entry, source: '/home' } : entry)),
+      ),
+      'declares home as /home, where igloo asked for /p/home',
+    )
+  })
+
+  it('refuses the store by any other spelling of its path', () => {
+    // Served as one of the project's, it would be the whole host store rather
+    // than one closure.
+    for (const source of ['/nix/store/', '/nix//store', '/nix/store/.']) {
+      assert.include(
+        refusal(declared.map(entry => (entry.tag === 'ro-store' ? { ...entry, source } : entry))),
+        `declares ro-store as ${source}`,
+      )
+    }
+  })
+
+  it('refuses a socket that is not a bare file name', () => {
+    for (const socket of ['../escape.sock', '/run/user/1000/escape.sock', 'a/b.sock', '.', '..']) {
+      assert.include(
+        refusal(declared.map(entry => (entry.tag === 'home' ? { ...entry, socket } : entry))),
+        `names home's socket ${socket}, which is not a file name`,
+      )
+    }
+  })
+
+  it('refuses a runner missing a share asked for, the store’s included', () => {
+    assert.include(
+      refusal(declared.filter(entry => entry.tag === 'home')),
+      'declares no share for ro-store, workspace',
+    )
   })
 })
 
