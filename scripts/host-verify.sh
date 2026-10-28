@@ -707,6 +707,25 @@ step init -- "$repo/bin/igloo" init "$project"
 if [ -d "$project/.igloo" ]; then
 	cd "$project" || exit 1
 
+	# ---- a share that is a link is refused --
+	#
+	# The guest writes wherever its workspace leads, so a workspace that is a
+	# link would let it make a project there that nothing above could refuse.
+	# The refusal comes before anything is built.
+	section "a share that is a link is refused"
+	mv "$project/workspace" "$scratch/linked-workspace"
+	ln -s "$scratch/linked-workspace" "$project/workspace"
+	if step linked-share-refused -- "$repo/bin/igloo" up; then
+		"$repo/bin/igloo" down >>"$out/steps/linked-share-refused.txt" 2>&1
+		verdict FAIL linked-share-refused "a project whose workspace is a link launched its VM"
+	elif grep -q 'have to be directories, not links' "$out/steps/linked-share-refused.txt"; then
+		verdict PASS linked-share-refused "a project whose workspace is a link is refused before its VM is launched"
+	else
+		verdict FAIL linked-share-refused "the launch failed, but not on the link — read steps/linked-share-refused.txt"
+	fi
+	rm "$project/workspace"
+	mv "$scratch/linked-workspace" "$project/workspace"
+
 	# ---- the fallback sandbox, before there is a VM, which is the whole point --
 	#
 	# A piped script stands in for the interactive shell, so the step's output

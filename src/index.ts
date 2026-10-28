@@ -160,6 +160,7 @@ const specFor = Effect.fnUntraced(function* (input: { readonly cid: Option.Optio
       .makeDirectory(dir, { recursive: true })
       .pipe(Effect.mapError(() => new Vm.VmError({ message: `cannot create ${dir}` })))
   }
+  yield* Project.refuseLinkedShares(project)
 
   // Core, then the user layer, then this project's. Content reaches the guest as
   // NixOS modules the flake imports; policy never reaches it at all — it is

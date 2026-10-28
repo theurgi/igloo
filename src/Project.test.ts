@@ -264,6 +264,70 @@ describe('Project.init and find', () => {
     )
   })
 
+  // A share that is a link has its guest write where the link leads, below no
+  // marker, so a project its guest made there would not be inside anything.
+  describe('with a share that is a link', () => {
+    const refusal = <A>(result: Result.Result<A, Project.ProjectError>) =>
+      Result.isFailure(result) ? result.failure.message : ''
+
+    it.effect('refuses a workspace that is a link, naming where it leads', () =>
+      provided(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const dir = yield* fs.realPath(yield* fs.makeTempDirectoryScoped())
+          const project = yield* Project.init(path.join(dir, 'api'))
+          const code = path.join(dir, 'code')
+          yield* fs.makeDirectory(code)
+          yield* fs.remove(project.workspaceDir, { recursive: true })
+          yield* fs.symlink(code, project.workspaceDir)
+
+          assert.include(
+            refusal(yield* Project.refuseLinkedShares(project).pipe(Effect.result)),
+            `refusing ${project.workspaceDir}: it leads to ${code}.`,
+          )
+        }),
+      ),
+    )
+
+    it.effect('refuses a home under a linked .igloo', () =>
+      provided(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const dir = yield* fs.realPath(yield* fs.makeTempDirectoryScoped())
+          const project = yield* Project.init(path.join(dir, 'api'))
+          const elsewhere = path.join(dir, 'state')
+          yield* fs.rename(project.iglooDir, elsewhere)
+          yield* fs.symlink(elsewhere, project.iglooDir)
+
+          assert.include(
+            refusal(yield* Project.refuseLinkedShares(project).pipe(Effect.result)),
+            `refusing ${project.homeDir}: it leads to ${path.join(elsewhere, 'home')}.`,
+          )
+        }),
+      ),
+    )
+
+    it.effect('is refused by init, which writes no marker', () =>
+      provided(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const dir = yield* fs.realPath(yield* fs.makeTempDirectoryScoped())
+          const root = path.join(dir, 'api')
+          const code = path.join(dir, 'code')
+          yield* fs.makeDirectory(root)
+          yield* fs.makeDirectory(code)
+          yield* fs.symlink(code, path.join(root, 'workspace'))
+
+          assert.include(
+            refusal(yield* Project.init(root).pipe(Effect.result)),
+            `refusing ${path.join(root, 'workspace')}: it leads to ${code}.`,
+          )
+          assert.isFalse(yield* fs.exists(path.join(root, '.igloo/project.json')))
+        }),
+      ),
+    )
+  })
+
   it.effect('resolves the starting path, so a symlinked route gives one identity', () =>
     provided(
       Effect.gen(function* () {

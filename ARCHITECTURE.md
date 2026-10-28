@@ -170,12 +170,14 @@ grants, model servers, memory and CPUs — is read from two files only: the user
 store, and the project's, at the project root beside `workspace/` rather than in it. A policy file
 in the workspace is refused, not ignored (`Config.resolve`, through `auditWorkspace`). So is a
 project inside another project's `workspace/` or `.igloo/home/`, whose guest could have written its
-marker and the policy beside it (`Project.find`, and `Project.init` before it makes one). A project
-cannot set what is the user layer's to set — memory, CPUs, the broker's memory and the ceilings — or
-ask for a network mode or a tunnel destination above a ceiling the user layer set (`Config.compose`,
-through `settings` and `checkKeys`). A credential or a model server the user layer declares reaches
-only the projects its `projects` lists (`Config.compose`). Which directories are shared is not a
-setting (`Spec.fromConfig`, `mkRunner`).
+marker and the policy beside it (`Project.find`, and `Project.init` before it makes one). So is a
+project whose `workspace/` or `.igloo/home/` is a link: its guest writes wherever the link leads,
+below no marker `Project.find` could weigh, so `up`, `attach` and `init` refuse it
+(`Project.refuseLinkedShares`). A project cannot set what is the user layer's to set — memory, CPUs,
+the broker's memory and the ceilings — or ask for a network mode or a tunnel destination above a
+ceiling the user layer set (`Config.compose`, through `settings` and `checkKeys`). A credential or a
+model server the user layer declares reaches only the projects its `projects` lists
+(`Config.compose`). Which directories are shared is not a setting (`Spec.fromConfig`, `mkRunner`).
 
 Policy reaches the guest's build as `mkRunner`'s arguments, every one applied from one `pins`
 attrset at `mkOverride 10`, above `mkForce`. That priority and `pins` are both in `nix/runner.nix`,
@@ -185,8 +187,8 @@ pin and throws if any differs, so a content module, one imported from the worksp
 override, widen or add to policy at any priority. Content may come from the workspace: it decides
 what is in the VM, not what the VM may do.
 
-**Held by:** `Project.find`, `Config.resolve`, `Config.compose`, and `pins` and the comparison after
-it in `mkRunner` (`nix/runner.nix`).
+**Held by:** `Project.find`, `Project.refuseLinkedShares`, `Config.resolve`, `Config.compose`, and
+`pins` and the comparison after it in `mkRunner` (`nix/runner.nix`).
 
 ### No guest has a network card
 

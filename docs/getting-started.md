@@ -31,7 +31,9 @@ A project is a directory holding the marker `.igloo/project.json`. Every command
 its project by walking up from the current directory, the way `git` finds a repository, so they work
 from any subdirectory. A project cannot be inside another project's `workspace/` or `.igloo/home/`:
 that project's guest writes there, so it could write the marker and a policy beside it. Every
-command refuses one, `init` included.
+command refuses one, `init` included. For the same reason a project's `workspace/` and
+`.igloo/home/` have to be directories, not symlinks to somewhere else: the guest writes wherever the
+link leads. `init`, `up` and `attach` refuse one.
 
 ```text
 demo/

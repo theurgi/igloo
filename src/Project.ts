@@ -160,6 +160,26 @@ const refuseNested = Effect.fnUntraced(function* (root: string) {
 })
 
 /**
+ * Refuse a project whose `workspace/` or `.igloo/home/` is a link, or lies under
+ * one. Its VM writes wherever the link leads, and a project made there has no
+ * marker above it whose shares hold it, so `refuseNested` would let it through.
+ * Checked before a VM is launched, so no guest gets to write there.
+ */
+export const refuseLinkedShares = Effect.fnUntraced(function* (project: Project) {
+  const fs = yield* FileSystem.FileSystem
+  for (const dir of [project.workspaceDir, project.homeDir]) {
+    const real = yield* fs
+      .realPath(dir)
+      .pipe(Effect.mapError(() => new ProjectError({ message: `cannot resolve ${dir}` })))
+    if (real !== dir) {
+      return yield* new ProjectError({
+        message: `refusing ${dir}: it leads to ${real}. The VM writes wherever it leads, so a project made there could hand the host its policy with nothing above it to refuse it. A project's workspace and home have to be directories, not links.`,
+      })
+    }
+  }
+})
+
+/**
  * Walk up from `startDir` for the marker, so the commands work from any
  * subdirectory of a project the way `git` does.
  *
@@ -215,6 +235,7 @@ export const init = Effect.fnUntraced(function* (dir: string) {
   yield* make(project.iglooDir)
   yield* make(project.homeDir)
   yield* make(project.workspaceDir)
+  yield* refuseLinkedShares(project)
 
   const gitignore = path.join(project.iglooDir, '.gitignore')
   if (!(yield* fs.exists(gitignore).pipe(Effect.orElseSucceed(() => false)))) {
