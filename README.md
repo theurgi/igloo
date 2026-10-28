@@ -70,7 +70,7 @@ Add igloo to the system flake, enable both modules, and rebuild —
 
 ```nix
 {
-  inputs.igloo.url = "github:theurgi/igloo/v0.2.1";
+  inputs.igloo.url = "github:theurgi/igloo/v0.2.2";
 
   outputs =
     { igloo, home-manager, nixpkgs, ... }:
