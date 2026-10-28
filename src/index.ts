@@ -256,6 +256,7 @@ const specFor = Effect.fnUntraced(function* (input: { readonly cid: Option.Optio
     projectRoot: project.root,
     runnerRootLink: project.runnerRootLink,
     runtimeDir: runtime,
+    shares: plan.runner.shares,
     unitEnv: { PATH: env['PATH'] ?? '' },
     // Both exist on Linux, which is all this runs on; the types allow for
     // platforms where they do not. -1 is an id nothing will accept.

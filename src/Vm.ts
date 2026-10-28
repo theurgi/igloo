@@ -1,7 +1,7 @@
 import type { Binaries } from './Binaries.ts'
 import type { Grant, TunnelScope } from './broker.ts'
 
-import { Clock, Duration, Effect, FileSystem, Schema, Stream } from 'effect'
+import { Clock, Duration, Effect, FileSystem, Result, Schema, Stream } from 'effect'
 import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
 import { dirname } from 'node:path'
 
@@ -180,6 +180,12 @@ export interface VmSpec extends VmTarget {
    * is what lets `down --all` stop a VM it knows only by slice name.
    */
   readonly projectRoot: string
+  /**
+   * The project's directories the guest mounts, by tag: the shares the runner
+   * has to declare beside the store's. The launch refuses a runner that
+   * declares any other.
+   */
+  readonly shares: readonly Virtiofs.Expected[]
   /**
    * Environment for the VM's units. A transient unit does not inherit the
    * caller's environment, so anything a unit needs has to be carried here.
@@ -1352,14 +1358,15 @@ const launch = Effect.fnUntraced(function* (bins: Binaries, spec: VmSpec, boot: 
   // started — which nothing reads, because the check is on the other branch.
   yield* LaunchInputs.write(spec.launchInputsFile, spec.launchInputs)
 
-  // What to serve comes from the runner rather than from this process. The
-  // shares are policy, so they are already what was asked for; what the host
-  // cannot know on its own is each socket's name, which is derived from the
-  // guest's hostname.
-  const shares = yield* Virtiofs.shares(outPath)
-  if (shares.length === 0) {
-    return yield* new VmError({ message: `${outPath} declares no virtio-fs shares` })
+  // The shares are policy, so the runner's have to be the ones this launch
+  // asked for, and a runner that names others is refused before anything
+  // serves them. What the host takes from it is each socket's name, which is
+  // derived from the guest's hostname.
+  const matched = Virtiofs.match(yield* Virtiofs.shares(outPath), spec.shares)
+  if (Result.isFailure(matched)) {
+    return yield* new VmError({ message: `${outPath} ${matched.failure}` })
   }
+  const shares = matched.success
 
   const closurePaths = yield* boot.phase('closure', StoreView.closure(bins.nix, outPath))
   if (closurePaths.length === 0) {
@@ -1402,10 +1409,9 @@ const launch = Effect.fnUntraced(function* (bins: Binaries, spec: VmSpec, boot: 
         // the project's own directories, where there is nothing to withhold from a
         // guest that already mounts them read-write.
         yield* Systemd.start(bins.systemdRun, {
-          argv:
-            share.source === StoreView.storeDir
-              ? StoreView.argv({ argv: daemon, helper: bins.storeView, paths: storePaths })
-              : daemon,
+          argv: share.store
+            ? StoreView.argv({ argv: daemon, helper: bins.storeView, paths: storePaths })
+            : daemon,
           env: spec.unitEnv,
           logFile: daemonLog(boot, share.tag),
           name: virtiofsdUnit(spec.id, share.tag),
