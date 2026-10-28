@@ -97,8 +97,10 @@ const Lock = Schema.fromJsonString(
       Schema.Struct({
         locked: Schema.optionalKey(
           Schema.Struct({
+            narHash: Schema.optionalKey(Schema.String),
             owner: Schema.optionalKey(Schema.String),
             repo: Schema.optionalKey(Schema.String),
+            rev: Schema.optionalKey(Schema.String),
             type: Schema.String,
           }),
         ),
@@ -108,14 +110,24 @@ const Lock = Schema.fromJsonString(
 )
 
 /**
+ * A query value as nix writes it in the URI it checks: percent-encoded but for
+ * the unreserved characters and `/`, so a hash's `+` and `=` are `%2B` and
+ * `%3D`.
+ */
+const queryValue = (value: string): string => encodeURIComponent(value).replaceAll('%2F', '/')
+
+/**
  * What a flake's lock file lets it fetch, as URI prefixes.
  *
  * Restricted mode checks a flake's own inputs against the list as well, even
  * locked and already in the store, so the runner cannot be evaluated without
- * them. A GitHub input is allowed by its repository, which covers every
- * revision of it. An input of any other type is left out, and if evaluation
- * ever needs one, nix's refusal names its URI. An unreadable lock allows
- * nothing, which fails the same way.
+ * them. A GitHub input is allowed at its locked revision and hash, the URI nix
+ * checks when it fetches that input. Its repository alone would allow any
+ * revision, and a `host` attribute with it, which sends the fetch to a server
+ * the evaluated Nix names. An input of any other type, or one locked without a
+ * revision and hash, is left out, and if evaluation ever needs one, nix's
+ * refusal names its URI. An unreadable lock allows nothing, which fails the
+ * same way.
  */
 export const lockedUris = (lock: string): Array<string> =>
   Option.match(Schema.decodeOption(Lock)(lock), {
@@ -123,8 +135,14 @@ export const lockedUris = (lock: string): Array<string> =>
     onSome: ({ nodes }) => [
       ...new Set(
         Object.values(nodes).flatMap(({ locked }) =>
-          locked?.type === 'github' && locked.owner !== undefined && locked.repo !== undefined
-            ? [`github:${locked.owner}/${locked.repo}`]
+          locked?.type === 'github' &&
+          locked.owner !== undefined &&
+          locked.repo !== undefined &&
+          locked.rev !== undefined &&
+          locked.narHash !== undefined
+            ? [
+                `github:${locked.owner}/${locked.repo}/${locked.rev}?narHash=${queryValue(locked.narHash)}`,
+              ]
             : [],
         ),
       ),

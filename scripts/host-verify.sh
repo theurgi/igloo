@@ -783,13 +783,14 @@ if [ -d "$project/.igloo" ]; then
 		verdict FAIL fallback-independent "the fallback did not open with a broken policy file — read steps/fallback-broken.txt"
 	fi
 
-	# ---- evaluation reads nothing on the host it was not given --
+	# ---- evaluation reads and fetches nothing it was not given --
 	#
 	# A policy file and a content layer are both Nix that igloo evaluates as
 	# you, before any VM exists. Each tries to read a canary beside the project's
-	# private key, and each has to be refused by nix itself — checked by that
-	# message, since `up` fails for plenty of other reasons.
-	section "evaluation reads nothing on the host it was not given"
+	# private key, and a content layer to fetch from a host it names, and each
+	# has to be refused by nix itself — checked by that message, since `up`
+	# fails for plenty of other reasons.
+	section "evaluation reads and fetches nothing it was not given"
 	printf 'igloo-verify-canary\n' >"$project/.igloo/verify-canary"
 
 	printf '{ network = builtins.readFile ./.igloo/verify-canary; }\n' >"$project/igloo-policy.nix"
@@ -812,6 +813,20 @@ if [ -d "$project/.igloo" ]; then
 		verdict PASS eval-content-confined "a content layer cannot read the project's own directory outside the workspace"
 	else
 		verdict FAIL eval-content-confined "the launch failed, but not on restricted evaluation — read steps/eval-content-confined.txt"
+	fi
+
+	# A repository igloo's flake.lock names, fetched from another host. The
+	# name never resolves, so an evaluation that let it through fails on the
+	# lookup instead and contacts nothing.
+	printf '{ ... }: { environment.etc.canary.text = (builtins.fetchTree { type = "github"; owner = "NixOS"; repo = "nixpkgs"; rev = "%s"; host = "igloo-verify.invalid"; }).outPath; }\n' \
+		0000000000000000000000000000000000000000 >"$project/igloo.nix"
+	if step eval-content-fetch-confined -- "$repo/bin/igloo" up; then
+		(cd "$project" && "$repo/bin/igloo" down) >>"$out/steps/eval-content-fetch-confined.txt" 2>&1
+		verdict FAIL eval-content-fetch-confined "a content layer fetched from a host it named, and the VM booted"
+	elif grep -q 'forbidden in restricted mode' "$out/steps/eval-content-fetch-confined.txt"; then
+		verdict PASS eval-content-fetch-confined "a content layer cannot fetch from a host it names"
+	else
+		verdict FAIL eval-content-fetch-confined "the launch failed, but not on restricted evaluation — read steps/eval-content-fetch-confined.txt"
 	fi
 	rm -f "$project/igloo.nix" "$project/.igloo/verify-canary"
 

@@ -94,31 +94,46 @@ describe('Evaluation.readable', () => {
 })
 
 describe('Evaluation.lockedUris', () => {
+  const github = (owner: string, repo: string, rev: string, narHash?: string) => ({
+    locked: { lastModified: 1, owner, repo, rev, type: 'github', ...(narHash ? { narHash } : {}) },
+  })
   const lock = JSON.stringify({
     nodes: {
       microvm: {
         inputs: { nixpkgs: ['nixpkgs'], spectrum: 'spectrum' },
-        locked: { owner: 'microvm-nix', repo: 'microvm.nix', rev: 'abc', type: 'github' },
+        ...github(
+          'microvm-nix',
+          'microvm.nix',
+          'abc',
+          'sha256-IyOsrL64VjSHJKdzvQQcgNJtrSd4/jDa7vhlFa9libM=',
+        ),
       },
-      nixpkgs: {
-        locked: { owner: 'NixOS', repo: 'nixpkgs', rev: 'def', type: 'github' },
-      },
+      nixpkgs: github(
+        'NixOS',
+        'nixpkgs',
+        'def',
+        'sha256-+//7//v/+//7//v/+//7//v/+//7//v/+//7//v/+/8=',
+      ),
       root: { inputs: { microvm: 'microvm', nixpkgs: 'nixpkgs' } },
       spectrum: {
         locked: { rev: '123', type: 'git', url: 'https://spectrum-os.org/git/spectrum' },
       },
-      again: {
-        locked: { owner: 'NixOS', repo: 'nixpkgs', rev: 'fed', type: 'github' },
-      },
+      again: github(
+        'NixOS',
+        'nixpkgs',
+        'def',
+        'sha256-+//7//v/+//7//v/+//7//v/+//7//v/+//7//v/+/8=',
+      ),
+      unhashed: github('NixOS', 'nix', 'fed'),
     },
     root: 'root',
     version: 7,
   })
 
-  it('allows each GitHub input by its repository, once', () => {
+  it('allows each GitHub input at its locked revision and hash, once', () => {
     assert.deepStrictEqual(Evaluation.lockedUris(lock), [
-      'github:microvm-nix/microvm.nix',
-      'github:NixOS/nixpkgs',
+      'github:microvm-nix/microvm.nix/abc?narHash=sha256-IyOsrL64VjSHJKdzvQQcgNJtrSd4/jDa7vhlFa9libM%3D',
+      'github:NixOS/nixpkgs/def?narHash=sha256-%2B//7//v/%2B//7//v/%2B//7//v/%2B//7//v/%2B//7//v/%2B/8%3D',
     ])
   })
 
@@ -141,7 +156,7 @@ describe('Evaluation.forRunner', () => {
         yield* fs.writeFileString(path.join(project, 'igloo.nix'), '{ }')
         yield* fs.writeFileString(
           path.join(igloo, 'flake.lock'),
-          '{"nodes":{"nixpkgs":{"locked":{"owner":"NixOS","repo":"nixpkgs","type":"github"}}}}',
+          '{"nodes":{"nixpkgs":{"locked":{"narHash":"sha256-AAAA=","owner":"NixOS","repo":"nixpkgs","rev":"def","type":"github"}}}}',
         )
 
         const allowance = yield* Evaluation.forRunner({
@@ -156,7 +171,7 @@ describe('Evaluation.forRunner', () => {
             path.join(project, 'igloo.nix'),
             path.join(project, 'workspace'),
           ],
-          uris: ['github:NixOS/nixpkgs'],
+          uris: ['github:NixOS/nixpkgs/def?narHash=sha256-AAAA%3D'],
         })
         // The rest of the project directory holds the VM's private key.
         assert.notInclude(allowance.paths, project)

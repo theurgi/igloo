@@ -344,8 +344,8 @@ igloo evaluates Nix that someone else wrote in two places: the policy files, in 
 (`Config.ts`'s `readPolicyFiles`), and the runner with its content layers, once per launch
 (`Vm.ts`'s `instantiate`). Both take their arguments from `Evaluation.args`: nix's restricted
 evaluation, which reads the store, the files named and, for the runner, the workspace, and fetches
-only the repositories igloo's own `flake.lock` names, or nothing for the policy files; an empty
-`nix-path`; `builtins.exec` off; and import-from-derivation off, since it would build before
+only the revisions igloo's own `flake.lock` locks, from GitHub, or nothing for the policy files; an
+empty `nix-path`; `builtins.exec` off; and import-from-derivation off, since it would build before
 anything had checked the build. The rest of the project directory, where the VM's private key is, is
 not readable (`Evaluation.forRunner`). Any new evaluation goes through `Evaluation.args`.
 
