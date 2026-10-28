@@ -2614,9 +2614,9 @@ EOF
 			# A raw CONNECT, because curl reports the status of a failed tunnel
 			# and discards the body — and the body is where the broker says
 			# which of refusing, not resolving and not connecting it did.
-			connect_via_tunnel() { # connect_via_tunnel <host:port>
-				printf 'exec 3<>/dev/tcp/127.0.0.1/3129 && printf %s >&3 && timeout 10 cat <&3\n' \
-					"'CONNECT $1 HTTP/1.1\r\nHost: $1\r\n\r\n'"
+			connect_via_tunnel() { # connect_via_tunnel <host:port> [seconds to read, 10 by default]
+				printf 'exec 3<>/dev/tcp/127.0.0.1/3129 && printf %s >&3 && timeout %s cat <&3\n' \
+					"'CONNECT $1 HTTP/1.1\r\nHost: $1\r\n\r\n'" "${2:-10}"
 			}
 
 			step down-for-restricted -- "$repo/bin/igloo" down
@@ -2760,6 +2760,9 @@ EOF
 			# cannot resolve says only that its service is unavailable — whether
 			# the broker resolves names at all is internet-reaches-any-name's to
 			# say — so the first name it does resolve decides, refused or not.
+			# The broker says a name does not resolve only once the host's
+			# resolver gives up, which glibc's defaults take 10s to do, so the
+			# guest waits well past that for the answer.
 			wildcard_dns=(sslip.io nip.io)
 			tried_dns=${wildcard_dns[*]}
 			tried_dns=${tried_dns// /, }
@@ -2767,8 +2770,8 @@ EOF
 				resolving=""
 				local name answer
 				for name in "$@"; do
-					answer=$(guest "$(connect_via_tunnel "$name:443")" 2>&1 | head -5)
-					printf '%s\n' "--- $name" "$answer"
+					answer=$(guest "$(connect_via_tunnel "$name:443" 30)" 2>&1 | head -5)
+					printf '%s\n' "--- $name" "${answer:-(no answer within 30s)}"
 					if ! grep -qF "broker: $name does not resolve" <<<"$answer"; then
 						resolving=$name
 						return
