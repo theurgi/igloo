@@ -240,6 +240,7 @@ const specFor = Effect.fnUntraced(function* (input: { readonly cid: Option.Optio
     credentials: plan.credentials,
     evaluation: yield* Evaluation.forRunner({
       iglooFlakePath,
+      runnerDir: project.runnerDir,
       contentModules: plan.runner.contentModules,
       workspaceDir: project.workspaceDir,
     }),

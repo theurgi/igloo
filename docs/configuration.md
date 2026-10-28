@@ -49,14 +49,15 @@ reach.
 
 The module is evaluated on the host under confinement, because a project's configuration may be one
 somebody else wrote. The evaluation can read the module itself, the Nix store and the project's
-workspace, and nothing else on the host. It can fetch only the inputs igloo itself is locked to. In
-practice:
+workspace, and nothing else on the host but igloo's own files. It can fetch only the inputs igloo
+itself is locked to. Nix runs under Landlock, so that holds for what Nix reads on the evaluation's
+behalf as well. In practice:
 
 - Importing from the workspace works, as in the example, so a repository can carry its own guest
   configuration.
 - Importing a file that sits beside `igloo.nix`, outside the workspace, fails.
-- `builtins.fetchTarball`, `builtins.getFlake` and the like fail for anything igloo does not already
-  pin.
+- `builtins.fetchTarball`, `builtins.getFlake` and the like fail for anything but a path in the
+  workspace or an input igloo pins.
 - Import from derivation fails, naming the option `allow-import-from-derivation`.
 
 A file at `workspace/igloo.nix` is not read: igloo prints a note saying so and goes on. Import it

@@ -182,11 +182,11 @@ const storeView = Effect.fnUntraced(function* (bins: Binaries) {
 })
 
 /**
- * `igloo-landlock` restricting itself as it restricts the broker and the
- * published ports. Each way that can fail — no Landlock in the kernel, one too
- * old to scope abstract sockets, a helper that is not there — otherwise surfaces
- * as a broker or a forward that exits as it starts, and with it every launch of
- * a VM that has one.
+ * `igloo-landlock` restricting itself as it restricts nix's evaluation, the
+ * broker and the published ports. Each way that can fail — no Landlock in the
+ * kernel, one too old to scope abstract sockets, a helper that is not there —
+ * otherwise surfaces as an evaluation that fails as it starts, and with it every
+ * launch.
  */
 const landlock = Effect.fnUntraced(function* (bins: Binaries) {
   const remedy =
@@ -194,9 +194,7 @@ const landlock = Effect.fnUntraced(function* (bins: Binaries) {
   const ran = yield* answer(bins.landlock, ['--check'])
   if (ran._tag === 'None') return failed(`cannot run \`${bins.landlock}\``, remedy)
   return ran.value.code === 0
-    ? ok(
-        `\`${bins.landlock}\` can keep the broker and the published ports from loopback and abstract sockets`,
-      )
+    ? ok(`\`${bins.landlock}\` can confine nix's evaluation, the broker and the published ports`)
     : failed(`\`${bins.landlock}\` ${exited(ran.value.code, ran.value.reason)}`, remedy)
 })
 

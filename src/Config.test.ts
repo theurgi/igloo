@@ -55,11 +55,15 @@ const refused = (input: Input): string => {
  * It echoes the expression it was given into a log, because the one thing an
  * argument-shape assertion cannot check is that the expression names the files
  * that exist and no others.
+ *
+ * Beside it, a stand-in for `igloo-landlock`, which records its rules and the
+ * cache nix is pointed at, and runs nix unrestricted.
  */
 const fakeNix = Effect.fnUntraced(function* (dir: string, json: string) {
   const fs = yield* FileSystem.FileSystem
   const file = path.join(dir, 'fake-nix')
   const log = path.join(dir, 'nix-args')
+  const rules = path.join(dir, 'landlock-rules')
   yield* fs.writeFileString(
     file,
     `#!/usr/bin/env bash
@@ -70,11 +74,26 @@ EOJ
 fi
 `,
   )
+  yield* fs.writeFileString(
+    landlockBeside(file),
+    `#!/usr/bin/env bash
+: > '${rules}'
+while [ $# -gt 1 ] && [ "$1" != -- ]; do printf '%s %s\\n' "$1" "$2" >> '${rules}'; shift 2; done
+[ "$1" = -- ] || { echo "fake-landlock: no -- before the command" >&2; exit 1; }
+shift
+printf 'NIX_CACHE_HOME %s\\n' "$NIX_CACHE_HOME" >> '${rules}'
+exec "$@"
+`,
+  )
   yield* fs.chmod(file, 0o755)
-  return { log, nix: file }
+  yield* fs.chmod(landlockBeside(file), 0o755)
+  return { log, nix: file, rules }
 })
 
-const binaries = (nix: string): Binaries.Binaries => Binaries.fromEnv({ IGLOO_NIX: nix })
+const landlockBeside = (nix: string): string => path.join(path.dirname(nix), 'fake-landlock')
+
+const binaries = (nix: string): Binaries.Binaries =>
+  Binaries.fromEnv({ IGLOO_LANDLOCK: landlockBeside(nix), IGLOO_NIX: nix })
 
 describe('Config layer paths', () => {
   it('reads the user layer from its directory and the project layer from the project root', () => {
@@ -281,7 +300,7 @@ describe('Config.resolve', () => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const dir = yield* fs.makeTempDirectoryScoped()
-        const { log, nix } = yield* fakeNix(
+        const { log, nix, rules } = yield* fakeNix(
           dir,
           '{"project":{"network":"none"},"user":{"mem":2047}}',
         )
@@ -334,6 +353,19 @@ describe('Config.resolve', () => {
         assert.include(args, `=${project.policy}\n`)
         assert.notInclude(args, `=${user.content}\n`)
         assert.notInclude(args, `=${project.content}\n`)
+
+        // And so is nix itself, by the kernel, to the same files; it writes only
+        // a cache of its own, gone once the evaluation is.
+        const given = (yield* fs.readFileString(rules)).trim().split('\n')
+        assert.include(given, `--read ${user.policy}`)
+        assert.include(given, `--read ${project.policy}`)
+        assert.notInclude(given, `--read ${user.content}`)
+        assert.notInclude(given, `--read ${project.content}`)
+        const writes = given.filter(rule => rule.startsWith('--write '))
+        assert.strictEqual(writes.length, 1)
+        const cache = writes[0]?.slice('--write '.length) ?? ''
+        assert.include(given, `NIX_CACHE_HOME ${cache}`)
+        assert.isFalse(yield* fs.exists(cache))
       }),
     ),
   )

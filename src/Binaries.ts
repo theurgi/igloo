@@ -16,7 +16,8 @@ export interface Binaries {
   /**
    * `igloo-landlock`, which the broker and the published ports run under so
    * that they reach no TCP port but their own and none of the user's abstract
-   * sockets. The devshell points this at the flake's own.
+   * sockets, and nix runs under to evaluate, so that it reads none of the
+   * user's files. The devshell points this at the flake's own.
    */
   readonly landlock: string
   /** Only the preflight uses this, to ask whether the user's manager lingers. */

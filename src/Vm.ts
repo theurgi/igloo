@@ -536,18 +536,13 @@ const instantiate = Effect.fnUntraced(
   function* (bins: Binaries, spec: VmSpec, log: readonly string[]) {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
     const handle = yield* spawner.spawn(
-      ChildProcess.make(
-        bins.nix,
-        [
-          'path-info',
-          '--derivation',
-          spec.flakeRef,
-          '--no-write-lock-file',
-          ...Evaluation.args(spec.evaluation),
-          ...log,
-        ],
-        { extendEnv: true, stderr: 'inherit', stdin: 'ignore', stdout: 'pipe' },
-      ),
+      yield* Evaluation.command(bins, spec.evaluation, [
+        'path-info',
+        '--derivation',
+        spec.flakeRef,
+        '--no-write-lock-file',
+        ...log,
+      ]),
     )
     const printed = yield* handle.stdout.pipe(Stream.decodeText, Stream.mkString)
     const code = yield* handle.exitCode

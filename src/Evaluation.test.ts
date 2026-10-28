@@ -12,6 +12,7 @@ describe('Evaluation.args', () => {
   it('confines the evaluation to what it is given', () => {
     const args = Evaluation.args({
       paths: ['/nix/store', '/home/you/projects/api/igloo.nix'],
+      flakes: [],
       uris: ['github:NixOS/nixpkgs', 'github:microvm-nix/microvm.nix'],
     })
     const option = (name: string) => args[args.indexOf(name) + 1]
@@ -32,7 +33,7 @@ describe('Evaluation.args', () => {
   })
 
   it('names every allowed path, so none of them answers a `<name>` lookup', () => {
-    const args = Evaluation.args({ paths: ['/nix/store', '/p/igloo.nix'], uris: [] })
+    const args = Evaluation.args({ paths: ['/nix/store', '/p/igloo.nix'], flakes: [], uris: [] })
 
     assert.deepStrictEqual(
       args.filter((_, index) => args[index - 1] === '-I'),
@@ -41,9 +42,88 @@ describe('Evaluation.args', () => {
   })
 
   it('allows no URI at all when given none', () => {
-    const args = Evaluation.args({ paths: [], uris: [] })
+    const args = Evaluation.args({ paths: [], flakes: [], uris: [] })
     assert.strictEqual(args[args.indexOf('allowed-uris') + 1], '')
   })
+})
+
+describe('Evaluation.confinement', () => {
+  const allowance = {
+    paths: ['/nix/store', '/p/igloo.nix', '/p/workspace'],
+    flakes: ['/p/.igloo/runner', '/opt/igloo'],
+    uris: ['github:NixOS/nixpkgs/def'],
+  }
+  const rules = Evaluation.confinement(allowance, '/tmp/cache')
+  const named = (flag: string) => rules.filter((_, index) => rules[index - 1] === flag)
+
+  it('lets nix read the allowance, the flakes and what it reads of itself', () => {
+    assert.deepStrictEqual(named('--read'), [
+      '/nix/store',
+      '/p/igloo.nix',
+      '/p/workspace',
+      '/p/.igloo/runner',
+      '/opt/igloo',
+      '/proc/self/maps',
+      '/proc/stat',
+    ])
+    // Not the directory, which holds nix's environment.
+    assert.notInclude(named('--read'), '/proc/self')
+  })
+
+  it('lets it write only its cache, and connect only to HTTPS and DNS', () => {
+    assert.deepStrictEqual(named('--write'), ['/tmp/cache'])
+    assert.deepStrictEqual(named('--connect-tcp'), ['443', '53'])
+    assert.deepStrictEqual(named('--bind-tcp'), [])
+    assert.strictEqual(rules.at(-1), '--')
+  })
+
+  it('reads the store whatever the allowance says, and each path once', () => {
+    const reads = Evaluation.confinement(
+      { paths: ['/p/x.nix', '/p/x.nix'], flakes: [], uris: [] },
+      '/c',
+    ).filter((_, index, all) => all[index - 1] === '--read')
+    assert.deepStrictEqual(reads, ['/nix/store', '/p/x.nix', '/proc/self/maps', '/proc/stat'])
+  })
+})
+
+describe('Evaluation.command', () => {
+  it.effect('runs nix confined both ways, with a cache that lasts as long as the scope', () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const allowance = { paths: ['/nix/store', '/p/igloo.nix'], flakes: [], uris: [] }
+      const cache = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const command = yield* Evaluation.command(
+            { landlock: '/l/igloo-landlock', nix: '/n/nix' },
+            allowance,
+            ['eval', '--expr', '1'],
+          )
+          assert.strictEqual(command._tag, 'StandardCommand')
+          if (command._tag !== 'StandardCommand') return ''
+          assert.strictEqual(command.command, '/l/igloo-landlock')
+          const end = command.args.indexOf('--')
+          const written = command.args[command.args.indexOf('--write') + 1] ?? ''
+          assert.deepStrictEqual(
+            command.args.slice(0, end + 1),
+            Evaluation.confinement(allowance, written),
+          )
+          assert.deepStrictEqual(command.args.slice(end + 1), [
+            '/n/nix',
+            'eval',
+            '--expr',
+            '1',
+            ...Evaluation.args(allowance),
+          ])
+          // nix's cache is the one place it may write, not the developer's.
+          assert.strictEqual(command.options.env?.['NIX_CACHE_HOME'], written)
+          assert.isTrue(command.options.extendEnv)
+          assert.isTrue(yield* fs.exists(written))
+          return written
+        }),
+      )
+      assert.isFalse(yield* fs.exists(cache))
+    }).pipe(Effect.provide(BunServices.layer)),
+  )
 })
 
 describe('Evaluation.readable', () => {
@@ -161,6 +241,7 @@ describe('Evaluation.forRunner', () => {
 
         const allowance = yield* Evaluation.forRunner({
           iglooFlakePath: igloo,
+          runnerDir: path.join(project, '.igloo', 'runner'),
           contentModules: [path.join(project, 'igloo.nix')],
           workspaceDir: path.join(project, 'workspace'),
         })
@@ -171,10 +252,12 @@ describe('Evaluation.forRunner', () => {
             path.join(project, 'igloo.nix'),
             path.join(project, 'workspace'),
           ],
+          flakes: [path.join(project, '.igloo', 'runner'), igloo],
           uris: ['github:NixOS/nixpkgs/def?narHash=sha256-AAAA%3D'],
         })
         // The rest of the project directory holds the VM's private key.
         assert.notInclude(allowance.paths, project)
+        assert.notInclude(allowance.flakes, project)
       }),
     ),
   )

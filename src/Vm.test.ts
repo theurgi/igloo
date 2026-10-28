@@ -148,6 +148,7 @@ const writeFakes = Effect.fnUntraced(function* (
   const buildCount = `${dir}/nix-build-count`
   const buildArgs = `${dir}/nix-build-args`
   const evalArgs = `${dir}/nix-eval-args`
+  const evalRules = `${dir}/nix-eval-rules`
   const showArgs = `${dir}/nix-show-args`
   const plan = `${dir}/nix-plan`
   const shown = `${dir}/nix-shown`
@@ -370,16 +371,24 @@ ${yield* fs.readFileString(new URL('broker.ts', import.meta.url).pathname)}`,
   // A stand-in for the compiled helper: it holds the command line to the
   // helper's shape and runs the command after `--`, unrestricted. Its
   // interpreter is a store path because the published ports run under it too.
-  // Before that it records, in `sight` in its working directory, which of the
-  // paths the broker must not reach it can see. A forward's working directory
-  // is a root it cannot write, so there it records nothing.
+  // Before that, for the evaluation, it records its rules and the cache nix is
+  // pointed at; for anything else, in `sight` in its working directory, which
+  // of the paths the broker must not reach it can see. A forward's working
+  // directory is a root it cannot write, so there it records nothing.
   const landlock = yield* write(
     'fake-landlock',
     `#!${bash}
-while [ "$1" = --connect-tcp ] || [ "$1" = --bind-tcp ]; do shift 2; done
-[ "$1" = -- ] || { echo "fake-landlock: expected [--connect-tcp PORT | --bind-tcp PORT]... -- COMMAND" >&2; exit 1; }
+rules=()
+while [ "$1" = --connect-tcp ] || [ "$1" = --bind-tcp ] || [ "$1" = --read ] || [ "$1" = --write ]; do
+  rules+=("$1 $2"); shift 2
+done
+[ "$1" = -- ] || { echo "fake-landlock: expected [RULE]... -- COMMAND" >&2; exit 1; }
 shift
-{ for p in ${unreachableByBroker.map(path => `'${path}'`).join(' ')}; do [ -e "$p" ] && echo "$p"; done > sight; } 2>/dev/null
+if [ "$1" = '${nix}' ]; then
+  printf '%s\\n' "\${rules[@]}" "NIX_CACHE_HOME $NIX_CACHE_HOME" > '${evalRules}'
+else
+  { for p in ${unreachableByBroker.map(path => `'${path}'`).join(' ')}; do [ -e "$p" ] && echo "$p"; done > sight; } 2>/dev/null
+fi
 exec "$@"
 `,
   )
@@ -404,6 +413,7 @@ exec "$@"
     buildArgs,
     buildCount,
     evalArgs,
+    evalRules,
     showArgs,
     shutdownHelperRan,
     sshCount,
@@ -437,7 +447,7 @@ const specIn = (dir: string, label: string, cid = 42): VmSpec => ({
   tunnel: [],
   cid,
   credentials: [],
-  evaluation: { paths: ['/nix/store'], uris: [] },
+  evaluation: { paths: ['/nix/store'], flakes: [], uris: [] },
   flakeRef: '.#testVm',
   grants: [],
   guestWritable: [`${dir}/project/workspace`],
@@ -1026,6 +1036,7 @@ describe('Vm.up', () => {
           ...specIn(dir, 'selftest-confined'),
           evaluation: {
             paths: ['/nix/store', `${dir}/project/igloo.nix`],
+            flakes: [`${dir}/project/.igloo/runner`],
             uris: ['github:NixOS/nixpkgs'],
           },
         }
@@ -1043,6 +1054,18 @@ describe('Vm.up', () => {
         assert.strictEqual(option('restrict-eval'), 'true')
         assert.strictEqual(option('allowed-uris'), 'github:NixOS/nixpkgs')
         assert.include(evaluated, `igloo-allowed-1=${dir}/project/igloo.nix`)
+        // Under Landlock, which reads the layer and the runner's flake and not
+        // the rest of the project, where its key is, and writes only a cache of
+        // its own, gone once the evaluation is.
+        const rules = (yield* fs.readFileString(fakes.evalRules)).trim().split('\n')
+        assert.include(rules, `--read ${dir}/project/igloo.nix`)
+        assert.include(rules, `--read ${dir}/project/.igloo/runner`)
+        assert.notInclude(rules, `--read ${dir}/project`)
+        const writes = rules.filter(rule => rule.startsWith('--write '))
+        assert.strictEqual(writes.length, 1)
+        const cache = writes[0]?.slice('--write '.length) ?? ''
+        assert.include(rules, `NIX_CACHE_HOME ${cache}`)
+        assert.isFalse(yield* fs.exists(cache))
 
         // What the dry run listed is what was shown and checked.
         assert.deepStrictEqual((yield* fs.readFileString(fakes.showArgs)).trim().split('\n'), [

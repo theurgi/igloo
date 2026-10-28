@@ -29,9 +29,10 @@ checked there, and a claim here that the code does not bear out is a bug in one 
   It is packaged from that one file and Bun, and imports nothing: not Effect, and nothing else in
   `src/`.
 - **`igloo-landlock`** (`src/landlock.c`). Runs a command under a Landlock ruleset: TCP connections
-  only to the ports named, TCP binds only on the ports named, and no abstract Unix socket; and under
-  a seccomp filter that refuses the sockets Landlock does not govern. The broker and the published
-  ports run under it.
+  only to the ports named, TCP binds only on the ports named, no abstract Unix socket, and, given
+  paths, reads and writes only beneath them; and under a seccomp filter that refuses the sockets
+  Landlock does not govern. The broker and the published ports run under it, and so does nix
+  whenever it evaluates a layer or a policy file.
 - **`igloo-store-view`** (`src/store-view.c`). Runs a command in a user and mount namespace whose
   `/nix/store` holds only the store paths listed. The store's virtio-fs daemon runs under it.
 
@@ -344,14 +345,29 @@ design.
 
 igloo evaluates Nix that someone else wrote in two places: the policy files, in one `nix eval`
 (`Config.ts`'s `readPolicyFiles`), and the runner with its content layers, once per launch
-(`Vm.ts`'s `instantiate`). Both take their arguments from `Evaluation.args`: nix's restricted
-evaluation, which reads the store, the files named and, for the runner, the workspace, and fetches
-only the revisions igloo's own `flake.lock` locks, from GitHub, or nothing for the policy files; an
-empty `nix-path`; `builtins.exec` off; and import-from-derivation off, since it would build before
-anything had checked the build. The rest of the project directory, where the VM's private key is, is
-not readable (`Evaluation.forRunner`). Any new evaluation goes through `Evaluation.args`.
+(`Vm.ts`'s `instantiate`). Both run nix through `Evaluation.command`, which confines it twice.
 
-**Held by:** `Evaluation.args`, `Evaluation.forRunner`, and their two callers.
+Within nix, by `Evaluation.args`: nix's restricted evaluation, which reads the store, the files
+named and, for the runner, the workspace, and fetches only the revisions igloo's own `flake.lock`
+locks, from GitHub, or nothing for the policy files; an empty `nix-path`; `builtins.exec` off; and
+import-from-derivation off, since it would build before anything had checked the build.
+
+Restricted mode checks what the evaluation reads, and not all that nix reads for it:
+`builtins.getFlake "path:<directory>"` would copy any directory the user can read into the store,
+where the evaluation could read it. So nix also runs under `igloo-landlock`, with the rules
+`Evaluation.confinement` makes. It may read the store, the files named, the workspace for the
+runner, and the two flakes it evaluates there, the runner's and igloo's; and `/proc/self/maps` and
+`/proc/stat`, for its garbage collector. It may write only a cache directory made for the one
+evaluation, which `NIX_CACHE_HOME` points it at in place of the user's, and connect over TCP only to
+ports 443 and 53. The rest of the project directory, where the VM's private key is, is readable to
+neither (`Evaluation.forRunner`). Any new evaluation goes through `Evaluation.command`.
+
+Left open: what a file's metadata says, its existence among it, since Landlock refuses a file when
+it is opened and not when it is looked up; and UDP. A `nix.conf` outside the store is not read
+during an evaluation.
+
+**Held by:** `Evaluation.command`, `Evaluation.args`, `Evaluation.confinement`,
+`Evaluation.forRunner`, `landlock.c`, and their two callers.
 
 ### Building a runner runs nothing that can reach the network
 

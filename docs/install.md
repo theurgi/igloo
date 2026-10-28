@@ -6,14 +6,16 @@ command, wrapped with your _user layer_: the configuration every VM you run star
 
 ## Requirements
 
-- NixOS on `x86_64-linux`, with flakes enabled. igloo builds for no other system.
+- NixOS on `x86_64-linux`, with flakes enabled through `nix.settings`, in NixOS or home-manager.
+  igloo builds for no other system, and Nix reads no `nix.conf` outside the Nix store while it
+  evaluates a project's configuration.
 - systemd 257 or newer, which NixOS has from 25.05. Every VM runs as systemd user units with
   properties systemd added in 257, and an older `systemd-run` refuses them before a VM starts.
 - home-manager, either as a NixOS module or standalone.
 - A CPU with hardware virtualisation, enabled in the firmware. Every VM runs under KVM.
-- Linux 6.12 or newer, with Landlock enabled: `landlock` appears in `/sys/kernel/security/lsm`. The
-  broker runs under it, kept from your loopback services and abstract sockets, and a VM with a
-  network or a brokered credential does not start without it.
+- Linux 6.12 or newer, with Landlock enabled: `landlock` appears in `/sys/kernel/security/lsm`. Nix
+  evaluates a project's configuration under it, kept from your files, and the broker runs under it,
+  kept from your loopback services and abstract sockets. No VM starts without it.
 
 On NixOS the rest holds by default: `/dev/kvm` and `/dev/vhost-vsock` are usable through systemd's
 udev rules, the Nix build sandbox is on, and the binaries igloo runs come with its package. Two
@@ -217,7 +219,7 @@ any check failed, so a script can use it as a gate.
 | `/dev/vhost-vsock`     | You can open `/dev/vhost-vsock`, the management channel to every guest.     |
 | `virtiofsd`            | The virtio-fs daemon that serves the guest's shares starts.                 |
 | `store view`           | The helper that restricts a guest's Nix store to its own closure works.     |
-| `landlock`             | The helper the broker runs under can restrict itself with Landlock.         |
+| `landlock`             | The helper evaluation and the broker run under can restrict itself.         |
 | `bubblewrap`           | `bwrap` can open a sandbox. Only `igloo fallback` needs it.                 |
 | `XDG_RUNTIME_DIR`      | It is set and writable. Each running VM keeps its sockets there.            |
 

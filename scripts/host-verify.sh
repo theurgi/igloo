@@ -865,6 +865,48 @@ if [ -d "$project/.igloo" ]; then
 	else
 		verdict FAIL eval-content-fetch-confined "the launch failed, but not on restricted evaluation — read steps/eval-content-fetch-confined.txt"
 	fi
+
+	# A flake beside the key. `builtins.getFlake "path:..."` copies a directory
+	# into the store without asking restricted mode, the evaluation reads the
+	# copy there, and the copy stays. Landlock keeps the directory from nix, so
+	# each evaluation has to fail on that, and the copy nix would have made has
+	# to be absent. The canary differs on every run, so that a copy an earlier,
+	# unconfined igloo made is not this one.
+	mkdir -p "$project/.igloo/verify-flake"
+	printf 'igloo-verify-canary-%s\n' "$RANDOM$RANDOM$RANDOM" >"$project/.igloo/verify-flake/canary"
+	printf '{ outputs = _: { }; }\n' >"$project/.igloo/verify-flake/flake.nix"
+	flake_canary="builtins.readFile ((builtins.getFlake \"path:$project/.igloo/verify-flake\").outPath + \"/canary\")"
+
+	printf '{ network = %s; }\n' "$flake_canary" >"$project/igloo-policy.nix"
+	step eval-policy-getflake-confined -- "$repo/bin/igloo" up
+	rm -f "$project/igloo-policy.nix"
+	if grep -q 'verify-flake.*Permission denied' "$out/steps/eval-policy-getflake-confined.txt"; then
+		verdict PASS eval-policy-getflake-confined "a policy file cannot read a flake beside the project's key through getFlake"
+	else
+		verdict FAIL eval-policy-getflake-confined "the flake was not refused by Landlock — read steps/eval-policy-getflake-confined.txt"
+	fi
+
+	printf '{ ... }: { environment.etc.canary.text = %s; }\n' "$flake_canary" >"$project/igloo.nix"
+	if step eval-content-getflake-confined -- "$repo/bin/igloo" up; then
+		(cd "$project" && "$repo/bin/igloo" down) >>"$out/steps/eval-content-getflake-confined.txt" 2>&1
+		verdict FAIL eval-content-getflake-confined "a content layer read a flake beside the project's key through getFlake, and the VM booted"
+	elif grep -q 'verify-flake.*Permission denied' "$out/steps/eval-content-getflake-confined.txt"; then
+		verdict PASS eval-content-getflake-confined "a content layer cannot read a flake beside the project's key through getFlake"
+	else
+		verdict FAIL eval-content-getflake-confined "the launch failed, but not on Landlock's refusal — read steps/eval-content-getflake-confined.txt"
+	fi
+
+	# The copy either would have made, named without making it.
+	flake_copy=$(nix store add --dry-run --name source "$project/.igloo/verify-flake" \
+		2>"$out/steps/eval-getflake-copy.txt")
+	if [ -z "$flake_copy" ]; then
+		verdict FAIL eval-getflake-copy "cannot name the copy getFlake would make — read steps/eval-getflake-copy.txt"
+	elif nix path-info "$flake_copy" >>"$out/steps/eval-getflake-copy.txt" 2>&1; then
+		verdict FAIL eval-getflake-copy "the store holds a copy of the flake beside the project's key"
+	else
+		verdict PASS eval-getflake-copy "no evaluation left a copy of the flake beside the project's key in the store"
+	fi
+	rm -rf "$project/.igloo/verify-flake"
 	rm -f "$project/igloo.nix" "$project/.igloo/verify-canary"
 
 	# ---- a replaced runner's share metadata reaches no daemon --

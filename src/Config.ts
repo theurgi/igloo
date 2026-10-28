@@ -3,7 +3,7 @@ import type { Grant as BrokerGrant, ModelServerGrant, TunnelScope } from './brok
 import type { Publication } from './Vm.ts'
 
 import { Array as Arr, Effect, FileSystem, Predicate, Result, Schema } from 'effect'
-import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
+import { ChildProcessSpawner } from 'effect/unstable/process'
 import * as path from 'node:path'
 
 import {
@@ -1231,7 +1231,7 @@ const asValues = (value: unknown): Record<string, unknown> | undefined => {
  * with no configuration pays nothing for this.
  */
 const readPolicyFiles = Effect.fnUntraced(function* (
-  nix: string,
+  bins: Binaries,
   files: { readonly project: string | undefined; readonly user: string | undefined },
 ) {
   // Only the files that exist are named: naming an absent one fails the whole
@@ -1247,20 +1247,17 @@ const readPolicyFiles = Effect.fnUntraced(function* (
   // A project's policy file is Nix too, and may be one someone handed over, so
   // it is read under the same confinement as the content layers: the files
   // themselves and the store, and nothing fetched.
-  const allowance = { paths: yield* Evaluation.readable(existing), uris: [] }
-  const raw = yield* spawner
-    .string(
-      ChildProcess.make(
-        nix,
-        ['eval', ...Evaluation.args(allowance), '--json', '--expr', `{ ${parts.join(' ')} }`],
-        {
-          extendEnv: true,
-          stderr: 'inherit',
-          stdin: 'ignore',
-        },
-      ),
-    )
-    .pipe(Effect.orElseSucceed(() => ''))
+  const allowance = { paths: yield* Evaluation.readable(existing), flakes: [], uris: [] }
+  const raw = yield* Evaluation.command(bins, allowance, [
+    'eval',
+    '--json',
+    '--expr',
+    `{ ${parts.join(' ')} }`,
+  ]).pipe(
+    Effect.flatMap(command => spawner.string(command)),
+    Effect.scoped,
+    Effect.orElseSucceed(() => ''),
+  )
 
   const parsed = yield* Schema.decodeEffect(Evaluated)(raw).pipe(
     Effect.mapError(
@@ -1395,7 +1392,7 @@ export const resolve = Effect.fn('Config.resolve')(function* (
     project: projectFiles === undefined ? undefined : yield* present(projectFiles.policy),
     user: userFiles === undefined ? undefined : yield* present(userFiles.policy),
   }
-  const layers = yield* readPolicyFiles(bins.nix, policyFiles)
+  const layers = yield* readPolicyFiles(bins, policyFiles)
   const { notes, policy } = yield* Effect.fromResult(
     compose({
       project: layers.project,

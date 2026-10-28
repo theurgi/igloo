@@ -1,4 +1,7 @@
+import type { Binaries } from './Binaries.ts'
+
 import { Effect, FileSystem, Option, Schema } from 'effect'
+import { ChildProcess } from 'effect/unstable/process'
 import * as path from 'node:path'
 
 /**
@@ -7,9 +10,9 @@ import * as path from 'node:path'
  *
  * Both run as the developer, on the host, before any VM exists — so without
  * this, a module could read any file the developer can and fetch it out. The
- * evaluation runs in nix's restricted mode instead: it may read the store, the
- * paths named here and the flake's own inputs, may fetch only the URIs named
- * here, and nothing else on the host is reachable.
+ * evaluation runs in nix's restricted mode instead, and nix under Landlock
+ * (`command`): it may read the store and the paths and flakes named here, may
+ * fetch only the URIs named here, and nothing else on the host is reachable.
  *
  * Restricted rather than pure. Pure evaluation reads only flake inputs, so every
  * store path a layer imports — each module a home-manager configuration hands
@@ -17,8 +20,14 @@ import * as path from 'node:path'
  * relative imports would stop resolving. The allow-list keeps both.
  */
 export interface Allowance {
-  /** Files and directories evaluation may read, besides the flake's inputs. */
+  /** Files and directories evaluation may read, besides the flakes. */
   readonly paths: readonly string[]
+  /**
+   * The flakes evaluated: the runner's and igloo's. nix reads a flake for the
+   * evaluation rather than as a file the evaluation names, so restricted mode
+   * does not check them, and Landlock has to be told.
+   */
+  readonly flakes: readonly string[]
   /** URI prefixes evaluation may fetch. The flake's own inputs are fetches too. */
   readonly uris: readonly string[]
 }
@@ -31,7 +40,7 @@ export interface Allowance {
 export const STORE = '/nix/store'
 
 /**
- * The arguments that confine one evaluation: the runner's, or the policy files'.
+ * nix's options that confine one evaluation: the runner's, or the policy files'.
  *
  * `--impure` is part of the confinement rather than an exception to it: pure
  * mode ignores `-I`, so it could not be told which layer files to read.
@@ -70,6 +79,66 @@ export const args = (allowance: Allowance): Array<string> => [
     `igloo-allowed-${String(index)}=${allowed}`,
   ]),
 ]
+
+/**
+ * What nix's garbage collector reads, and warns on every evaluation without:
+ * its process's memory map, for the main thread's stack, and the processor
+ * count. `igloo-landlock` opens `/proc/self/maps` before it becomes nix, so the
+ * rule is on nix's own. The one file rather than `/proc/self`, which holds
+ * nix's environment, and so the developer's.
+ */
+const NIX_OWN = ['/proc/self/maps', '/proc/stat']
+
+/**
+ * `igloo-landlock`'s arguments for one evaluation, through the `--` that ends
+ * them. `cache` is the only place it may write.
+ */
+export const confinement = (allowance: Allowance, cache: string): Array<string> => [
+  '--connect-tcp',
+  '443',
+  '--connect-tcp',
+  '53',
+  ...[...new Set([STORE, ...allowance.paths, ...allowance.flakes, ...NIX_OWN])].flatMap(
+    readable => ['--read', readable],
+  ),
+  '--write',
+  cache,
+  '--',
+]
+
+/**
+ * `nix` with `nixArgs`, confined to the allowance twice: by `args`, and by the
+ * kernel, under `igloo-landlock`.
+ *
+ * Restricted mode checks what the evaluation reads, and nix reads some of it
+ * without asking: `builtins.getFlake "path:<directory>"` copies any directory
+ * the developer can read into the store, where the evaluation may read it, and
+ * the copy stays there. Under Landlock nix may read only the store, the paths
+ * and flakes the allowance names, and what its garbage collector reads; may
+ * write only a cache of its own, `NIX_CACHE_HOME`, fresh for this evaluation,
+ * in place of the developer's, which holds a copy of everything nix has fetched
+ * for them; and may connect over TCP only to 443, the port of every URI it may
+ * fetch, and to 53, for a resolver that retries over TCP. It reaches the daemon
+ * through a Unix socket with a path, which Landlock does not see.
+ *
+ * A fresh cache costs no download: nix takes an input a lock file names from
+ * the store when it is there, without asking the cache. A `nix.conf` outside
+ * the store is not readable, and nix goes on without it; NixOS and home-manager
+ * keep theirs in the store.
+ */
+export const command = Effect.fnUntraced(function* (
+  programs: Pick<Binaries, 'landlock' | 'nix'>,
+  allowance: Allowance,
+  nixArgs: readonly string[],
+) {
+  const fs = yield* FileSystem.FileSystem
+  const cache = yield* fs.makeTempDirectoryScoped({ prefix: 'igloo-nix-cache-' })
+  return ChildProcess.make(
+    programs.landlock,
+    [...confinement(allowance, cache), programs.nix, ...nixArgs, ...args(allowance)],
+    { env: { NIX_CACHE_HOME: cache }, extendEnv: true, stderr: 'inherit', stdin: 'ignore' },
+  )
+})
 
 /**
  * The store, and each path with the file it resolves to.
@@ -151,15 +220,18 @@ export const lockedUris = (lock: string): Array<string> =>
 
 /**
  * What evaluating one project's runner may read and fetch: its content layers,
- * its workspace, and the inputs igloo's own flake is locked to.
+ * its workspace, the runner's flake and igloo's, and the inputs igloo's own
+ * flake is locked to.
  *
  * The workspace is readable because content may come from it — a project layer
  * importing a module the repository carries. Nothing there is hidden from the
- * guest, which mounts it. The rest of the project directory is not readable,
- * and that is where the VM's private key is.
+ * guest, which mounts it. Of the rest of the project directory only the
+ * runner's flake is readable, which igloo writes, and the rest is where the
+ * VM's private key is.
  */
 export const forRunner = Effect.fnUntraced(function* (input: {
   readonly iglooFlakePath: string
+  readonly runnerDir: string
   readonly contentModules: readonly string[]
   readonly workspaceDir: string
 }) {
@@ -169,6 +241,7 @@ export const forRunner = Effect.fnUntraced(function* (input: {
     .pipe(Effect.orElseSucceed(() => ''))
   return {
     paths: yield* readable([...input.contentModules, input.workspaceDir]),
+    flakes: [input.runnerDir, input.iglooFlakePath],
     uris: lockedUris(lock),
   } satisfies Allowance
 })
