@@ -3040,6 +3040,58 @@ describe('Broker.serveRequests, on GitHub’s API', () => {
       }),
     ))
 
+  it('sends no method, path or origin the guest names in a header, here or to a provider', () => {
+    // A front end that honoured one of these would act on a method or path the
+    // grant was not decided on: a read as a delete, or a call to another path.
+    const steering = {
+      Forwarded: 'for=10.0.0.1;host=elsewhere.example;proto=http',
+      'X-Forwarded-For': '10.0.0.1',
+      'X-Forwarded-Host': 'elsewhere.example',
+      'X-Forwarded-Port': '80',
+      'X-Forwarded-Prefix': '/admin',
+      'X-Forwarded-Proto': 'http',
+      'X-HTTP-Method': 'DELETE',
+      'X-HTTP-Method-Override': 'DELETE',
+      'X-Method-Override': 'DELETE',
+      'X-Original-URL': '/repos/you/api/hooks',
+      'X-Real-IP': '10.0.0.1',
+      'X-Rewrite-URL': '/repos/you/api/hooks',
+    }
+    const providers: readonly Broker.Grant[] = [
+      ...grants,
+      { credential: 'ANTHROPIC_KEY', profile: 'anthropic-messages' },
+    ]
+    const keys = new Map([...held, ['ANTHROPIC_KEY', 'sk-test']])
+    return auditing(() =>
+      serving(providers, keys, github, async server => {
+        sent.length = 0
+        const read = await server.fetch(
+          new Request('http://broker/api.github.com/repos/you/api/issues', { headers: steering }),
+        )
+        const model = await server.fetch(
+          new Request('http://broker/api.anthropic.com/v1/messages', {
+            body: '{"messages":[],"model":"claude-x"}',
+            headers: steering,
+            method: 'POST',
+          }),
+        )
+        assert.deepStrictEqual([read.status, model.status], [200, 200])
+        assert.deepStrictEqual(
+          sent.map(({ init, url }) => [init.method, url]),
+          [
+            ['GET', 'https://api.github.com/repos/you/api/issues'],
+            ['POST', 'https://api.anthropic.com/v1/messages'],
+          ],
+        )
+        for (const { init, url } of sent) {
+          const headers = new Headers(init.headers)
+          for (const name of Object.keys(steering))
+            assert.isNull(headers.get(name), `${url} ${name}`)
+        }
+      }),
+    )
+  })
+
   it('passes a log’s redirect back for the guest to follow, and follows none itself', () =>
     auditing(() =>
       serving(grants, held, github, async server => {

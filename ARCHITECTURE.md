@@ -257,15 +257,16 @@ The credential is always the broker's. A git request's headers are built, carryi
 only git's protocol version, checked against a pattern, and its body's gzip encoding
 (`upstreamHeaders`). A model request carries the guest's headers less its credentials, the
 hop-by-hop ones and any its `Connection` names, `Host`, `Expect`, `Content-Length` and
-`Accept-Encoding` (`unforwardedRequestHeaders`), and a listing carries no body headers
-(`bodyHeaders`); the broker's credential is set after the guest's are dropped. An anonymous read is
-built as a model request is, and no credential is set. A redirect is never followed, a 401 becomes
-the broker's own refusal (`relay`), and an answer loses its cookies and authentication challenges on
-the way back (`responseHeaders`). The redirects of an API request and an anonymous read alone go
-back to the guest as they came: an API's leads to a signed URL for a log or an asset, and the broker
-neither follows it nor sends its credential there. An API answer's `Link` naming a page by the
-repository's number is put back in the `repos/<owner>/<repo>/` form (`pagesOf`), so a client
-following it stays within the grant.
+`Accept-Encoding`, and those a front end could take another method, path or origin from, such as
+`X-HTTP-Method-Override`, `Forwarded` and `X-Original-URL` (`unforwardedRequestHeaders`), and a
+listing carries no body headers (`bodyHeaders`); the broker's credential is set after the guest's
+are dropped. An anonymous read is built as a model request is, and no credential is set. A redirect
+is never followed, a 401 becomes the broker's own refusal (`relay`), and an answer loses its cookies
+and authentication challenges on the way back (`responseHeaders`). The redirects of an API request
+and an anonymous read alone go back to the guest as they came: an API's leads to a signed URL for a
+log or an asset, and the broker neither follows it nor sends its credential there. An API answer's
+`Link` naming a page by the repository's number is put back in the `repos/<owner>/<repo>/` form
+(`pagesOf`), so a client following it stays within the grant.
 
 The body is streamed upstream as it arrives, in chunks, never read and never refused for its size
 (`handle`, `serveRequests`). An asset's upload sent with a `Content-Length` and no

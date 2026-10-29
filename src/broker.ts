@@ -1259,7 +1259,7 @@ const hopByHop = [
   'upgrade',
 ] as const
 
-/** The guest's headers an inference request does not carry upstream. */
+/** The guest's headers a request other than git's does not carry upstream. */
 const unforwardedRequestHeaders: ReadonlySet<string> = new Set([
   // Credentials. The one that reaches the provider is the broker's.
   'authorization',
@@ -1270,6 +1270,21 @@ const unforwardedRequestHeaders: ReadonlySet<string> = new Set([
   // About the connection to this broker, which is not the one to the provider.
   'expect',
   'host',
+  // What a front end in the provider's path may act on in place of the
+  // request's own method, path or origin. The grant was decided on the method
+  // and path the request has, and the provider is reached from this host.
+  'forwarded',
+  'x-forwarded-for',
+  'x-forwarded-host',
+  'x-forwarded-port',
+  'x-forwarded-prefix',
+  'x-forwarded-proto',
+  'x-http-method',
+  'x-http-method-override',
+  'x-method-override',
+  'x-original-url',
+  'x-real-ip',
+  'x-rewrite-url',
   // How the guest framed its body for this connection. `fetch` frames it again
   // from the bytes it sends, in chunks, so no length the guest stated can
   // disagree with what reaches the provider. An asset's upload is the one
@@ -1375,11 +1390,12 @@ const packTypes = {
  * `unforwardedRequestHeaders`, so a harness reaches its provider as it would
  * from the host: its API version, its betas, its session and cache hints, its
  * own name. None of them can send the request elsewhere or attach a
- * credential, since the URL is built from the grant and the credential is set
- * after the guest's are dropped. A model server's request is built the same
- * way, as is one through a forge's API, and so is an anonymous read, whose
- * credentials are dropped and none set. An asset's upload carries the length
- * `uploadLength` gives it, if any.
+ * credential, since the URL is built from the grant, the credential is set
+ * after the guest's are dropped, and so are the headers a front end could
+ * take another method, path or origin from. A model server's request is built
+ * the same way, as is one through a forge's API, and so is an anonymous read,
+ * whose credentials are dropped and none set. An asset's upload carries the
+ * length `uploadLength` gives it, if any.
  *
  * `token` is the value of the credential the decision names, and `undefined`
  * only for a model server that takes none and an anonymous read: `handle`

@@ -411,8 +411,11 @@ On every brokered request:
 - On an inference profile, a model server or GitHub's API, the guest's other headers pass,
   `anthropic-version`, `anthropic-beta`, `x-session-id` and `X-GitHub-Api-Version` included. Those
   about the guest's connection do not: `Host`, `Connection` and the headers it names, the other
-  hop-by-hop ones, and `Expect`. Nor do `Accept-Encoding` and `Content-Length`, which the broker
-  sets itself: a body goes in chunks, but for a release's asset sent with a `Content-Length` and no
+  hop-by-hop ones, and `Expect`. Nor do those a server in front of the upstream could take another
+  method, path or origin from: `X-HTTP-Method-Override`, `X-HTTP-Method`, `X-Method-Override`,
+  `X-Original-URL`, `X-Rewrite-URL`, `Forwarded`, `X-Forwarded-For`, `-Host`, `-Port`, `-Prefix` and
+  `-Proto`, and `X-Real-IP`. Nor do `Accept-Encoding` and `Content-Length`, which the broker sets
+  itself: a body goes in chunks, but for a release's asset sent with a `Content-Length` and no
   `Transfer-Encoding`, which goes with that length and is cut off if it runs past it or ends short.
   A request that sends no body, a model listing or a read, carries no `Content-Type` or
   `Content-Encoding` either. On git's requests to `github.com`, the broker builds the headers and
