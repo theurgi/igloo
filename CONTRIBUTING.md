@@ -89,7 +89,7 @@ It checks on a real host what the tests cannot reach:
   delivered and brokered credentials, and under `restricted` and `internet`. Each launch is checked
   from the host and from inside the guest: the virtio-fs daemons' sandboxes, the guest's store, and
   the confinement of QEMU, the broker, the tether and the port forward, read off their running
-  processes.
+  processes. One launch starts from a runtime directory left unwritable, with links planted in it.
 - **The broker against real upstreams.** Its grants and refusals for github.com, api.anthropic.com
   and a stand-in model server; the tunnel, and its refusal of names that resolve inside the host;
   and a broker killed outright, or for memory, started again.

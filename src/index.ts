@@ -2,7 +2,7 @@
 import type { VmSpec } from './Vm.ts'
 
 import { BunRuntime, BunServices } from '@effect/platform-bun'
-import { Effect, FileSystem, Option } from 'effect'
+import { Effect, FileSystem, Option, Result } from 'effect'
 import { Argument, Command, Flag } from 'effect/unstable/cli'
 import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
 import { availableParallelism, hostname } from 'node:os'
@@ -479,16 +479,20 @@ const down = Command.make(
     //
     // Concurrent because each poweroff waits on its own guest for up to 30s, and
     // serially that is 30s *per VM* of silence. The VMs are independent, so the
-    // wait is one budget rather than N.
+    // wait is one budget rather than N. Each is taken down whatever happens to
+    // another, so one that fails leaves none of the rest up, and the first
+    // failure is the one reported.
     const vms = yield* Vm.list(bins)
-    yield* Effect.forEach(
-      vms,
-      vm =>
+    const results = yield* Effect.all(
+      vms.map(vm =>
         Effect.gen(function* () {
           yield* Vm.down(bins, { id: vm.id, runtimeDir: yield* runtimeDir(vm.id) })
         }),
-      { concurrency: 'unbounded', discard: true },
+      ),
+      { concurrency: 'unbounded', mode: 'result' },
     )
+    const failed = results.find(Result.isFailure)
+    if (failed !== undefined) return yield* failed.failure
   }),
 ).pipe(Command.withDescription('Power the guest off and stop its slice'))
 

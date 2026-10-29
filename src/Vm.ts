@@ -698,6 +698,48 @@ const tlsSocket = (target: VmTarget): string => `${brokerDir(target)}/tls.sock`
 const brokerCredentialsDir = (target: VmTarget): string => `${target.runtimeDir}/broker-credentials`
 
 /**
+ * Remove a directory and everything in it, or fail naming it.
+ *
+ * For the runtime directory and the broker's. QEMU and the broker write into
+ * them as the user, so either can take the user's write permission away from a
+ * directory there, and a directory at mode 0500 stops a removal part of the
+ * way, leaving what may be a link placed where a launch is about to write. A
+ * removal that fails is tried again once the user has every permission on each
+ * directory left, and a directory that survives that is not reused.
+ */
+const removeAll = Effect.fnUntraced(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem
+  const removal = fs.remove(dir, { force: true, recursive: true })
+  if (Result.isSuccess(yield* Effect.result(removal))) return
+  yield* restoreOwnerAccess(dir)
+  yield* removal.pipe(
+    Effect.mapError(
+      () =>
+        new VmError({
+          message: `cannot remove ${dir}, which a VM's units wrote into, and a launch will not start from what is left in it`,
+        }),
+    ),
+  )
+})
+
+/**
+ * Give the owner every permission on `dir` and each directory under it, and
+ * follow no link to do it: `chmod` changes what a link points at, which may be
+ * any file of the user's.
+ */
+const restoreOwnerAccess = Effect.fnUntraced(function* (
+  dir: string,
+): Effect.fn.Return<void, never, FileSystem.FileSystem> {
+  const fs = yield* FileSystem.FileSystem
+  if (Result.isSuccess(yield* Effect.result(fs.readLink(dir)))) return
+  const info = yield* Effect.result(fs.stat(dir))
+  if (Result.isFailure(info) || info.success.type !== 'Directory') return
+  yield* fs.chmod(dir, 0o700).pipe(Effect.ignore)
+  const entries = yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []))
+  for (const entry of entries) yield* restoreOwnerAccess(`${dir}/${entry}`)
+})
+
+/**
  * Check `ready` every `every` until it holds. Fail with what `failed` answers as
  * soon as it answers anything, and with `timedOut` once `within` has passed.
  *
@@ -1257,7 +1299,7 @@ const launch = Effect.fnUntraced(function* (bins: Binaries, spec: VmSpec, boot: 
   // teardown `down` performs.
   yield* Systemd.stopSlice(bins.systemctl, slice(spec.id))
 
-  // Emptied rather than tidied: its path is stable across runs, and what a
+  // Removed rather than tidied: its path is stable across runs, and what a
   // previous run left there was last written by a QEMU, which can write here.
   // Any entry may be a symlink placed to turn a write this launch makes — or
   // one virtiofsd makes beside its socket — into a write to a file of the
@@ -1266,11 +1308,11 @@ const launch = Effect.fnUntraced(function* (bins: Binaries, spec: VmSpec, boot: 
   // nothing, a leftover QMP socket is in the way of the new one, and leftover
   // credential values would let a VM start with a value nothing had
   // re-authorized. The slice is stopped, so nothing is using it.
-  yield* fs.remove(spec.runtimeDir, { recursive: true }).pipe(Effect.ignore)
+  yield* removeAll(spec.runtimeDir)
   // A previous run's broker directory. The socket in it is a file the next
   // broker cannot bind over, and the symptom is a broker that fails to start on
   // a VM whose tether came up fine — which reads as the tether's fault.
-  yield* fs.remove(brokerDir(spec), { recursive: true }).pipe(Effect.ignore)
+  yield* removeAll(brokerDir(spec))
   // The gc-root's parent is in the project and may not exist yet; the runtime
   // directory is on a tmpfs and was just removed. The log directory needs no
   // entry: the boot record made its own directory inside it before this ran.
@@ -1574,8 +1616,6 @@ export const attach = Effect.fn('Vm.attach')(function* (bins: Binaries, spec: Vm
  * never started.
  */
 export const down = Effect.fn('Vm.down')(function* (bins: Binaries, target: VmTarget) {
-  const fs = yield* FileSystem.FileSystem
-
   if (yield* Systemd.isActive(bins.systemctl, qemuUnit(target.id))) {
     yield* note(`powering off ${target.id}`)
     const qemu = numberOr(
@@ -1610,12 +1650,14 @@ export const down = Effect.fn('Vm.down')(function* (bins: Binaries, target: VmTa
 
   yield* Systemd.stopSlice(bins.systemctl, slice(target.id))
 
-  // The values, once the VM that was given them is gone. They are on a tmpfs
-  // and are removed by a reboot anyway; this is so that "the VM is down" and
-  // "the credentials are no longer on this machine" are the same moment.
-  yield* fs.remove(credentialsDir(target), { recursive: true }).pipe(Effect.ignore)
-  yield* fs.remove(brokerCredentialsDir(target), { recursive: true }).pipe(Effect.ignore)
-  yield* fs.remove(brokerDir(target), { recursive: true }).pipe(Effect.ignore)
+  // The values, once the VM that was given them is gone, and everything else
+  // its run left with them. They are on a tmpfs and are removed by a reboot
+  // anyway; this is so that "the VM is down" and "the credentials are no
+  // longer on this machine" are the same moment, and a `down` that cannot make
+  // it so says so, once it has removed what it can.
+  const runtime = yield* Effect.result(removeAll(target.runtimeDir))
+  yield* removeAll(brokerDir(target))
+  if (Result.isFailure(runtime)) return yield* runtime.failure
 })
 
 /** What `list` can say about a VM's broker, for a VM that has one. */

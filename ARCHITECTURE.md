@@ -90,7 +90,8 @@ In `$XDG_RUNTIME_DIR/igloo/`, a tmpfs:
    `Flake.write` writes the runner flake.
 3. If the VM is already running, nothing is built: `up` says which of its inputs changed since it
    launched (`LaunchInputs`) and makes sure its broker, tether and ports are up. Otherwise:
-4. The slice is stopped and the runtime directory emptied.
+4. The slice is stopped, and the runtime directory and the broker's removed. A launch that cannot
+   remove them stops there.
 5. The credentials are fetched (`Secrets.write`), first, since a source may prompt for a passphrase.
 6. The runner is evaluated once, confined, to a `.drv` (`Vm.ts`'s `instantiate`). The build plan is
    checked (`BuildPlan.check`) and that same `.drv` built (`Vm.ts`'s `build`), pinned by the
@@ -394,12 +395,13 @@ Everything else builds in nix's sandbox, without the network, which holds where 
 ### A credential's value goes only where its mode sends it
 
 `Secrets` fetches each value on the host and returns none: it writes each to a file on the runtime
-tmpfs, mode 0600 in a 0700 directory, and `down` removes them (`Secrets.write`, `Vm.down`). A source
-the guest could have written, a file or a command named by its path inside the workspace or the home
-through any symlink, is refused (`Secrets.ts`'s `outsideGuest`). A command runs in the directory of
-the layer that declared it (`Spec.fromConfig`), and a file source has to be an absolute path outside
-the store (`Config.ts`'s `readSource`). An error names the credential and its source, never the
-value or anything the source printed (`SecretsError`).
+tmpfs, mode 0600 in a 0700 directory, and `down` removes them, or fails saying it could not
+(`Secrets.write`, `Vm.down`). A source the guest could have written, a file or a command named by
+its path inside the workspace or the home through any symlink, is refused (`Secrets.ts`'s
+`outsideGuest`). A command runs in the directory of the layer that declared it (`Spec.fromConfig`),
+and a file source has to be an absolute path outside the store (`Config.ts`'s `readSource`). An
+error names the credential and its source, never the value or anything the source printed
+(`SecretsError`).
 
 A brokered value reaches the broker by `LoadCredential=`, from the file's path, and so never on a
 command line: a unit's `credentials` has no field that could carry a value (`Systemd.Unit`). QEMU's
@@ -430,12 +432,15 @@ sockets and no other kind, so neither IP nor vsock; its guest's vsock it drives 
 It has no capabilities and no memory both writable and executable. The whole store is readable to
 it, as it is to every user of the host.
 
-Its runtime directory is writable to it, so a fresh `up` empties that directory before writing into
-it (`Vm.launch`). QEMU loads a kernel and an initrd that content chose into the guest, so one that
+Its runtime directory is writable to it, so a fresh `up` removes that directory before writing into
+it, and `down` removes it too. QEMU can take its owner's write permission away from any directory
+there, so a removal that fails is tried again once the owner has every permission on each directory
+left, given without following a link, and a directory that survives that stops the launch (`Vm.ts`'s
+`removeAll`). QEMU loads a kernel and an initrd that content chose into the guest, so one that
 resolves outside the store, or to a store path the runner was not built from, fails the runner's
 build (`mkRunner`'s `checkBootFile`).
 
-**Held by:** `Systemd.Hypervisor`, `Vm.launch`, `mkRunner`'s `checkBootFile`.
+**Held by:** `Systemd.Hypervisor`, `Vm.launch`, `Vm.down`, `mkRunner`'s `checkBootFile`.
 
 ### Each virtio-fs daemon serves the guest from virtiofsd's own sandbox
 

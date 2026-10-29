@@ -2444,6 +2444,75 @@ GUEST
 				fi
 			fi
 
+			# ------------------------------------------ what QEMU leaves behind --
+			#
+			# QEMU writes into its runtime directory as the user, so a QEMU the
+			# guest has escaped into can leave links there, where the next launch
+			# writes — the list of store paths, a daemon's PID file, the brokered
+			# credentials — to files and directories of the user's, and take its
+			# owner's write permission away so that no removal reaches them. A
+			# guest that powers itself off leaves the directory as it is for the
+			# next launch. So the links are planted as the user, who is who QEMU
+			# writes as, QEMU's unit is stopped as a poweroff stops it, and the
+			# VM is launched again. Nothing a link names may be written or
+			# changed, and the launch has to remove what was planted or refuse.
+			section "what QEMU leaves behind"
+			planted="$scratch/planted"
+			mkdir -p "$planted/credentials"
+			echo canary >"$planted/store-paths"
+			echo canary >"$planted/pid"
+			credentials_mode=$(stat -c %a "$planted/credentials")
+			planted_all=yes
+			plant() { # plant <target> <link>
+				ln -sfn "$1" "$2"
+				echo "$(basename "$2") $?"
+				[ -L "$2" ] || planted_all=""
+			}
+			{
+				echo "=== planted, each with its exit status"
+				rm -rf "$runtime/broker-credentials"
+				plant "$planted/store-paths" "$runtime/store-paths"
+				plant "$planted/credentials" "$runtime/broker-credentials"
+				for socket in "$runtime"/*.sock; do plant "$planted/pid" "$socket.pid"; done
+				chmod 0500 "$runtime"
+				echo "the directory at mode 0500 $?"
+				[ "$(stat -c %a "$runtime")" = 500 ] || planted_all=""
+				echo
+				echo "=== QEMU stopped, as a guest stops it by powering off"
+				systemctl --user stop "$qemu_unit"
+				echo "stopped $?"
+			} >"$out/artifacts/runtime-dir-plant.txt" 2>&1
+			planted_up=""
+			step up-planted -- "$repo/bin/igloo" up && planted_up=yes
+			keep_boot up-planted
+			{
+				echo
+				echo "=== after the launch"
+				[ -n "$planted_up" ] && echo "launch succeeded" || echo "launch failed"
+				for file in store-paths pid; do
+					grep -qx canary "$planted/$file" && echo "$file unchanged" || echo "$file changed"
+				done
+				echo "credentials directory entries: $(find "$planted/credentials" -mindepth 1 | grep -c .)"
+				[ "$(stat -c %a "$planted/credentials")" = "$credentials_mode" ] &&
+					echo "credentials directory mode unchanged" || echo "credentials directory mode changed"
+				echo "links left in the runtime directory: $(find "$runtime" -maxdepth 1 -type l 2>/dev/null | grep -c .)"
+			} >>"$out/artifacts/runtime-dir-plant.txt" 2>&1
+			if [ -z "$planted_all" ]; then
+				verdict NOTE runtime-dir-undeletable-refused "not checked: the runtime directory could not be planted — read artifacts/runtime-dir-plant.txt"
+			elif grep -qE '^(store-paths|pid|credentials directory mode) changed$|^credentials directory entries: [1-9]' "$out/artifacts/runtime-dir-plant.txt"; then
+				verdict FAIL runtime-dir-undeletable-refused "a write followed a link planted in a runtime directory QEMU made unwritable — read artifacts/runtime-dir-plant.txt"
+			elif { [ -n "$planted_up" ] && grep -qx 'links left in the runtime directory: 0' "$out/artifacts/runtime-dir-plant.txt"; } ||
+				{ [ -z "$planted_up" ] && grep -q 'a launch will not start from what is left in it' "$out/steps/up-planted.txt"; }; then
+				verdict PASS runtime-dir-undeletable-refused "a runtime directory QEMU made unwritable is removed before a launch writes into it, or refused, and nothing a link planted in it names is written"
+			else
+				verdict FAIL runtime-dir-undeletable-refused "read artifacts/runtime-dir-plant.txt, then steps/up-planted.txt"
+			fi
+			# A launch that refused leaves it for every later one to refuse.
+			if [ -z "$planted_up" ]; then
+				find "$runtime" -type d -exec chmod u+rwx {} + 2>/dev/null
+				rm -rf "$runtime"
+			fi
+
 			# ------------------------------------------- with a real token, opt-in --
 			#
 			# Last, and on its own VM, because it replaces the credential with

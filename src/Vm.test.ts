@@ -2,7 +2,7 @@ import type { VmSpec } from './Vm.ts'
 
 import { BunServices } from '@effect/platform-bun'
 import { afterAll, assert, beforeAll, describe, it, vi } from '@effect/vitest'
-import { Clock, Effect, FileSystem, Result, Schema } from 'effect'
+import { Clock, Effect, FileSystem, PlatformError, Result, Schema } from 'effect'
 import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
 import { homedir } from 'node:os'
 import { basename, dirname } from 'node:path'
@@ -68,7 +68,7 @@ const fromStore = Effect.fnUntraced(function* (name: string) {
 
 /**
  * QEMU's side of `down`'s exchange: a greeting, a reply to each command, and on
- * `system_powerdown` a `poweroff` file and an exit — which is what a guest that
+ * `system_powerdown` a line on its console and an exit — which is what a guest that
  * obeys its power button amounts to, seen from the host.
  */
 const qmpServer = String.raw`use strict;
@@ -83,8 +83,7 @@ while (my $client = $server->accept) {
   while (my $line = <$client>) {
     print $client qq({"return": {}}\r\n);
     if ($line =~ /"system_powerdown"/) {
-      open(my $mark, '>', 'poweroff') or die;
-      close($mark);
+      print "fake QEMU: powered off\n";
       exit 0;
     }
   }
@@ -97,7 +96,7 @@ while (my $client = $server->accept) {
  *
  * The fakes talk to each other through the working directory — virtiofsd binds
  * the socket there, and `microvm-run` becomes a QMP server on `control.socket`
- * that drops a `poweroff` file beside it when told to power off — so a test that
+ * that says on its console when it is told to power off — so a test that
  * passes also proves the units were given the working directory they need.
  * The fake runner still has a `microvm-shutdown`, which only records that
  * something ran it, because nothing should.
@@ -442,6 +441,68 @@ exec "$@"
 
 /** Mirrors `Vm`'s own slice naming, escaping included. */
 const sliceOf = (spec: VmSpec): string => `igloo-${Systemd.escapeSliceComponent(spec.id)}`
+
+/**
+ * `fs`, with its first `times` removals of `path` refused, as a removal of a
+ * directory QEMU made unwritable is refused — to anyone but root, so the tests
+ * that need it refused cannot leave it to the mode.
+ */
+const refusingRemoval = (
+  fs: FileSystem.FileSystem,
+  path: string,
+  times: number,
+): FileSystem.FileSystem => {
+  let refused = 0
+  return {
+    ...fs,
+    remove: (target, options) =>
+      Effect.suspend(() => {
+        if (target !== path || refused >= times) return fs.remove(target, options)
+        refused += 1
+        return Effect.fail(
+          PlatformError.systemError({
+            _tag: 'PermissionDenied',
+            method: 'remove',
+            module: 'FileSystem',
+            pathOrDescriptor: target,
+          }),
+        )
+      }),
+  }
+}
+
+/**
+ * What a QEMU can leave in its runtime directory: links where a launch writes,
+ * to a file and a directory of the user's, a directory of its own, and each of
+ * its directories at mode 0500.
+ */
+const plantRuntimeDir = Effect.fnUntraced(function* (dir: string, runtimeDir: string) {
+  const fs = yield* FileSystem.FileSystem
+  const planted = { elsewhere: `${dir}/elsewhere`, victim: `${dir}/victim` }
+  yield* fs.writeFileString(planted.victim, 'the user’s own')
+  yield* fs.chmod(planted.victim, 0o444)
+  yield* fs.makeDirectory(planted.elsewhere)
+  yield* fs.chmod(planted.elsewhere, 0o555)
+  yield* fs.makeDirectory(`${runtimeDir}/its-own`, { recursive: true })
+  yield* fs.writeFileString(`${runtimeDir}/its-own/entry`, '')
+  yield* fs.symlink(planted.victim, `${runtimeDir}/store-paths`)
+  yield* fs.symlink(planted.elsewhere, `${runtimeDir}/broker-credentials`)
+  yield* fs.chmod(`${runtimeDir}/its-own`, 0o500)
+  yield* fs.chmod(runtimeDir, 0o500)
+  return planted
+})
+
+/** Whether a planted file and directory are as they were planted. */
+const untouched = Effect.fnUntraced(function* (planted: {
+  readonly elsewhere: string
+  readonly victim: string
+}) {
+  const fs = yield* FileSystem.FileSystem
+  assert.strictEqual(yield* fs.readFileString(planted.victim), 'the user’s own')
+  assert.strictEqual((yield* fs.stat(planted.victim)).mode & 0o777, 0o444)
+  assert.deepStrictEqual(yield* fs.readDirectory(planted.elsewhere), [])
+  assert.strictEqual((yield* fs.stat(planted.elsewhere)).mode & 0o777, 0o555)
+})
 
 /** The boot records under a log directory, oldest first. */
 const bootDirs = Effect.fnUntraced(function* (logDir: string) {
@@ -883,7 +944,10 @@ describe('Vm.up', () => {
         // Powered off over QMP rather than killed, which also proves the unit's
         // main process is the one listening — the only peer `down` will speak
         // to — under the confinement's PID namespace.
-        assert.isTrue(yield* fs.exists(`${spec.runtimeDir}/poweroff`))
+        assert.include(
+          yield* fs.readFileString(`${spec.logDir}/${BootLog.LATEST}/serial.log`),
+          'fake QEMU: powered off',
+        )
         // And by `down` itself: the runner is built from the VM's
         // configuration, and nothing in it runs outside QEMU's unit.
         assert.isFalse(yield* fs.exists(fakes.shutdownHelperRan))
@@ -1038,6 +1102,97 @@ describe('Vm.up', () => {
           '/nix/store/aaa\n/nix/store/bbb\n',
         )
         yield* Vm.down(fakes.binaries, spec)
+      }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+    30_000,
+  )
+
+  it.live(
+    'removes a runtime directory QEMU made unwritable, and changes nothing a link in it names',
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* fs.makeTempDirectoryScoped()
+        const fakes = yield* writeFakes(dir)
+        const spec = specIn(dir, 'selftest-unwritable')
+        yield* Effect.addFinalizer(() => Systemd.stopSlice('systemctl', sliceOf(spec)))
+        const planted = yield* plantRuntimeDir(dir, spec.runtimeDir)
+
+        yield* Vm.up(fakes.binaries, spec).pipe(
+          Effect.provideService(FileSystem.FileSystem, refusingRemoval(fs, spec.runtimeDir, 1)),
+        )
+
+        yield* untouched(planted)
+        assert.isFalse(yield* fs.exists(`${spec.runtimeDir}/its-own`))
+        assert.strictEqual(
+          yield* fs.readFileString(`${spec.runtimeDir}/store-paths`),
+          '/nix/store/aaa\n/nix/store/bbb\n',
+        )
+        yield* Vm.down(fakes.binaries, spec)
+      }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+    30_000,
+  )
+
+  it.live(
+    'refuses a runtime directory it cannot remove, before writing a credential into it',
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* fs.makeTempDirectoryScoped()
+        const fakes = yield* writeFakes(dir)
+        const sourceFile = `${dir}/token-source`
+        yield* fs.writeFileString(sourceFile, 'sk-the-actual-secret')
+        const base = specIn(dir, 'selftest-unremovable')
+        const spec = {
+          ...base,
+          broker: true,
+          brokered: [
+            {
+              cwd: dir,
+              hostPath: `${base.runtimeDir}/broker-credentials/GITHUB_TOKEN`,
+              name: 'GITHUB_TOKEN',
+              source: { _tag: 'File', path: sourceFile } as const,
+            },
+          ],
+        }
+        yield* Effect.addFinalizer(() => Systemd.stopSlice('systemctl', sliceOf(spec)))
+        const planted = yield* plantRuntimeDir(dir, spec.runtimeDir)
+
+        const launched = yield* Effect.result(
+          Vm.up(fakes.binaries, spec).pipe(
+            Effect.provideService(FileSystem.FileSystem, refusingRemoval(fs, spec.runtimeDir, 2)),
+          ),
+        )
+
+        assert.isTrue(Result.isFailure(launched))
+        if (Result.isFailure(launched)) assert.include(launched.failure.message, spec.runtimeDir)
+        yield* untouched(planted)
+        assert.isFalse(yield* Systemd.isActive('systemctl', `igloo-${spec.id}-qemu`))
+      }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+    30_000,
+  )
+
+  it.live(
+    'takes the broker’s directory down with a runtime directory it cannot remove, and says so',
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* fs.makeTempDirectoryScoped()
+        const fakes = yield* writeFakes(dir)
+        const spec = specIn(dir, 'selftest-down-unremovable')
+        yield* fs.makeDirectory(`${spec.runtimeDir}/credentials`, { recursive: true })
+        yield* fs.writeFileString(`${spec.runtimeDir}/credentials/TOKEN`, 'value')
+        yield* fs.makeDirectory(`${spec.runtimeDir}-broker`)
+        yield* fs.writeFileString(`${spec.runtimeDir}-broker/http.sock`, '')
+
+        const stopped = yield* Effect.result(
+          Vm.down(fakes.binaries, spec).pipe(
+            Effect.provideService(FileSystem.FileSystem, refusingRemoval(fs, spec.runtimeDir, 2)),
+          ),
+        )
+
+        assert.isTrue(Result.isFailure(stopped))
+        if (Result.isFailure(stopped)) assert.include(stopped.failure.message, spec.runtimeDir)
+        assert.isFalse(yield* fs.exists(`${spec.runtimeDir}-broker`))
       }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
     30_000,
   )
@@ -1643,7 +1798,10 @@ describe('Vm.list', () => {
 
         assert.strictEqual(received, 0)
         // This VM's own QEMU was not asked either, so its cgroup was killed.
-        assert.isFalse(yield* fs.exists(`${spec.runtimeDir}/poweroff`))
+        assert.notInclude(
+          yield* fs.readFileString(`${spec.logDir}/${BootLog.LATEST}/serial.log`),
+          'fake QEMU: powered off',
+        )
         assert.isFalse(yield* Systemd.isActive('systemctl', `igloo-${spec.id}-qemu.service`))
       }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
     30_000,
