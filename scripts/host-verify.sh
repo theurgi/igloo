@@ -1146,6 +1146,53 @@ EOF
 		else
 			verdict FAIL virtiofsd-sandboxed "$sandboxed of $daemons virtio-fs daemons have a sandboxed worker ($workers workers found) — read artifacts/virtiofsd-sandbox.txt"
 		fi
+
+		# And it serves from there or not at all: a daemon that cannot enter
+		# its sandbox exits without binding its socket. Run on a scratch
+		# directory with the workspace daemon's own arguments, once as they
+		# are, when it has to serve, and once where it may make no user
+		# namespace, the first thing its sandbox needs, when it must not.
+		vfs_args=()
+		vfs_main=$(systemctl --user show -P MainPID "$(own_units 'igloo-*-virtiofsd-workspace.service' | head -1)" 2>/dev/null)
+		if [ -n "$vfs_main" ] && [ "$vfs_main" != 0 ]; then
+			while IFS= read -r -d '' arg; do
+				[[ $arg == --shared-dir=* ]] && arg=--shared-dir=$scratch/virtiofsd/share
+				vfs_args+=("$arg")
+			done <"/proc/$vfs_main/cmdline"
+		fi
+		unsandboxed() { # unsandboxed <label> [wrapper...] — how the daemon stands 3s after it starts
+			local label=$1 pid state
+			shift
+			rm -rf "$scratch/virtiofsd"
+			mkdir -p "$scratch/virtiofsd/share"
+			(cd "$scratch/virtiofsd" && exec "$@" "${vfs_args[@]}") >"$scratch/virtiofsd.log" 2>&1 &
+			pid=$!
+			sleep 3
+			if kill -0 "$pid" 2>/dev/null; then state=running; else
+				wait "$pid"
+				state="exited $?"
+			fi
+			echo "=== $label: $state, socket $(find "$scratch/virtiofsd" -maxdepth 1 -type s | grep -q . && echo bound || echo absent)"
+			cat "$scratch/virtiofsd.log"
+			# Its worker outlives a parent killed alone.
+			pkill -KILL -f -- "--shared-dir=$scratch/virtiofsd/share"
+			wait "$pid" 2>/dev/null
+		}
+		if [ "${#vfs_args[@]}" = 0 ]; then
+			verdict NOTE virtiofsd-refuses-unsandboxed "not checked: no workspace daemon to take the arguments of"
+		else
+			{
+				unsandboxed sandboxed
+				unsandboxed 'no user namespace' "$IGLOO_BWRAP" --unshare-user --disable-userns --dev-bind / / --
+			} >"$out/artifacts/virtiofsd-unsandboxed.txt" 2>&1
+			if ! grep -qx '=== sandboxed: running, socket bound' "$out/artifacts/virtiofsd-unsandboxed.txt"; then
+				verdict FAIL virtiofsd-refuses-unsandboxed "the daemon did not serve with its sandbox either, so this shows nothing — read artifacts/virtiofsd-unsandboxed.txt"
+			elif grep -qE '^=== no user namespace: exited [1-9][0-9]*, socket absent$' "$out/artifacts/virtiofsd-unsandboxed.txt"; then
+				verdict PASS virtiofsd-refuses-unsandboxed "virtiofsd exits without binding its socket when it cannot enter its sandbox"
+			else
+				verdict FAIL virtiofsd-refuses-unsandboxed "virtiofsd went on without its sandbox — read artifacts/virtiofsd-unsandboxed.txt"
+			fi
+		fi
 	fi
 
 	# Inside the guest. There is no `igloo exec`, so this rebuilds the same ssh
