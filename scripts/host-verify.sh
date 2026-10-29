@@ -2797,6 +2797,27 @@ EOF
 			own=$(ip -6 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | grep -E '^[23]' | head -1)
 			[ -z "$own" ] || own_dashed=$(printf '%s' "$own" | tr ':' '-')
 
+			# An IPv4 address inside this machine's networks, 10.255.255.254 or
+			# the cloud metadata address, carried in an IPv6 one: mapped,
+			# compatible, translated for SIIT, and behind the NAT64 prefixes,
+			# the well-known one and the local-use one; then Teredo, which
+			# carries one where no rule can place it. Each in hex groups, which
+			# is not how a resolver writes a mapped address back, but is how
+			# the record holds it. A run of zeros is `--`, for `::`: both
+			# services also answer an A record for any four groups that read as
+			# an IPv4 address, `0-0-0-0` as 0.0.0.0, and the broker would dial
+			# that instead, which tests nothing here.
+			embedded_forms=(
+				'0--ffff-aff-fffe mapped'
+				'0--ffff-a9fe-a9fe mapped-metadata'
+				'0--aff-fffe compatible'
+				'0--ffff-0-aff-fffe translated'
+				'64-ff9b--aff-fffe nat64'
+				'64-ff9b-1--aff-fffe nat64-local'
+				'2001-0-4136-e378-8000-63bf-3fff-fdd2 teredo'
+			)
+			embedded_names=()
+
 			# Each address is spelled under these services in turn, since one can
 			# be out of reach from here while another answers. A name the broker
 			# cannot resolve says only that its service is unavailable — whether
@@ -2846,6 +2867,18 @@ EOF
 					else
 						echo "none: this machine holds no global IPv6 address"
 					fi
+					echo
+					echo "=== names that resolve to an IPv4 address inside this machine's networks carried in an IPv6 one, each form the same way"
+					for form in "${embedded_forms[@]}"; do
+						echo "-- ${form#* }"
+						first_resolving "${wildcard_dns[@]/#/${form%% *}.}"
+						# The same, should a service answer an A record for it after all.
+						if [ -n "$resolving" ] && getent ahostsv4 "$resolving" >/dev/null; then
+							echo "not checked: $resolving resolves to an IPv4 address too"
+							resolving=""
+						fi
+						embedded_names+=("$resolving")
+					done
 					echo
 					echo "=== the proxy variables it was given"
 					guest 'printenv HTTPS_PROXY NO_PROXY 2>&1'
@@ -2914,6 +2947,22 @@ EOF
 					verdict PASS internet-refuses-own-address "a name resolving to this machine's own public address is refused"
 				else
 					verdict FAIL internet-refuses-own-address "a name resolving to this machine's own address was not refused — read artifacts/internet.txt"
+				fi
+
+				embedded_resolved=0
+				embedded_passed=""
+				for at in "${!embedded_forms[@]}"; do
+					[ -n "${embedded_names[at]:-}" ] || continue
+					embedded_resolved=$((embedded_resolved + 1))
+					grep -qF "${embedded_names[at]} resolves only to addresses inside this machine's own networks" "$out/artifacts/internet.txt" ||
+						embedded_passed=${embedded_passed:-${embedded_forms[at]#* }}
+				done
+				if [ "$embedded_resolved" = 0 ]; then
+					verdict NOTE internet-refuses-embedded-v4 "not checked: no name for any form resolves under $tried_dns to an IPv6 address alone"
+				elif [ -n "$embedded_passed" ]; then
+					verdict FAIL internet-refuses-embedded-v4 "the $embedded_passed form was not refused — read artifacts/internet.txt"
+				else
+					verdict PASS internet-refuses-embedded-v4 "names resolving to an IPv6 address that carries an IPv4 one inside this machine's networks, or Teredo's, are refused — $embedded_resolved of ${#embedded_forms[@]} forms checked"
 				fi
 
 				# A download read more slowly than it arrives: the tunnel holds

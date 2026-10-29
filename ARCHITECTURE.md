@@ -286,9 +286,11 @@ The tunnel carries `CONNECT` and nothing else: to port 443, and to a hostname, n
 pattern (`parseConnect`). Under `restricted` the name has to be one the policy lists, matched
 exactly, with no wildcard or suffix match (`allowTunnel`); under `internet`, any name. Every address
 the name resolves to is then judged as an address: none in a loopback, private, link-local,
-carrier-grade NAT, benchmarking, multicast or reserved range (`isReachableAddress`), and none of
-this host's own (`isHostAddress`). The connection is made to an address that was checked, never to
-the name again (`publicDestinations`). What the tunnel carries is TLS the broker cannot read, and
+carrier-grade NAT, benchmarking, multicast or reserved range, none of those carried in an IPv6
+address — mapped, compatible, translated or behind the NAT64 prefix, however it is spelled — and no
+IPv6 address outside global unicast, or in 6to4 or Teredo (`isReachableAddress`), and none of this
+host's own (`isHostAddress`). The connection is made to an address that was checked, never to the
+name again (`publicDestinations`). What the tunnel carries is TLS the broker cannot read, and
 nothing is injected.
 
 A listed name that resolves to a routable address private to a VPN this host is on passes every

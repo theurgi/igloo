@@ -2156,8 +2156,72 @@ describe('Broker.isReachableAddress', () => {
     assert.isFalse(Broker.isReachableAddress('2002:7f00:0001::')) // 6to4
   })
 
+  it('judges the v4 address a v6 one carries however it is spelled', () => {
+    // A connection to a mapped address is a connection to the v4 address
+    // itself, and one to the others reaches it through a translator, so a
+    // name resolving to any of them points inside this machine's networks.
+    for (const address of [
+      '::ffff:a00:1', // 10.0.0.1, mapped
+      '::ffff:7f00:1', // 127.0.0.1, mapped
+      '::ffff:a9fe:a9fe', // the cloud metadata address, mapped
+      '0:0:0:0:0:ffff:a00:1',
+      '0000:0000:0000:0000:0000:FFFF:0A00:0001',
+      '::a00:1', // compatible
+      '::7f00:1',
+      '::10.0.0.1',
+      '::ffff:0:a00:1', // translated, for SIIT
+      '::ffff:0:10.0.0.1',
+      '64:ff9b::a00:1', // NAT64
+      '64:ff9b::10.0.0.1',
+      '64:ff9b::a9fe:a9fe',
+    ]) {
+      assert.isFalse(Broker.isReachableAddress(address), address)
+    }
+    for (const address of ['::ffff:808:808', '::ffff:0:808:808', '64:ff9b::808:808']) {
+      assert.isTrue(Broker.isReachableAddress(address), address)
+    }
+  })
+
+  it('refuses the v6 ranges that carry a v4 address it cannot place', () => {
+    for (const address of [
+      '2001:0:4136:e378:8000:63bf:3fff:fdd2', // Teredo
+      '2001::a00:1',
+      '64:ff9b:1::a00:1', // local-use NAT64, which places it as each network chooses
+      '64:ff9b:1:a00:1::',
+      '2002:a00:1::', // 6to4
+    ]) {
+      assert.isFalse(Broker.isReachableAddress(address), address)
+    }
+  })
+
+  it('accepts only global unicast of what carries no v4 address', () => {
+    for (const address of ['2001:4860:4860::8888', '2a00:1450:4001:81c::200e', '3fff::1']) {
+      assert.isTrue(Broker.isReachableAddress(address), address)
+    }
+    for (const address of ['100::1', '4000::1', 'fe8::1', 'fc::1', '1::', 'fe80::1%eth0']) {
+      assert.isFalse(Broker.isReachableAddress(address), address)
+    }
+  })
+
   it('refuses what it cannot read, rather than passing it through', () => {
-    for (const address of ['', 'not-an-address', '999.1.1.1', '1.2.3']) {
+    for (const address of [
+      '',
+      'not-an-address',
+      '999.1.1.1',
+      '1.2.3',
+      ':::',
+      '2001:db8::1::1',
+      '2001:db8:1:2:3:4:5:6:7',
+      '2001:db8:1:2::3:4:5:6',
+      '2001:db8::12345',
+      '2001:db8::g',
+      ':2001:db8::1',
+      '2001:db8:1:2:3:4:5:',
+      '::ffff:10.0.0.256',
+      '::ffff:10.0.0',
+      '10.0.0.1::',
+      '::10.0.0.1:0',
+    ]) {
       assert.isFalse(Broker.isReachableAddress(address), address)
     }
   })

@@ -1697,37 +1697,84 @@ export const allowTunnel = (hosts: TunnelScope, target: Tunnel): Tunnel => {
  * nonetheless private to a VPN this host is on. Such an address is public by
  * every test available here, and the name was listed deliberately, so it is
  * reachable. Rejecting RFC1918 is not a VPN boundary.
+ *
+ * An IPv6 address is read to its 128 bits rather than matched as text, because
+ * one address has many spellings. Four prefixes carry an IPv4 address in their
+ * last 32 bits — `::/96`, `::ffff:0:0/96`, `::ffff:0:0:0/96` and the NAT64
+ * prefix `64:ff9b::/96` — and a connection to an address in one of them reaches
+ * that IPv4 address, directly or through a translator, so it is judged as that
+ * address. Of the rest only global unicast, `2000::/3`, is public;
+ * everything else is loopback, link-local, unique local, multicast, the
+ * local-use NAT64 prefix or not yet allocated. Within global unicast, 6to4 and
+ * Teredo carry an IPv4 address too, where no rule here can find it.
  */
 export const isReachableAddress = (address: string): boolean => {
-  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(address)
-  if (v4 !== null) {
-    const octets = v4.slice(1).map(Number)
-    const [a = 0, b = 0] = octets
-    if (octets.some(octet => octet > 255)) return false
-    if (a === 0 || a === 10 || a === 127) return false
-    if (a === 169 && b === 254) return false // link-local, and the cloud metadata address
-    if (a === 172 && b >= 16 && b <= 31) return false
-    if (a === 192 && b === 168) return false
-    if (a === 100 && b >= 64 && b <= 127) return false // carrier-grade NAT
-    if (a === 198 && (b === 18 || b === 19)) return false // benchmarking
-    if (a >= 224) return false // multicast, reserved, broadcast
-    return true
-  }
+  const v4 = ipv4Octets(address)
+  if (v4 !== undefined) return isPublicIpv4(v4)
+  if (!address.includes(':')) return false
 
-  const lowered = address.toLowerCase().split('%')[0] ?? ''
-  if (lowered === '' || !lowered.includes(':')) return false
-  // A v4-mapped or v4-embedded address is a v4 address wearing a v6 spelling,
-  // so it is judged as the address it really is rather than as unrecognised.
-  const embedded = /(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.exec(lowered)
-  if (embedded?.[1] !== undefined) return isReachableAddress(embedded[1])
-  if (lowered === '::1' || lowered === '::') return false
-  if (lowered.startsWith('fe8') || lowered.startsWith('fe9')) return false
-  if (lowered.startsWith('fea') || lowered.startsWith('feb')) return false // link-local
-  if (/^fe[c-f]/.test(lowered)) return false // site-local: deprecated, still handed out, never public
-  if (/^f[cd]/.test(lowered)) return false // unique local
-  if (lowered.startsWith('ff')) return false // multicast
-  if (lowered.startsWith('2002:')) return false // 6to4, which embeds a v4 address
+  const groups = ipv6Groups(address.toLowerCase().split('%')[0] ?? '')
+  if (groups === undefined) return false
+  const [g0 = 0, g1 = 0, , , g4 = 0, g5 = 0, g6 = 0, g7 = 0] = groups
+  const zeroFrom = (start: number, end: number): boolean =>
+    groups.slice(start, end).every(group => group === 0)
+  const carried = [g6 >> 8, g6 & 0xff, g7 >> 8, g7 & 0xff] as const
+  if (zeroFrom(0, 6)) return isPublicIpv4(carried) // `::` and `::1` among them
+  if (zeroFrom(0, 5) && g5 === 0xffff) return isPublicIpv4(carried)
+  if (zeroFrom(0, 4) && g4 === 0xffff && g5 === 0) return isPublicIpv4(carried)
+  if (g0 === 0x64 && g1 === 0xff9b && zeroFrom(2, 6)) return isPublicIpv4(carried)
+  if ((g0 & 0xe000) !== 0x2000) return false
+  if (g0 === 0x2001 && g1 === 0) return false // Teredo
+  if (g0 === 0x2002) return false // 6to4
   return true
+}
+
+/** A dotted-quad IPv4 address's four octets, or `undefined` for anything else. */
+const ipv4Octets = (address: string): readonly [number, number, number, number] | undefined => {
+  const quad = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(address)
+  if (quad === null) return undefined
+  const octets = [Number(quad[1]), Number(quad[2]), Number(quad[3]), Number(quad[4])] as const
+  return octets.some(octet => octet > 255) ? undefined : octets
+}
+
+const isPublicIpv4 = ([a, b]: readonly [number, number, number, number]): boolean => {
+  if (a === 0 || a === 10 || a === 127) return false
+  if (a === 169 && b === 254) return false // link-local, and the cloud metadata address
+  if (a === 172 && b >= 16 && b <= 31) return false
+  if (a === 192 && b === 168) return false
+  if (a === 100 && b >= 64 && b <= 127) return false // carrier-grade NAT
+  if (a === 198 && (b === 18 || b === 19)) return false // benchmarking
+  if (a >= 224) return false // multicast, reserved, broadcast
+  return true
+}
+
+/**
+ * An IPv6 address's eight 16-bit groups, or `undefined` for anything that is
+ * not one. A `::` stands for at least one group of zeros, and the last 32 bits
+ * may be written as a dotted quad.
+ */
+const ipv6Groups = (address: string): readonly number[] | undefined => {
+  const halves = address.split('::')
+  if (halves.length > 2) return undefined
+  const groupsOf = (part: string, last: boolean): number[] | undefined => {
+    if (part === '') return []
+    const pieces = part.split(':')
+    const groups: number[] = []
+    for (const [at, piece] of pieces.entries()) {
+      const quad = last && at === pieces.length - 1 ? ipv4Octets(piece) : undefined
+      if (quad !== undefined) groups.push((quad[0] << 8) | quad[1], (quad[2] << 8) | quad[3])
+      else if (/^[0-9a-f]{1,4}$/.test(piece)) groups.push(Number.parseInt(piece, 16))
+      else return undefined
+    }
+    return groups
+  }
+  const [before = '', after] = halves
+  const head = groupsOf(before, after === undefined)
+  if (after === undefined) return head?.length === 8 ? head : undefined
+  const tail = groupsOf(after, true)
+  if (head === undefined || tail === undefined) return undefined
+  const elided = 8 - head.length - tail.length
+  return elided >= 1 ? [...head, ...Array.from({ length: elided }, () => 0), ...tail] : undefined
 }
 
 /**

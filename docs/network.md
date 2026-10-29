@@ -97,9 +97,11 @@ with no credential where the tunnel would have reached that name: under `interne
 - **Public addresses only, under every mode.** The tunnel resolves the name on the host and checks
   every address it gets back. It refuses loopback, the private ranges, link-local addresses —
   including the cloud metadata address — carrier-grade NAT, the benchmarking range, multicast and
-  reserved addresses, their IPv6 equivalents, and every address of the host's own. So under
-  `internet` too, the guest cannot reach the host or its LAN. The connection is made to the address
-  that was checked, so a name that changes its answer between two lookups gains nothing.
+  reserved addresses, their IPv6 equivalents, any of them carried in an IPv6 address — mapped,
+  translated or behind NAT64 — every IPv6 address outside global unicast, 6to4 and Teredo, and every
+  address of the host's own. So under `internet` too, the guest cannot reach the host or its LAN.
+  The connection is made to the address that was checked, so a name that changes its answer between
+  two lookups gains nothing.
 - **Clients have to use the proxy.** Anything that ignores `HTTPS_PROXY` has no route out. Most
   package managers and HTTP libraries honour it; a tool with its own proxy setting may need it set
   there.
