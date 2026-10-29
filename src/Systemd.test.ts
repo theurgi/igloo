@@ -62,12 +62,15 @@ describe('Systemd.startArgs', () => {
   })
 
   it('unsets each name the user manager holds but those the unit sets', () => {
+    // In order: systemd stores a name in place of one it begins that it already
+    // holds, so `JAVA_HOME` after `JAVA_HOME_11_X64` would unset `JAVA_HOME` alone.
     const args = Systemd.startArgs({ ...unit('igloo-example'), env: { PATH: '/a:/b' } }, [
-      'HOME',
+      'JAVA_HOME_11_X64',
       'PATH',
-      'HTTPS_PROXY',
+      'JAVA_HOME',
+      'HOME',
     ])
-    assert.include(args, '--property=UnsetEnvironment=HOME HTTPS_PROXY')
+    assert.include(args, '--property=UnsetEnvironment=HOME JAVA_HOME JAVA_HOME_11_X64')
     assert.include(args, '--setenv=PATH=/a:/b')
     const none = Systemd.startArgs({ ...unit('igloo-example'), env: { PATH: '/a:/b' } }, ['PATH'])
     assert.isFalse(none.some(arg => arg.startsWith('--property=UnsetEnvironment')))

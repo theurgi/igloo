@@ -444,9 +444,13 @@ export const startArgs = (unit: Unit, inherited: readonly string[] = []): Array<
 /**
  * Unset each name of the user manager's environment but those the unit sets
  * itself: systemd unsets last, after `--setenv` has set them.
+ *
+ * In order, because systemd stores a name in place of any it already holds
+ * that the name begins: `JAVA_HOME` after `JAVA_HOME_11_X64` leaves only
+ * `JAVA_HOME` to unset. A name sorts before every name it begins.
  */
 const unsetArgs = (unit: Unit, inherited: readonly string[]): Array<string> => {
-  const unset = inherited.filter(name => !Object.hasOwn(unit.env ?? {}, name))
+  const unset = inherited.filter(name => !Object.hasOwn(unit.env ?? {}, name)).toSorted()
   return unset.length === 0 ? [] : [`--property=UnsetEnvironment=${unset.join(' ')}`]
 }
 
