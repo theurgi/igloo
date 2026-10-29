@@ -34,12 +34,14 @@ stores in `/root`, is the agent's too. Files the guest writes are untrusted on t
 
 The VM boundary is KVM and QEMU. QEMU runs as your user, confined to the Nix store, its own VM's
 runtime directory and the two devices it drives, so a guest that escapes into it finds none of your
-files, processes or sockets there. The virtio-fs daemons that serve the shares talk to the guest
-too, each from virtiofsd's own sandbox, which holds its share and nothing else.
+files, processes or sockets there, and none of your session's environment. The virtio-fs daemons
+that serve the shares talk to the guest too, each from virtiofsd's own sandbox, which holds its
+share and nothing else.
 
 The broker holds the project's credentials and serves the guest's requests. Of the host's files it
 sees the Nix store, its own sockets and credentials, and the files the host resolves names from:
-none of yours, and none of the sockets the system serves under `/run`. Its network is the host's,
+none of yours, and none of the sockets the system serves under `/run`. Nor does your session's
+environment reach it, so a proxy set there does not carry its requests. Its network is the host's,
 under Landlock: it connects over TCP only to port 443, port 53 and any granted model server's port,
 and to no abstract socket. It cannot open the other kinds of socket that would slip past those
 rules, such as MPTCP's, but it could still use UDP, which Landlock does not cover, or listen on a

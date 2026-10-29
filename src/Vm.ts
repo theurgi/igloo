@@ -940,7 +940,7 @@ const ensureBroker = Effect.fnUntraced(function* (
       broker: located(bins.broker, PATH),
       landlock: located(bins.landlock, PATH),
     })
-    yield* Systemd.start(bins.systemdRun, {
+    yield* Systemd.start(bins, {
       argv: brokerArgv({ ...bins, ...programs }, spec),
       // Bound to QEMU's unit, so a process holding this project's credentials
       // cannot outlive the guest it was authorized for.
@@ -1072,7 +1072,7 @@ const ensureTether = Effect.fnUntraced(function* (
   if (started) {
     const programs = yield* forwardPrograms(bins, spec)
     yield* Systemd.start(
-      bins.systemdRun,
+      bins,
       forwardUnit(programs, spec, {
         argv: tetherArgv(programs, spec),
         hostNetwork: false,
@@ -1212,7 +1212,7 @@ const ensurePorts = Effect.fnUntraced(function* (bins: Binaries, spec: VmSpec, b
 
   const programs = yield* forwardPrograms(bins, spec)
   yield* Systemd.start(
-    bins.systemdRun,
+    bins,
     forwardUnit(programs, spec, {
       argv: portsArgv(programs, spec),
       // It listens on the host's loopback, which only the host's network has.
@@ -1450,7 +1450,7 @@ const launch = Effect.fnUntraced(function* (bins: Binaries, spec: VmSpec, boot: 
         // closure rather than everything the host has ever built. The others serve
         // the project's own directories, where there is nothing to withhold from a
         // guest that already mounts them read-write.
-        yield* Systemd.start(bins.systemdRun, {
+        yield* Systemd.start(bins, {
           argv: share.store
             ? StoreView.argv({ argv: daemon, helper: bins.storeView, paths: storePaths })
             : daemon,
@@ -1471,7 +1471,7 @@ const launch = Effect.fnUntraced(function* (bins: Binaries, spec: VmSpec, boot: 
   yield* boot.phase(
     'guest',
     Effect.gen(function* () {
-      yield* Systemd.start(bins.systemdRun, {
+      yield* Systemd.start(bins, {
         argv: [`${outPath}/bin/microvm-run`],
         // Content chose the kernel and the initrd it loads into the guest, and
         // much of the rest of its command line, so it sees the store, this VM's

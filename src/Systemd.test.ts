@@ -7,6 +7,8 @@ import { basename, dirname } from 'node:path'
 
 import * as Systemd from './Systemd.ts'
 
+const programs = { systemctl: 'systemctl', systemdRun: 'systemd-run' }
+
 const unit = (name: string): Systemd.Unit => ({
   argv: ['/bin/sh', '-c', 'sleep 300'],
   name,
@@ -57,6 +59,18 @@ describe('Systemd.startArgs', () => {
     // caller's, so anything omitted here is simply absent in the unit.
     const args = Systemd.startArgs({ ...unit('igloo-example'), env: { PATH: '/a:/b' } })
     assert.isTrue(args.includes('--setenv=PATH=/a:/b'))
+  })
+
+  it('unsets each name the user manager holds but those the unit sets', () => {
+    const args = Systemd.startArgs({ ...unit('igloo-example'), env: { PATH: '/a:/b' } }, [
+      'HOME',
+      'PATH',
+      'HTTPS_PROXY',
+    ])
+    assert.include(args, '--property=UnsetEnvironment=HOME HTTPS_PROXY')
+    assert.include(args, '--setenv=PATH=/a:/b')
+    const none = Systemd.startArgs({ ...unit('igloo-example'), env: { PATH: '/a:/b' } }, ['PATH'])
+    assert.isFalse(none.some(arg => arg.startsWith('--property=UnsetEnvironment')))
   })
 
   it('sets the description only when one is given', () => {
@@ -213,7 +227,7 @@ describe('Systemd against the user manager', () => {
       const dir = yield* fs.makeTempDirectoryScoped()
       const log = `${dir}/out.log`
 
-      yield* Systemd.start('systemd-run', {
+      yield* Systemd.start(programs, {
         argv: ['/bin/sh', '-c', 'pwd; sleep 300'],
         env: { PATH: process.env['PATH'] ?? '' },
         logFile: log,
@@ -230,12 +244,51 @@ describe('Systemd against the user manager', () => {
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
   )
 
+  it.live('starts a unit with none of the user manager’s environment but what it sets', () =>
+    Effect.gen(function* () {
+      yield* cleanup
+      const fs = yield* FileSystem.FileSystem
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+      const names = (text: string, separator: string) =>
+        new Set(
+          text
+            .split(separator)
+            .filter(entry => entry.includes('='))
+            .map(entry => entry.slice(0, entry.indexOf('='))),
+        )
+      const manager = names(
+        yield* spawner.string(
+          ChildProcess.make('systemctl', ['--user', 'show-environment'], { extendEnv: true }),
+        ),
+        '\n',
+      )
+      manager.delete('PATH')
+      assert.isAbove(manager.size, 0, 'the user manager holds nothing a unit could inherit')
+
+      yield* Systemd.start(programs, {
+        argv: ['/bin/sh', '-c', 'sleep 300'],
+        env: { PATH: process.env['PATH'] ?? '' },
+        name,
+        slice,
+        workingDirectory: '/tmp',
+      })
+      yield* Effect.sleep('500 millis')
+      const pid = (yield* Systemd.show('systemctl', name, ['MainPID'])).get('MainPID') ?? ''
+      const held = names(yield* fs.readFileString(`/proc/${pid}/environ`), '\0')
+      assert.deepStrictEqual(
+        [...held].filter(entry => manager.has(entry)),
+        [],
+      )
+      assert.isTrue(held.has('PATH'))
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+  )
+
   it.live('stopping the slice kills a member that ignores SIGTERM', () =>
     Effect.gen(function* () {
       yield* cleanup
       // The teardown property the whole design rests on: systemd kills the
       // cgroup, so a process that traps SIGTERM has no say in it.
-      yield* Systemd.start('systemd-run', {
+      yield* Systemd.start(programs, {
         argv: ['/bin/sh', '-c', 'trap "" TERM; sleep 300'],
         env: { PATH: process.env['PATH'] ?? '' },
         name,
@@ -261,7 +314,7 @@ describe('Systemd against the user manager', () => {
       // The one place a caller's own string can be attached to a transient unit,
       // and the only reason `list` can name a workspace at all.
       const description = '/home/someone/my projects/demo/workspace'
-      yield* Systemd.start('systemd-run', {
+      yield* Systemd.start(programs, {
         argv: ['/bin/sh', '-c', 'sleep 300'],
         description,
         env: { PATH: process.env['PATH'] ?? '' },
@@ -279,7 +332,7 @@ describe('Systemd against the user manager', () => {
   it.live('fills an absent description with the command line', () =>
     Effect.gen(function* () {
       yield* cleanup
-      yield* Systemd.start('systemd-run', {
+      yield* Systemd.start(programs, {
         argv: ['/bin/sh', '-c', 'sleep 300'],
         env: { PATH: process.env['PATH'] ?? '' },
         name,
@@ -303,7 +356,7 @@ describe('Systemd against the user manager', () => {
       // systemd-run fails at runtime rather than at construction, so this is
       // the only check that `StartLimitBurst`/`StartLimitIntervalSec` are
       // properties systemd accepts on a transient unit at all.
-      yield* Systemd.start('systemd-run', {
+      yield* Systemd.start(programs, {
         argv: ['/bin/sh', '-c', 'exit 1'],
         env: { PATH: process.env['PATH'] ?? '' },
         name,
@@ -323,14 +376,14 @@ describe('Systemd against the user manager', () => {
       const anchor = 'igloo-selftest-anchor.service'
       const bound = 'igloo-selftest-bound.service'
 
-      yield* Systemd.start('systemd-run', {
+      yield* Systemd.start(programs, {
         argv: ['/bin/sh', '-c', 'sleep 2'],
         env: { PATH: process.env['PATH'] ?? '' },
         name: anchor,
         slice,
         workingDirectory: '/tmp',
       })
-      yield* Systemd.start('systemd-run', {
+      yield* Systemd.start(programs, {
         argv: ['/bin/sh', '-c', 'sleep 300'],
         boundTo: [anchor],
         env: { PATH: process.env['PATH'] ?? '' },
@@ -374,7 +427,7 @@ describe('Systemd against the user manager', () => {
         path => fs.exists(path),
       )
 
-      yield* Systemd.start('systemd-run', {
+      yield* Systemd.start(programs, {
         argv: [
           bash,
           '-c',
@@ -494,7 +547,7 @@ print "done\n";`
             yield* Effect.sleep('100 millis')
           }
         })
-        yield* Systemd.start('systemd-run', {
+        yield* Systemd.start(programs, {
           argv: [
             perl,
             '-e',
@@ -578,7 +631,7 @@ print "done\n";`
 
         const log = `${dir}.log`
         yield* Effect.addFinalizer(() => fs.remove(log).pipe(Effect.ignore))
-        yield* Systemd.start('systemd-run', {
+        yield* Systemd.start(programs, {
           argv: [perl, '-e', probe],
           confine: { kind: 'credentials', writable: [dir] },
           // The manager's locale names files outside the store, and perl
@@ -640,7 +693,7 @@ print "done\n";`
         `/proc/${String(process.pid)}/cmdline`,
       ]
 
-      yield* Systemd.start('systemd-run', {
+      yield* Systemd.start(programs, {
         argv: [
           bash,
           '-c',
@@ -706,7 +759,7 @@ print "done\n";`
         '/dev/kvm',
       ]
 
-      yield* Systemd.start('systemd-run', {
+      yield* Systemd.start(programs, {
         argv: [
           bash,
           '-c',
@@ -781,7 +834,7 @@ print 'net ', readlink('/proc/self/ns/net'), "\n";`
 
       const view = Effect.fnUntraced(function* (hostNetwork: boolean) {
         const log = `${dir}/${hostNetwork ? 'host' : 'own'}.log`
-        yield* Systemd.start('systemd-run', {
+        yield* Systemd.start(programs, {
           // Expanded by systemd as it starts the unit, which is how a forward
           // finds its key in an empty root.
           argv: [perl, '-e', probe, '${CREDENTIALS_DIRECTORY}/tok', ...paths],
@@ -861,7 +914,7 @@ print 'net ', readlink('/proc/self/ns/net'), "\n";`
         }
         for (const [kind, confine] of Object.entries(kinds)) {
           const log = `${dir}/${kind}.log`
-          yield* Systemd.start('systemd-run', {
+          yield* Systemd.start(programs, {
             argv: [bash, '-c', probe],
             confine,
             logFile: log,
@@ -883,7 +936,7 @@ print 'net ', readlink('/proc/self/ns/net'), "\n";`
   it.live('lists the slice as a child of the prefix, and unknown properties as defaults', () =>
     Effect.gen(function* () {
       yield* cleanup
-      yield* Systemd.start('systemd-run', {
+      yield* Systemd.start(programs, {
         argv: ['/bin/sh', '-c', 'sleep 300'],
         env: { PATH: process.env['PATH'] ?? '' },
         name,

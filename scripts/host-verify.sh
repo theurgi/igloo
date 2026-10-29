@@ -637,6 +637,21 @@ forward_confinement() { # forward_confinement <pid> [<label> <path>]...
 	confinement "$pid" 'its key' "$(credentials_of "$pid")/identity" "$@"
 }
 
+# How much of the user manager's environment a unit's process holds. Every
+# unit would inherit the whole of it, and what is there is whatever the
+# session put there, so counts alone are written down: the names the manager
+# holds and how many of them the process holds too, PATH aside, which igloo
+# sets itself. Of the manager's, also how many are ones a proxy or the
+# certificates trusted behind it are set by, which `fetch` in the broker reads.
+environment_counts() { # environment_counts <pid>
+	local held manager
+	held=$(tr '\0' '\n' <"/proc/$1/environ" | cut -d= -f1 | sort -u)
+	manager=$(systemctl --user show-environment | cut -d= -f1 | grep -vx PATH | sort -u)
+	echo "the user manager's names, PATH aside: $(grep -c . <<<"$manager")"
+	echo "of them, held by the process: $(comm -12 <(printf '%s\n' "$held") <(printf '%s\n' "$manager") | grep -c .)"
+	echo "of them, a proxy's or its certificates': $(grep -cxE '(http|https|all|no)_proxy|(HTTP|HTTPS|ALL|NO)_PROXY|NODE_TLS_REJECT_UNAUTHORIZED|NODE_EXTRA_CA_CERTS|SSL_CERT_(FILE|DIR)' <<<"$manager")"
+}
+
 # A stand-in for another VM's runtime directory and broker directory, laid out
 # as a launch lays them out: a brokered credential's value, QEMU's control
 # socket and the broker's socket. Plain files, since what is checked is whether
@@ -1819,6 +1834,18 @@ EOF
 			verdict FAIL broker-paths "read artifacts/broker-confinement.txt for what the broker's root holds"
 		fi
 
+		# The broker's environment is more than what it could disclose: a proxy
+		# or the certificates to trust behind it, set there, would carry its
+		# requests and their credentials, or vouch for the upstream they reach.
+		environment_counts "$broker_pid" >"$out/artifacts/broker-environment.txt" 2>&1
+		if grep -qx "the user manager's names, PATH aside: 0" "$out/artifacts/broker-environment.txt"; then
+			verdict NOTE broker-environment "not checked: the user manager holds no variable but PATH"
+		elif grep -qx 'of them, held by the process: 0' "$out/artifacts/broker-environment.txt"; then
+			verdict PASS broker-environment "the broker holds none of the user manager's environment, so no proxy or trusted certificate set there reaches its requests"
+		else
+			verdict FAIL broker-environment "the broker holds some of the user manager's environment — read artifacts/broker-environment.txt"
+		fi
+
 		# The tether is an ssh client of a server the guest controls. Read off
 		# its running process: PID 1 in user, mount, PID, network and IPC
 		# namespaces of its own, under seccomp, with the broker's socket it
@@ -1968,6 +1995,17 @@ EOF
 			verdict PASS qemu-namespaces "confined QEMU still runs the guest under KVM, in user, mount, PID, network and IPC namespaces of its own — and the vsock it was reached over crosses them"
 		else
 			verdict FAIL qemu-namespaces "read artifacts/qemu-reach.txt for KVM and the namespaces"
+		fi
+
+		# QEMU reads its own environment, so whatever of the user manager's it
+		# holds, a guest that escaped into it holds too.
+		environment_counts "$qemu_pid" >"$out/artifacts/qemu-environment.txt" 2>&1
+		if grep -qx "the user manager's names, PATH aside: 0" "$out/artifacts/qemu-environment.txt"; then
+			verdict NOTE qemu-environment "not checked: the user manager holds no variable but PATH"
+		elif grep -qx 'of them, held by the process: 0' "$out/artifacts/qemu-environment.txt"; then
+			verdict PASS qemu-environment "QEMU holds none of the user manager's environment"
+		else
+			verdict FAIL qemu-environment "QEMU holds some of the user manager's environment — read artifacts/qemu-environment.txt"
 		fi
 
 		if [ -n "$cid" ]; then

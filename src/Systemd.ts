@@ -1,4 +1,4 @@
-import { Duration, Effect, Schema, String as Str } from 'effect'
+import { Duration, Effect, Schema, Stream, String as Str } from 'effect'
 import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
 
 export class SystemdError extends Schema.TaggedError<SystemdError>()('SystemdError', {
@@ -184,9 +184,10 @@ export interface Unit {
    */
   readonly description?: string | undefined
   /**
-   * Environment for the unit. A transient unit inherits the *user manager's*
-   * environment, not the invoking shell's, so anything the process needs —
-   * `PATH` above all — has to be passed explicitly.
+   * Environment for the unit, and with systemd's own variables, such as
+   * `CREDENTIALS_DIRECTORY`, all of it: `start` keeps the user manager's from
+   * the unit, and the invoking shell's never reaches it. Anything the process
+   * needs — `PATH` above all — has to be passed here.
    */
   readonly env?: Record<string, string> | undefined
   /** Absent, the unit runs with everything its user has. */
@@ -395,8 +396,10 @@ const confinementArgs = (confine: Confinement): Array<string> => {
  * that ignores `SIGTERM` otherwise costs the full `TimeoutStopSec` on every
  * stop. Teardown here is a backstop behind an orderly guest shutdown, so there
  * is nothing to be graceful about.
+ *
+ * `inherited` is the names in the user manager's environment.
  */
-export const startArgs = (unit: Unit): Array<string> => [
+export const startArgs = (unit: Unit, inherited: readonly string[] = []): Array<string> => [
   '--user',
   '--quiet',
   `--unit=${unit.name}`,
@@ -432,16 +435,73 @@ export const startArgs = (unit: Unit): Array<string> => [
         `--property=StandardOutput=append:${unit.logFile}`,
         `--property=StandardError=append:${unit.logFile}`,
       ]),
+  ...unsetArgs(unit, inherited),
   ...Object.entries(unit.env ?? {}).map(([k, v]) => `--setenv=${k}=${v}`),
   '--',
   ...unit.argv,
 ]
 
-export const start = Effect.fnUntraced(function* (systemdRun: string, unit: Unit) {
+/**
+ * Unset each name of the user manager's environment but those the unit sets
+ * itself: systemd unsets last, after `--setenv` has set them.
+ */
+const unsetArgs = (unit: Unit, inherited: readonly string[]): Array<string> => {
+  const unset = inherited.filter(name => !Object.hasOwn(unit.env ?? {}, name))
+  return unset.length === 0 ? [] : [`--property=UnsetEnvironment=${unset.join(' ')}`]
+}
+
+/**
+ * The names in the user manager's environment, or `undefined` if it cannot
+ * be read.
+ */
+const managerEnvironment = Effect.fnUntraced(
+  function* (systemctl: string) {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+    const handle = yield* spawner.spawn(
+      ChildProcess.make(systemctl, ['--user', 'show-environment'], {
+        extendEnv: true,
+        stderr: 'ignore',
+        stdin: 'ignore',
+        stdout: 'pipe',
+      }),
+    )
+    const text = yield* handle.stdout.pipe(Stream.decodeText, Stream.mkString)
+    if ((yield* handle.exitCode) !== 0) return undefined
+    // One variable a line: a value with a newline in it is printed escaped.
+    return Str.split(text, '\n')
+      .filter(line => line.includes('='))
+      .map(line => line.slice(0, line.indexOf('=')))
+  },
+  Effect.scoped,
+  Effect.orElseSucceed(() => undefined),
+)
+
+/**
+ * Start `unit`, with none of the user manager's environment.
+ *
+ * That environment is whatever the user's session put there — a token
+ * exported at login, a proxy and the certificates to trust behind it, an
+ * agent's socket — and every unit the manager starts would otherwise inherit
+ * all of it. It is read at each start, so a unit igloo starts unsets what the
+ * manager holds then. A unit systemd starts again on its own, to restart it,
+ * unsets the same names, so a variable the manager has gained since reaches
+ * it.
+ */
+export const start = Effect.fnUntraced(function* (
+  programs: { readonly systemctl: string; readonly systemdRun: string },
+  unit: Unit,
+) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+  const inherited = yield* managerEnvironment(programs.systemctl)
+  if (inherited === undefined) {
+    return yield* new SystemdError({
+      message: "cannot read the user manager's environment, which the unit would inherit",
+      unit: unit.name,
+    })
+  }
   const code = yield* spawner
     .exitCode(
-      ChildProcess.make(systemdRun, startArgs(unit), {
+      ChildProcess.make(programs.systemdRun, startArgs(unit, inherited), {
         extendEnv: true,
         stderr: 'inherit',
         stdin: 'ignore',

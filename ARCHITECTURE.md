@@ -54,6 +54,10 @@ A VM is a set of transient systemd user units in one slice, `igloo-<id>.slice`, 
 | `igloo-<id>-tether`          | `ssh -R`: the guest's `127.0.0.1:3128` to the broker's socket, and `:3129` to the tunnel's         | `Systemd.Forwarder`, a network of its own | with the broker                     |
 | `igloo-<id>-ports`           | `ssh -L`: each published port, from the host's `127.0.0.1` to the guest's; under `igloo-landlock`  | `Systemd.Forwarder`, the host's network   | when the project publishes ports    |
 
+Each unit's environment is what its launch gives it, `PATH` and a forward's `SHELL`, and the
+variables systemd sets for it, such as `CREDENTIALS_DIRECTORY`. None of the user manager's reaches
+it: `Systemd.start` reads the names the manager holds and has the unit unset them.
+
 In the project, which is on disk:
 
 - `.igloo/project.json`, the marker that makes a directory a project.
@@ -261,13 +265,15 @@ hop-by-hop ones and any its `Connection` names, `Host`, `Expect`, `Content-Lengt
 `Accept-Encoding`, and those a front end could take another method, path or origin from, such as
 `X-HTTP-Method-Override`, `Forwarded` and `X-Original-URL` (`unforwardedRequestHeaders`), and a
 listing carries no body headers (`bodyHeaders`); the broker's credential is set after the guest's
-are dropped. An anonymous read is built as a model request is, and no credential is set. A redirect
-is never followed, a 401 becomes the broker's own refusal (`relay`), and an answer loses its cookies
-and authentication challenges on the way back (`responseHeaders`). The redirects of an API request
-and an anonymous read alone go back to the guest as they came: an API's leads to a signed URL for a
-log or an asset, and the broker neither follows it nor sends its credential there. An API answer's
-`Link` naming a page by the repository's number is put back in the `repos/<owner>/<repo>/` form
-(`pagesOf`), so a client following it stays within the grant.
+are dropped. No proxy or trusted certificate set in the user manager's environment carries the
+broker's requests or vouches for their upstream, since none of that environment reaches it
+(`Systemd.start`). An anonymous read is built as a model request is, and no credential is set. A
+redirect is never followed, a 401 becomes the broker's own refusal (`relay`), and an answer loses
+its cookies and authentication challenges on the way back (`responseHeaders`). The redirects of an
+API request and an anonymous read alone go back to the guest as they came: an API's leads to a
+signed URL for a log or an asset, and the broker neither follows it nor sends its credential there.
+An API answer's `Link` naming a page by the repository's number is put back in the
+`repos/<owner>/<repo>/` form (`pagesOf`), so a client following it stays within the grant.
 
 The body is streamed upstream as it arrives, in chunks, never read and never refused for its size
 (`handle`, `serveRequests`). An asset's upload sent with a `Content-Length` and no
@@ -280,7 +286,7 @@ among them. What a provider does for a model, its hosted tools included, is the 
 
 **Held by:** `broker.ts`: `decide`, `decideAddressed`, `routeApi`, `routeGit`, `routeInference`,
 `routeModelServer`, `routeUploads`, `upstreamHeaders`, `uploadLength`, `heldTo`, `relay`,
-`responseHeaders`, `pagesOf`, `handle`.
+`responseHeaders`, `pagesOf`, `handle`; `Systemd.start`.
 
 ### The tunnel reaches only public addresses, on port 443
 
@@ -436,11 +442,13 @@ Its runtime directory is writable to it, so a fresh `up` removes that directory 
 it, and `down` removes it too. QEMU can take its owner's write permission away from any directory
 there, so a removal that fails is tried again once the owner has every permission on each directory
 left, given without following a link, and a directory that survives that stops the launch (`Vm.ts`'s
-`removeAll`). QEMU loads a kernel and an initrd that content chose into the guest, so one that
-resolves outside the store, or to a store path the runner was not built from, fails the runner's
-build (`mkRunner`'s `checkBootFile`).
+`removeAll`). Its environment is the launch's `PATH` and systemd's own variables, and none of the
+user manager's, which holds whatever the session put there (`Systemd.start`). QEMU loads a kernel
+and an initrd that content chose into the guest, so one that resolves outside the store, or to a
+store path the runner was not built from, fails the runner's build (`mkRunner`'s `checkBootFile`).
 
-**Held by:** `Systemd.Hypervisor`, `Vm.launch`, `Vm.down`, `mkRunner`'s `checkBootFile`.
+**Held by:** `Systemd.Hypervisor`, `Systemd.start`, `Vm.launch`, `Vm.down`, `mkRunner`'s
+`checkBootFile`.
 
 ### Each virtio-fs daemon serves the guest from virtiofsd's own sandbox
 
@@ -523,4 +531,7 @@ the old one.
 - **`igloo report`'s redaction.** It replaces what identifies by the fields igloo writes, by the
   values it knows and by the shapes of addresses and URLs (`Report.render`), so of text igloo does
   not write, Nix's errors and the guest's console among it, it can promise nothing more than that.
+- **A variable the user manager gains after a launch** reaches a broker, tether or ports unit that
+  systemd starts again on its own, since the names a unit unsets are the ones the manager held when
+  igloo started it (`Systemd.start`).
 - Each limit an invariant above states.
