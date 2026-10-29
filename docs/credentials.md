@@ -549,6 +549,10 @@ that way, since it never enters the guest.
   every request to a profile's upstream fails verification. The tunnel does not open the TLS it
   carries, so there the guest's own client does the verifying, and a content module can give the
   guest the authority with `security.pki.certificates`.
+- The broker starts with none of your user manager's environment: `igloo up` reads the names in it
+  and has the broker's unit unset them. A variable added to it after that reaches the broker when
+  systemd starts it again on its own, after it is killed for memory, say, until the VM is next
+  launched.
 - `github` pushes and writes through the REST API only for the repositories in `repos.write`, and
   through the REST API writes only what its operations list. Its GraphQL API is passed with the
   token, and the grant does not bound what a query reads or writes.
