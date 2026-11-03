@@ -229,15 +229,17 @@ const coreDefaults = {
 /**
  * Which layer may set what, and the only place that decides it.
  *
- * `mem`, `vcpu` and `brokerMem` are machine-local: how much a VM and its broker
- * get is a property of the machine they run on, not of the repository, so a
- * project cannot set them.
+ * `mem`, `vcpu` and `brokerMem` are a user default that a project replaces, and
+ * nothing bounds them: the project's file is outside the workspace, so it is
+ * written by the same person whose machine the VM and its broker run on.
  * `network` is the one setting that composes — a user default, an optional user
  * ceiling, and a project request checked against it.
+ * The ceilings are the user layer's alone, since a project raising its own
+ * ceiling would bound nothing.
  */
 const settings = new Map<string, 'both' | 'project' | 'user'>([
-  ['brokerMem', 'user'],
-  ['mem', 'user'],
+  ['brokerMem', 'both'],
+  ['mem', 'both'],
   ['modelServers', 'both'],
   ['network', 'both'],
   ['networkCeiling', 'user'],
@@ -245,7 +247,7 @@ const settings = new Map<string, 'both' | 'project' | 'user'>([
   ['secrets', 'both'],
   ['tunnel', 'project'],
   ['tunnelCeiling', 'user'],
-  ['vcpu', 'user'],
+  ['vcpu', 'both'],
 ])
 
 /**
@@ -287,8 +289,8 @@ export interface Layers {
   readonly user: PolicyLayer | undefined
   /**
    * Where the user layer's policy belongs, as `userLayerNames` says it, whether
-   * or not the layer exists: a project that sets a machine-local setting is told
-   * where to move it.
+   * or not the layer exists: a project that sets a ceiling is told where to move
+   * it.
    */
   readonly userPolicyName: string
 }
@@ -310,6 +312,25 @@ const readInt = (where: string, key: string, raw: unknown): Result.Result<number
   typeof raw === 'number' && Number.isInteger(raw) && raw > 0
     ? Result.succeed(raw)
     : bad(`${where}: \`${key}\` must be a positive whole number, not ${JSON.stringify(raw)}.`)
+
+/** One layer's `mem`, `vcpu` or `brokerMem`, or `undefined` where it sets none. */
+const readSize = (
+  layer: PolicyLayer | undefined,
+  key: 'brokerMem' | 'mem' | 'vcpu',
+): Result.Result<number | undefined, ConfigError> =>
+  Result.gen(function* () {
+    if (layer === undefined || !(key in layer.values)) return undefined
+    const value = yield* readInt(layer.path, key, layer.values[key])
+    // QEMU hangs at exactly 2 GiB with no output and no exit, so the symptom is a
+    // boot that never completes. `mkRunner` asserts this too; failing here gets
+    // the reader a sentence instead of a Nix evaluation trace.
+    if (key === 'mem' && value === 2048) {
+      return yield* bad(
+        `${layer.path}: \`mem = 2048\` hangs QEMU — a VM built with it never finishes booting and never exits. Use 2047 or 4096.`,
+      )
+    }
+    return value
+  })
 
 const readString = (
   where: string,
@@ -992,7 +1013,7 @@ const checkKeys = (
       return bad(
         key === 'tunnelCeiling'
           ? `${source.path}: \`tunnelCeiling\` is the bound on what this project may reach, so it belongs in ${userPolicyName} rather than in the project it bounds — a project raising its own ceiling is not a ceiling. List what this project uses in \`tunnel\`.`
-          : `${source.path}: \`${key}\` is machine-local, so it belongs in the user layer at ${userPolicyName} rather than in a project — how much memory and how many CPUs a VM and its broker get are properties of this machine, not of the repository.`,
+          : `${source.path}: \`${key}\` is the bound on what this project may ask for, so it belongs in ${userPolicyName} rather than in the project it bounds — a project raising its own ceiling is not a ceiling. Ask for a mode with \`network\`.`,
       )
     }
   }
@@ -1024,24 +1045,17 @@ export const compose = (layers: Layers): Result.Result<Composed, ConfigError> =>
     const userValues = user?.values ?? {}
     const userPath = user?.path ?? layers.userPolicyName
 
-    const vcpu =
-      'vcpu' in userValues
-        ? yield* readInt(userPath, 'vcpu', userValues['vcpu'])
-        : coreDefaults.vcpu
-    const mem =
-      'mem' in userValues ? yield* readInt(userPath, 'mem', userValues['mem']) : coreDefaults.mem
-    const brokerMem =
-      'brokerMem' in userValues
-        ? yield* readInt(userPath, 'brokerMem', userValues['brokerMem'])
-        : coreDefaults.brokerMem
-    // QEMU hangs at exactly 2 GiB with no output and no exit, so the symptom is a
-    // boot that never completes. `mkRunner` asserts this too; failing here gets
-    // the reader a sentence instead of a Nix evaluation trace.
-    if (mem === 2048) {
-      return yield* bad(
-        `${userPath}: \`mem = 2048\` hangs QEMU — a VM built with it never finishes booting and never exits. Use 2047 or 4096.`,
-      )
-    }
+    // A project's size replaces the user layer's. Both are read whichever one
+    // decides, so a bad user default is reported in every project, not only in
+    // the ones that leave it in place.
+    const sized = (key: 'brokerMem' | 'mem' | 'vcpu') =>
+      Result.gen(function* () {
+        const fallback = yield* readSize(user, key)
+        return (yield* readSize(project, key)) ?? fallback
+      })
+    const vcpu = (yield* sized('vcpu')) ?? coreDefaults.vcpu
+    const mem = (yield* sized('mem')) ?? coreDefaults.mem
+    const brokerMem = (yield* sized('brokerMem')) ?? coreDefaults.brokerMem
 
     const ceiling =
       'networkCeiling' in userValues

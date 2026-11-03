@@ -127,7 +127,7 @@ describe('Config.compose', () => {
     })
   })
 
-  it('lets the user layer set the machine bindings', () => {
+  it('lets the user layer set the sizes', () => {
     assert.deepStrictEqual(composed({ user: { brokerMem: 512, mem: 8192, vcpu: 8 } }), {
       brokerMem: 512,
       mem: 8192,
@@ -214,11 +214,42 @@ describe('Config.compose', () => {
     )
   })
 
-  it('tells a project where a machine-local setting belongs', () => {
-    for (const values of [{ mem: 8192 }, { brokerMem: 512 }]) {
+  it("lets a project replace the user layer's sizes, and keeps the ones it leaves", () => {
+    const user = { brokerMem: 512, mem: 8192, vcpu: 8 }
+    assert.deepInclude(composed({ project: { mem: 16384, vcpu: 2 }, user }), {
+      brokerMem: 512,
+      mem: 16384,
+      vcpu: 2,
+    })
+    assert.deepInclude(composed({ project: { brokerMem: 1024 }, user }), {
+      brokerMem: 1024,
+      mem: 8192,
+      vcpu: 8,
+    })
+    // Larger than the user layer's, too: nothing bounds a project's size.
+    assert.strictEqual(composed({ project: { mem: 65536 } }).mem, 65536)
+  })
+
+  it('checks a user size that a project replaces', () => {
+    // Otherwise a bad default would surface only in the projects that keep it.
+    const message = refused({ project: { mem: 8192 }, user: { mem: 0 } })
+    assert.include(message, userPolicyName)
+    assert.include(message, 'positive whole number')
+  })
+
+  it('names the file whose mem hangs QEMU', () => {
+    const message = refused({ project: { mem: 2048 }, user: { mem: 8192 } })
+    assert.include(message, projectPolicyPath)
+    assert.include(message, 'hangs QEMU')
+    assert.include(refused({ project: { mem: 8192 }, user: { mem: 2048 } }), userPolicyName)
+  })
+
+  it('tells a project that a ceiling belongs in the user layer', () => {
+    for (const values of [{ networkCeiling: 'none' }, { tunnelCeiling: ['pypi.org'] }]) {
       const message = refused({ project: values })
       assert.include(message, projectPolicyPath)
-      assert.include(message, `belongs in the user layer at ${userPolicyName}`)
+      assert.include(message, `it belongs in ${userPolicyName}`)
+      assert.include(message, 'a project raising its own ceiling is not a ceiling')
     }
   })
 
@@ -248,6 +279,7 @@ describe('Config.compose', () => {
       { brokerMem: '512M' },
     ]) {
       assert.isString(refused({ user: values }))
+      assert.include(refused({ project: values }), projectPolicyPath)
     }
   })
 })

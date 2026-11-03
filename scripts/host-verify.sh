@@ -2925,7 +2925,7 @@ EOF
 			# this machine's real addresses — a name nobody listed goes through,
 			# and names that resolve inside this machine, or to one of its own
 			# public addresses, do not. The content layer above supplies curl.
-			# And a bound on the broker's memory, which the user layer alone sets.
+			# And a bound on the broker's memory, set in the user layer.
 			# A github grant, so that github.com is answered by the broker, which
 			# sends a read no grant covers on without a credential, since the
 			# tunnel reaches github.com itself here.

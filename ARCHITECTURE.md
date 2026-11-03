@@ -179,11 +179,14 @@ project inside another project's `workspace/` or `.igloo/home/`, whose guest cou
 marker and the policy beside it (`Project.find`, and `Project.init` before it makes one). So is a
 project whose `workspace/` or `.igloo/home/` is a link: its guest writes wherever the link leads,
 below no marker `Project.find` could weigh, so `up`, `attach` and `init` refuse it
-(`Project.refuseLinkedShares`). A project cannot set what is the user layer's to set — memory, CPUs,
-the broker's memory and the ceilings — or ask for a network mode or a tunnel destination above a
-ceiling the user layer set (`Config.compose`, through `settings` and `checkKeys`). A credential or a
-model server the user layer declares reaches only the projects its `projects` lists
-(`Config.compose`). Which directories are shared is not a setting (`Spec.fromConfig`, `mkRunner`).
+(`Project.refuseLinkedShares`). A project cannot set the ceilings, which are the user layer's alone,
+or ask for a network mode or a tunnel destination above a ceiling the user layer set
+(`Config.compose`, through `settings` and `checkKeys`). Memory, CPUs and the broker's memory are the
+user layer's defaults, which a project's file replaces with no bound: that file is outside the
+workspace, so the guest cannot write it, and whoever does owns the machine the VM runs on
+(`Config.compose`, through `readSize`). A credential or a model server the user layer declares
+reaches only the projects its `projects` lists (`Config.compose`). Which directories are shared is
+not a setting (`Spec.fromConfig`, `mkRunner`).
 
 Policy reaches the guest's build as `mkRunner`'s arguments, every one applied from one `pins`
 attrset at `mkOverride 10`, above `mkForce`. That priority and `pins` are both in `nix/runner.nix`,

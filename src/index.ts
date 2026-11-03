@@ -106,8 +106,8 @@ const iglooFlakePath = env['IGLOO_FLAKE'] ?? path.dirname(import.meta.dir)
 
 /**
  * The user layer's directory — the configuration that applies to every VM this
- * user runs, and the only place machine-local policy may be set — or
- * `undefined` for none.
+ * user runs, and the only place a ceiling may be set — or `undefined` for
+ * none.
  *
  * Set by the wrapper home-manager installs, to a store path it builds from
  * `programs.igloo`, so an installed igloo carries its configuration rather than

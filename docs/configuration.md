@@ -136,6 +136,7 @@ directory: a plain attribute set, not a function and not a NixOS module.
     "registry.npmjs.org"
   ];
   ports = [ 5173 ];
+  mem = 16384;
 }
 ```
 
@@ -162,9 +163,9 @@ generated file.
 
 | Key              | Allowed in       | Default             | What it decides                                          |
 | ---------------- | ---------------- | ------------------- | -------------------------------------------------------- |
-| `mem`            | user             | `4096`              | Guest memory, in MiB.                                    |
-| `vcpu`           | user             | `4`                 | Guest CPUs.                                              |
-| `brokerMem`      | user             | unset: no bound     | The most memory the VM's broker may use, in MiB.         |
+| `mem`            | user and project | `4096`              | Guest memory, in MiB.                                    |
+| `vcpu`           | user and project | `4`                 | Guest CPUs.                                              |
+| `brokerMem`      | user and project | unset: no bound     | The most memory the VM's broker may use, in MiB.         |
 | `network`        | user and project | `"internet"`        | What the VM can reach: `none`, `restricted`, `internet`. |
 | `networkCeiling` | user             | unset: no ceiling   | The most any project may ask for.                        |
 | `tunnel`         | project          | `[ ]`               | Destinations under `restricted`.                         |
@@ -173,17 +174,21 @@ generated file.
 | `secrets`        | user and project | none                | Credentials, brokered or delivered.                      |
 | `modelServers`   | user and project | none                | Model servers on this machine the broker may call.       |
 
-**`mem`** and **`vcpu`** are positive whole numbers. They are the user layer's alone, because how
-much a VM gets is a property of the machine it runs on, not of the repository. `mem = 2048` is
-refused: QEMU hangs at exactly 2 GiB, with no output and no exit. Use 2047 or 4096.
+**`mem`** and **`vcpu`** are positive whole numbers. Set in the user layer, they are the default for
+every project. Set in a project, they replace it for that project alone, larger or smaller, so the
+one project that builds something heavy can have more without every VM holding more. Nothing bounds
+a project's value: its `igloo-policy.nix` is outside the workspace, so you wrote it, for your own
+machine. `mem = 2048` is refused: QEMU hangs at exactly 2 GiB, with no output and no exit. Use 2047
+or 4096.
 
 **`brokerMem`** bounds the broker, the host process that holds a VM's brokered credentials and
 carries its requests, as a positive whole number of MiB. A bounded broker uses no swap, so the bound
-is all the memory it has. It is the user layer's alone, like `mem`. Unset, the broker has no bound,
-as an agent running on the host would have none. Its memory grows with how many requests and tunnels
-the guest has open at once, not with how much they carry, and a bound set too low fails the requests
-that reach it. Either way, if memory runs out the kernel kills the broker before anything else, and
-its unit starts it again. See [Troubleshooting](troubleshooting.md#when-the-broker-is-killed).
+is all the memory it has. Like `mem`, a project's value replaces the user layer's. Unset in both,
+the broker has no bound, as an agent running on the host would have none. Its memory grows with how
+many requests and tunnels the guest has open at once, not with how much they carry, and a bound set
+too low fails the requests that reach it. Either way, if memory runs out the kernel kills the broker
+before anything else, and its unit starts it again. See
+[Troubleshooting](troubleshooting.md#when-the-broker-is-killed).
 
 **`network`** set in the user layer is the default for every project. Set in a project, it is that
 project's request, which may narrow `networkCeiling` and not widen it. The default is `"internet"`
