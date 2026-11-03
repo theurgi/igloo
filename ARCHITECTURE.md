@@ -369,8 +369,11 @@ Restricted mode checks what the evaluation reads, and not all that nix reads for
 `builtins.getFlake "path:<directory>"` would copy any directory the user can read into the store,
 where the evaluation could read it. So nix also runs under `igloo-landlock`, with the rules
 `Evaluation.confinement` makes. It may read the store, the files named, the workspace for the
-runner, and the two flakes it evaluates there, the runner's and igloo's; and `/proc/self/maps` and
-`/proc/stat`, for its garbage collector. It may write only a cache directory made for the one
+runner, and the two flakes it evaluates there, the runner's and igloo's; `/proc/self/maps` and
+`/proc/stat`, for its garbage collector; and, for fetching an input the store lacks, the resolver's
+files and the TLS roots at nix's default path, whichever the host has (`Evaluation.FETCHING`). nix
+resolves a host name itself rather than asking nscd, so without the resolver's files it finds no
+nameserver even on a host that runs nscd. It may write only a cache directory made for the one
 evaluation, which `NIX_CACHE_HOME` points it at in place of the user's, and connect over TCP only to
 ports 443 and 53. The rest of the project directory, where the VM's private key is, is readable to
 neither (`Evaluation.forRunner`). Any new evaluation goes through `Evaluation.command`.

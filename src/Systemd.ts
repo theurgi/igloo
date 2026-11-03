@@ -246,7 +246,7 @@ const storeOnly: readonly string[] = [
 ]
 
 /** What glibc reads to resolve a name without nscd. */
-const resolverFiles: readonly string[] = [
+export const resolverFiles: readonly string[] = [
   '/etc/nsswitch.conf',
   '/etc/host.conf',
   '/etc/hosts',

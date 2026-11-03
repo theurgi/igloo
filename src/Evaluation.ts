@@ -4,6 +4,8 @@ import { Effect, FileSystem, Option, Schema } from 'effect'
 import { ChildProcess } from 'effect/unstable/process'
 import * as path from 'node:path'
 
+import { resolverFiles } from './Systemd.ts'
+
 /**
  * How igloo evaluates Nix that someone other than igloo wrote: the content
  * layers, when the runner is built, and the policy files, when they are read.
@@ -90,17 +92,33 @@ export const args = (allowance: Allowance): Array<string> => [
 const NIX_OWN = ['/proc/self/maps', '/proc/stat']
 
 /**
+ * What nix reads to fetch an input the store does not have yet: the resolver's
+ * files, without which glibc finds no nameserver and every fetch fails on the
+ * lookup, and the TLS roots nix looks for when nothing names others. nix tells
+ * glibc to resolve a host name from the files and the nameservers itself,
+ * never asking nscd, so it reads these on a host that runs nscd as well. Each
+ * is public on the host. `command` passes the ones the host has, since
+ * `igloo-landlock` refuses a path that does not exist, and each is a file, so a
+ * symlink allows what it resolves to and nothing beside it.
+ */
+export const FETCHING: readonly string[] = [...resolverFiles, '/etc/ssl/certs/ca-certificates.crt']
+
+/**
  * `igloo-landlock`'s arguments for one evaluation, through the `--` that ends
  * them. `cache` is the only place it may write.
  */
-export const confinement = (allowance: Allowance, cache: string): Array<string> => [
+export const confinement = (
+  allowance: Allowance,
+  cache: string,
+  fetching: readonly string[],
+): Array<string> => [
   '--connect-tcp',
   '443',
   '--connect-tcp',
   '53',
-  ...[...new Set([STORE, ...allowance.paths, ...allowance.flakes, ...NIX_OWN])].flatMap(
-    readable => ['--read', readable],
-  ),
+  ...[
+    ...new Set([STORE, ...allowance.paths, ...allowance.flakes, ...NIX_OWN, ...fetching]),
+  ].flatMap(readable => ['--read', readable]),
   '--write',
   cache,
   '--',
@@ -114,12 +132,13 @@ export const confinement = (allowance: Allowance, cache: string): Array<string> 
  * without asking: `builtins.getFlake "path:<directory>"` copies any directory
  * the developer can read into the store, where the evaluation may read it, and
  * the copy stays there. Under Landlock nix may read only the store, the paths
- * and flakes the allowance names, and what its garbage collector reads; may
- * write only a cache of its own, `NIX_CACHE_HOME`, fresh for this evaluation,
- * in place of the developer's, which holds a copy of everything nix has fetched
- * for them; and may connect over TCP only to 443, the port of every URI it may
- * fetch, and to 53, for a resolver that retries over TCP. It reaches the daemon
- * through a Unix socket with a path, which Landlock does not see.
+ * and flakes the allowance names, what its garbage collector reads, and what a
+ * fetch reads (`FETCHING`); may write only a cache of its own,
+ * `NIX_CACHE_HOME`, fresh for this evaluation, in place of the developer's,
+ * which holds a copy of everything nix has fetched for them; and may connect
+ * over TCP only to 443, the port of every URI it may fetch, and to 53, for a
+ * resolver that retries over TCP. It reaches the daemon through a Unix socket
+ * with a path, which Landlock does not see.
  *
  * A fresh cache costs no download: nix takes an input a lock file names from
  * the store when it is there, without asking the cache. A `nix.conf` outside
@@ -133,9 +152,12 @@ export const command = Effect.fnUntraced(function* (
 ) {
   const fs = yield* FileSystem.FileSystem
   const cache = yield* fs.makeTempDirectoryScoped({ prefix: 'igloo-nix-cache-' })
+  const fetching = yield* Effect.filter(FETCHING, file =>
+    fs.exists(file).pipe(Effect.orElseSucceed(() => false)),
+  )
   return ChildProcess.make(
     programs.landlock,
-    [...confinement(allowance, cache), programs.nix, ...nixArgs, ...args(allowance)],
+    [...confinement(allowance, cache, fetching), programs.nix, ...nixArgs, ...args(allowance)],
     { env: { NIX_CACHE_HOME: cache }, extendEnv: true, stderr: 'inherit', stdin: 'ignore' },
   )
 })

@@ -53,10 +53,10 @@ describe('Evaluation.confinement', () => {
     flakes: ['/p/.igloo/runner', '/opt/igloo'],
     uris: ['github:NixOS/nixpkgs/def'],
   }
-  const rules = Evaluation.confinement(allowance, '/tmp/cache')
+  const rules = Evaluation.confinement(allowance, '/tmp/cache', ['/etc/resolv.conf'])
   const named = (flag: string) => rules.filter((_, index) => rules[index - 1] === flag)
 
-  it('lets nix read the allowance, the flakes and what it reads of itself', () => {
+  it('lets nix read the allowance, the flakes, what it reads of itself and what a fetch reads', () => {
     assert.deepStrictEqual(named('--read'), [
       '/nix/store',
       '/p/igloo.nix',
@@ -65,6 +65,7 @@ describe('Evaluation.confinement', () => {
       '/opt/igloo',
       '/proc/self/maps',
       '/proc/stat',
+      '/etc/resolv.conf',
     ])
     // Not the directory, which holds nix's environment.
     assert.notInclude(named('--read'), '/proc/self')
@@ -81,6 +82,7 @@ describe('Evaluation.confinement', () => {
     const reads = Evaluation.confinement(
       { paths: ['/p/x.nix', '/p/x.nix'], flakes: [], uris: [] },
       '/c',
+      [],
     ).filter((_, index, all) => all[index - 1] === '--read')
     assert.deepStrictEqual(reads, ['/nix/store', '/p/x.nix', '/proc/self/maps', '/proc/stat'])
   })
@@ -103,9 +105,12 @@ describe('Evaluation.command', () => {
           assert.strictEqual(command.command, '/l/igloo-landlock')
           const end = command.args.indexOf('--')
           const written = command.args[command.args.indexOf('--write') + 1] ?? ''
+          // Only the fetch's files the host has: igloo-landlock refuses a
+          // path that does not exist.
+          const fetching = yield* Effect.filter(Evaluation.FETCHING, file => fs.exists(file))
           assert.deepStrictEqual(
             command.args.slice(0, end + 1),
-            Evaluation.confinement(allowance, written),
+            Evaluation.confinement(allowance, written, fetching),
           )
           assert.deepStrictEqual(command.args.slice(end + 1), [
             '/n/nix',
@@ -261,4 +266,15 @@ describe('Evaluation.forRunner', () => {
       }),
     ),
   )
+})
+
+describe('Evaluation.FETCHING', () => {
+  it('holds what glibc resolves a name from and the TLS roots nix falls back to', () => {
+    // Without these the evaluation cannot fetch an input the store lacks:
+    // glibc finds no nameserver and the lookup fails.
+    for (const file of ['/etc/resolv.conf', '/etc/hosts', '/etc/nsswitch.conf']) {
+      assert.include(Evaluation.FETCHING, file)
+    }
+    assert.include(Evaluation.FETCHING, '/etc/ssl/certs/ca-certificates.crt')
+  })
 })
