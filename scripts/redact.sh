@@ -264,8 +264,7 @@ function net4(s, cidr, lab,    parts, base, size, out, rest, a, n, before, after
 	return out rest
 }
 
-# Any hardware address not already replaced by name, but igloo's own guest NIC,
-# which is the same constant on every machine.
+# Any hardware address not already replaced by name.
 function macs(s,    out, rest, m, before, after, h) {
 	h = "[0-9A-Fa-f][0-9A-Fa-f]"
 	out = ""; rest = s
@@ -273,7 +272,7 @@ function macs(s,    out, rest, m, before, after, h) {
 		m = substr(rest, RSTART, RLENGTH)
 		before = (RSTART > 1) ? substr(rest, RSTART - 1, 1) : substr(out, length(out), 1)
 		after = substr(rest, RSTART + RLENGTH, 1)
-		if (tolower(m) != "02:00:00:00:00:01" && before !~ /[0-9A-Fa-f:]/ && after !~ /[0-9A-Fa-f:]/) {
+		if (before !~ /[0-9A-Fa-f:]/ && after !~ /[0-9A-Fa-f:]/) {
 			out = out substr(rest, 1, RSTART - 1) "<mac>"
 			count["<mac>"]++
 		} else {
