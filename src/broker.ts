@@ -227,7 +227,6 @@ export type FetchOperation = 'fetch' | 'ls-refs'
 export type GitOperation = FetchOperation | 'push' | 'push-refs'
 
 /** The provider endpoints a grant may reach. */
-
 export type InferenceOperation =
   | 'chat-completions'
   | 'count-tokens'
@@ -356,15 +355,15 @@ const GIT_PROTOCOL = /^version=[0-9]$/
 /** `owner/repo.git` and `owner/repo` are the same repository to git and to GitHub. */
 const withoutGit = (repo: string): string => (repo.endsWith('.git') ? repo.slice(0, -4) : repo)
 
+/** Whether `repo` names a repository a grant may hold: `owner/repo`, with or without `.git`. */
+export const isRepo = (repo: string): boolean => REPO.test(withoutGit(repo))
+
 /**
  * The form two spellings of one repository are compared in. GitHub treats owner
  * and repository names case-insensitively, so a grant for `owner/repo` covers a
  * clone of `Owner/Repo` — but the *upstream* URL is built from the grant's
  * spelling, so this normalisation never decides what is requested.
  */
-/** Whether `repo` names a repository a grant may hold: `owner/repo`, with or without `.git`. */
-export const isRepo = (repo: string): boolean => REPO.test(withoutGit(repo))
-
 export const normaliseRepo = (repo: string): string => withoutGit(repo).toLowerCase()
 
 /**
@@ -1149,7 +1148,7 @@ const route = (grants: readonly Grant[], method: string, url: URL): Decision => 
 
   // A forge's API and its uploads first, by their hosts: their paths are the
   // forge's own, and one could end in what reads as a git endpoint. Then git,
-  // and only then inference: a git endpoint has a shape of its own, so trying
+  // and only then a model server and inference: a git endpoint has a shape of its own, so trying
   // it first keeps every refusal it makes — the push at the advertisement, the
   // wrong method, the path that is not three segments — rather than letting an
   // unrecognised git path fall through to a different profile's "no such
@@ -1464,9 +1463,10 @@ export const upstreamHeaders = (
  * `WWW-Authenticate` does not prevent that, since the status alone is the
  * trigger. So git gets a 502, which it reports and does not retry. A model
  * client retries a 502 as an outage, for minutes, and stops at a 403 with the
- * reason shown, so an inference request gets a 403. A **redirect** names a
+ * reason shown, so every other request gets a 403. A **redirect** names a
  * destination this grant did not authorize, and following it would send the
- * credential there.
+ * credential there, so it is answered with a 502 — but for an API's, which is
+ * to a signed URL that needs no credential, and goes back to the guest.
  *
  * `scope` is what the credential was expected to cover, a repository where
  * there is one, because "this token is wrong" and "this token does not reach
@@ -1708,11 +1708,10 @@ export const allowTunnel = (hosts: TunnelScope, target: Tunnel): Tunnel => {
  * to the address that was checked rather than to the name again, which is what
  * closes the gap between the two lookups.
  *
- * **What this does not cover**, stated rather than left to be discovered: a
- * name on the allowlist that resolves to a routable address which is
- * nonetheless private to a VPN this host is on. Such an address is public by
- * every test available here, and the name was listed deliberately, so it is
- * reachable. Rejecting RFC1918 is not a VPN boundary.
+ * **What this does not cover**: a name on the allowlist that resolves to a
+ * routable address which is nonetheless private to a VPN this host is on. Such
+ * an address is public by every test available here, and the name was listed
+ * deliberately, so it is reachable. Rejecting RFC1918 is not a VPN boundary.
  *
  * An IPv6 address is read to its 128 bits rather than matched as text, because
  * one address has many spellings. Four prefixes carry an IPv4 address in their
@@ -1978,7 +1977,7 @@ const tunnelReasonPhrase: Record<number, string> = {
   504: 'Gateway Timeout',
 }
 
-/** The upstream's headers an inference response does not carry back. */
+/** The upstream's headers a response other than git's does not carry back. */
 const unforwardedResponseHeaders: ReadonlySet<string> = new Set([
   // A cookie or a challenge would be for the broker's origin inside the VM,
   // which holds no credential to answer one with.
@@ -1997,12 +1996,11 @@ const unforwardedResponseHeaders: ReadonlySet<string> = new Set([
  * The headers returned to the guest.
  *
  * For git, only what git reads, so an upstream cannot set a cookie or an
- * authentication challenge inside the VM. For inference and a model server,
- * the upstream's headers but those in `unforwardedResponseHeaders`: a harness
+ * authentication challenge inside the VM. For every other request, the
+ * upstream's headers but those in `unforwardedResponseHeaders`: a harness
  * reads its retry delay, its rate limits and the request id it reports from
- * them. A redirect never reaches either, since `relay` answers it. An
- * anonymous read's are passed the same way, a redirect's `Location` among
- * them.
+ * them. A redirect `relay` passes on, an API's or an anonymous read's, keeps
+ * its `Location`.
  */
 export const responseHeaders = (
   kind: Exclude<Decision['_tag'], 'Deny'>,
