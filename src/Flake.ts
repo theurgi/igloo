@@ -123,16 +123,6 @@ const renderShare = (share: Share): string =>
     share.mountPoint,
   )}"; tag = "${nixString(share.tag)}"; proto = "virtiofs"; }`
 
-/**
- * The content layers, as a Nix list.
- *
- * Emitted even when empty, because "no content layer was found" is the answer to
- * the first question anyone asks when their configuration appears to do nothing,
- * and this file is where they will look for it.
- *
- * `import "<path>"` rather than a bare path literal: a path literal cannot hold a
- * space, and a project or home directory may.
- */
 const renderCredentials = (credentials: readonly Credential[]): string =>
   credentials.length === 0
     ? '[ ];'
@@ -183,6 +173,16 @@ const renderGitBroker = (gitBroker: RunnerSpec['gitBroker']): string =>
 const renderAuthority = (authority: string | undefined): string =>
   authority === undefined ? 'null;' : `"${nixString(authority)}";`
 
+/**
+ * The content layers, as a Nix list.
+ *
+ * Emitted even when empty, because "no content layer was found" is the answer to
+ * the first question anyone asks when their configuration appears to do nothing,
+ * and this file is where they will look for it.
+ *
+ * `import "<path>"` rather than a bare path literal: a path literal cannot hold a
+ * space, and a project or home directory may.
+ */
 const renderContent = (modules: readonly string[]): string =>
   modules.length === 0
     ? '[ ];'

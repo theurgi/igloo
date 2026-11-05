@@ -209,11 +209,11 @@ export interface Policy {
 /**
  * What a VM gets with no configuration at all.
  *
- * `network` is `"internet"` because the audience runs coding agents, for which
- * "cannot reach an API" is the wrong default and `"none"` is one line away. The
- * rest match `mkRunner`'s own defaults; they are repeated here because the host
- * emits every one of them explicitly, so that the generated flake is a complete
- * record of what a VM was launched with.
+ * `network` is `"internet"` because a VM is there to run a coding agent, for
+ * which "cannot reach an API" is the wrong default, and `"none"` is one line
+ * away. `mem` and `vcpu` match `mkRunner`'s own defaults, repeated here
+ * because the host passes both explicitly, so that the generated flake is a
+ * complete record of what a VM was launched with.
  */
 const coreDefaults = {
   brokerMem: undefined,
@@ -232,10 +232,10 @@ const coreDefaults = {
  * `mem`, `vcpu` and `brokerMem` are a user default that a project replaces, and
  * nothing bounds them: the project's file is outside the workspace, so it is
  * written by the same person whose machine the VM and its broker run on.
- * `network` is the one setting that composes — a user default, an optional user
- * ceiling, and a project request checked against it.
- * The ceilings are the user layer's alone, since a project raising its own
- * ceiling would bound nothing.
+ * `network` is a user default, an optional user ceiling, and a project request
+ * checked against it; `tunnel` is a project's request, bounded by the user's
+ * `tunnelCeiling`. The ceilings are the user layer's alone, since a project
+ * raising its own ceiling would bound nothing.
  */
 const settings = new Map<string, 'both' | 'project' | 'user'>([
   ['brokerMem', 'both'],

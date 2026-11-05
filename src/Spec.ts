@@ -122,8 +122,8 @@ export const fromConfig = (
   // A broker exists for a project that holds a grant, a credential's or a
   // model server's, or that has somewhere to tunnel to, and for no other. The
   // tether is started with it, because it is the only route to it — so a VM
-  // with neither gets neither. No guest has a network card, so that is also the whole of its
-  // egress.
+  // with neither gets neither. No guest has a network card, so that is also
+  // the whole of its egress.
   const broker = grants.length > 0 || Broker.tunnels(tunnel)
   const brokerEnv = {
     ...Broker.guestEnvironment(grants, Vm.brokerGuestPort),

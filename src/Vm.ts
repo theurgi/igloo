@@ -97,7 +97,7 @@ export interface VmSpec extends VmTarget {
   readonly brokered: readonly Secrets.Delivery[]
   /**
    * The most memory the broker may use, in MiB, or `undefined` for no bound.
-   * Policy, from the user layer alone.
+   * Policy: the project's, or the user layer's default.
    */
   readonly brokerMem: number | undefined
   /**
@@ -868,7 +868,7 @@ const awaitReady = Effect.fnUntraced(function* (bins: Binaries, spec: VmSpec, bo
  *
  * The grants go here rather than into a file because `/proc/<pid>/cmdline` is
  * world-readable and this is the part that can stand being read: a profile name,
- * a credential's name, and the repositories it may fetch. The values arrive by
+ * a credential's name, and the repositories it may reach. The values arrive by
  * `LoadCredential=`, which is the reason no unit property can carry one.
  *
  * Under `igloo-landlock`, because the unit leaves it the host's network, and
@@ -1245,9 +1245,9 @@ const ensurePorts = Effect.fnUntraced(function* (bins: Binaries, spec: VmSpec, b
  * saying. It is a report and not a refusal: the VM is up, which is what was
  * asked for.
  *
- * No record means no report. A VM launched before this file existed has nothing
- * to compare against, and "your configuration changed" is not an honest way to
- * say "I do not know". Answers whether it reported anything.
+ * No record means no report: there is nothing to compare against, and "your
+ * configuration changed" is not an honest way to say "I do not know". Answers
+ * whether it reported anything.
  */
 const reportDrift = Effect.fnUntraced(function* (spec: VmSpec, boot: BootLog.Boot) {
   const launchedFrom = yield* LaunchInputs.read(spec.launchInputsFile)

@@ -193,11 +193,10 @@ const makeValues = () => {
 
   /**
    * The placeholder for `value`, given it on first sight, whatever kind it was
-   * found as then. A value found by its
-   * shape is found that way every time; any other is also replaced wherever it
-   * occurs, unless it is too short or too common to take with it: a path that
-   * is not `/` or `/root`, or a name of three characters or more that is not
-   * one igloo itself uses.
+   * found as then. A value found by its shape is found that way every time; any
+   * other is also replaced wherever it occurs, unless it is too short or too
+   * common to take with it: a path that is not `/` or `/root`, or a name of
+   * three characters or more that is not one igloo itself uses.
    */
   const add = (kind: Kind, value: string): string => {
     const key = keyOf(kind, value)

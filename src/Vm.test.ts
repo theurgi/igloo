@@ -103,8 +103,8 @@ while (my $client = $server->accept) {
  *
  * The fake runner declares its shares the way a real one does, in
  * `share/microvm/virtiofs/<tag>/`, with a socket named after a guest hostname
- * the host side was never told. That is the real shape, and reconstructing the
- * name host-side from a guessed hostname is what made the first host run fail.
+ * the host side was never told. That is the real shape, and a host side that
+ * reconstructed the name from a guessed hostname would get it wrong.
  * Two shares, because only the one serving the store should run under
  * `igloo-store-view`.
  *
@@ -1561,7 +1561,7 @@ describe('Vm.up', () => {
         const fs = yield* FileSystem.FileSystem
         const dir = yield* fs.makeTempDirectoryScoped()
         // A virtiofsd that exits instead of binding its socket. Without the
-        // liveness check the wait would sit out its full 10s and then report a
+        // liveness check the wait would sit out its full 15s and then report a
         // slow socket, which sends the reader to the wrong log.
         const fakes = yield* writeFakes(dir, { virtiofsdFails: true })
         const spec = specIn(dir, 'selftest-vfsd-dies')
@@ -1579,7 +1579,7 @@ describe('Vm.up', () => {
         assert.include(message, 'exited during startup')
         // It points at a log inside the record already, so it is not named twice.
         assert.isFalse(Result.isFailure(result) && 'bootRecord' in result.failure)
-        // Well inside the 10s the socket poll would otherwise have taken.
+        // Well inside the 15s the socket poll would otherwise have taken.
         assert.isTrue(elapsed < 5_000, `took ${elapsed}ms`)
         // Nothing was left half-started: QEMU is never reached.
         assert.isFalse(yield* Systemd.isActive('systemctl', `igloo-${spec.id}-qemu.service`))
@@ -1725,7 +1725,7 @@ describe('Vm.list', () => {
         // it right for a VM started with an explicit `--cid`.
         assert.strictEqual(listed.cid, spec.cid)
         assert.strictEqual(listed.projectRoot, spec.projectRoot)
-        // The figures decision 1 turns on: the slice's own cgroup accounting.
+        // `ls`'s memory column: the slice's own cgroup accounting.
         assert.isTrue((listed.memoryBytes ?? 0) > 0, `memory was ${String(listed.memoryBytes)}`)
         assert.isTrue((listed.uptimeMillis ?? -1) >= 0, `uptime was ${String(listed.uptimeMillis)}`)
 

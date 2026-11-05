@@ -11,9 +11,8 @@ export class ProjectError extends Schema.TaggedError<ProjectError>()('ProjectErr
 const MARKER = '.igloo/project.json'
 
 /**
- * Deliberately without a `name`. A project's label is its directory's basename,
- * and nothing that has to be unique is derived from it — see `forRoot`. A `name`
- * field can be added later without any of that changing.
+ * Without a `name`. A project's label is its directory's basename, and nothing
+ * that has to be unique is derived from it — see `forRoot`.
  */
 export const Marker = Schema.Struct({
   createdAt: Schema.String,
@@ -87,7 +86,7 @@ export const forRoot = (root: string, cid?: number): Project => {
     root,
     runnerDir: path.join(iglooDir, 'runner'),
     // Not `result`: `nh clean` deletes indirect gc-roots whose path matches
-    // `.*result.*` and then collects, which has taken the store paths out from
+    // `.*result.*` and then collects, which takes the store paths out from
     // under a running VM. This name matches neither of its patterns.
     runnerRootLink: path.join(iglooDir, 'runners', 'current'),
     sshDir: path.join(iglooDir, 'ssh'),

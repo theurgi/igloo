@@ -11,8 +11,7 @@ export const storeDir = '/nix/store'
 /**
  * The store paths the guest may see: the runner's closure, which is the guest
  * system plus the host-side launch tooling that references it. `nix path-info
- * -r` is a store-database query rather than a build, so this costs well under
- * a second.
+ * -r` is a store-database query rather than a build.
  *
  * An empty result is returned as-is. The caller then builds a store view with
  * no paths and the boot fails immediately, which is the right outcome — the

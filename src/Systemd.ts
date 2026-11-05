@@ -53,9 +53,8 @@ export const unescapeSliceComponent = (component: string): string =>
  * Landlock seeing it. The broker's own code connects only to its profiles'
  * fixed hosts, to a granted model server's port on loopback and, through the
  * tunnel, to names it refuses when they resolve inside this machine, and
- * listens only on its Unix sockets, so what is left is
- * open to a broker that a request has taken over, and to nothing it does by
- * design.
+ * listens only on its Unix sockets, so what is left is open to a broker that a
+ * request has taken over, and to nothing it does by design.
  *
  * Left out: `PrivateTmp=` and `ProtectSystem=`, for a hypervisor's reasons;
  * and any bound on what it consumes but `memoryMax`, and that only when one is

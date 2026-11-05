@@ -11,8 +11,8 @@ import * as Systemd from './Systemd.ts'
  * What checking one prerequisite found.
  *
  * `remedy` is required on a failure rather than optional. A check that reports
- * something is wrong without saying what to do about it leaves the reader where
- * the opaque timeout did, which is the whole problem this exists to solve.
+ * something is wrong without saying what to do about it leaves the reader with
+ * a symptom and nowhere to go from it.
  */
 export type Outcome =
   | { readonly _tag: 'Failed'; readonly detail: string; readonly remedy: string }
@@ -431,8 +431,6 @@ export const run = Effect.fn('Preflight.run')(function* (bins: Binaries, host: H
 
   add('store view', yield* storeView(bins))
 
-  // Only a VM with a broker needs it, but that is every VM with a network or a
-  // brokered credential.
   add('landlock', yield* landlock(bins))
 
   // Only `igloo fallback` runs bubblewrap, which is the one command meant to

@@ -42,8 +42,8 @@
     },
     {
       // The broker is a standalone program that imports nothing, Effect
-      // included (see its header comment), so Effect's idioms do not apply to
-      // it, or to its tests, which drive it the same way.
+      // included, so Effect's idioms do not apply to it, or to its tests,
+      // which drive it the same way.
       "files": ["src/broker.ts", "src/broker.test.ts"],
       "rules": {
         "effecttsgo/async-function": "off",

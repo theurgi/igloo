@@ -104,8 +104,8 @@ export const changed = (before: Inputs, after: Inputs): readonly string[] =>
  * compare against.
  *
  * Absent and unchanged are different answers and the caller has to keep them
- * apart: a project whose last launch predates this file has nothing to compare,
- * and "your configuration changed" is not the honest answer to that.
+ * apart: a project with no record has nothing to compare, and "your
+ * configuration changed" is not the honest answer to that.
  */
 export const read = Effect.fnUntraced(function* (file: string) {
   const fs = yield* FileSystem.FileSystem

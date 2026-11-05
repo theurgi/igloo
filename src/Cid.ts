@@ -11,8 +11,7 @@
  * The identity to pass is the project's **canonical root path** — resolved
  * through symlinks with any trailing slash removed, so that every way of
  * naming one project hashes the same. A path is unique by construction where a
- * name is unique only by convention. Until the project layer exists the CLI
- * passes the VM's name, which is the only identity it has.
+ * name is unique only by convention.
  */
 
 /**

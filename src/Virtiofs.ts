@@ -106,9 +106,6 @@ export const match = (
 /**
  * The argument vector for one share's daemon.
  *
- * These flags are not a transcription of a generated script; what is preserved
- * is the behaviour the rest of the system depends on.
- *
  * `--sandbox=namespace` and `--seccomp=kill` are virtiofsd's defaults, stated
  * because the host's boundary rests on them. What serves the guest is a worker
  * in user, mount, PID and network namespaces of its own, with its share for a

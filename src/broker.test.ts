@@ -1061,18 +1061,18 @@ describe('Broker.relay', () => {
   } as const
 
   it('does not pass a 401 back as a 401', () => {
-    // Measured against real git: a 401 makes it prompt for a username inside the
-    // guest, for a credential the guest does not have and must not be given.
-    // Dropping `WWW-Authenticate` does not prevent it — the status is the
-    // trigger — so the broker reports its own credential being refused instead.
+    // git prompts for a username on a 401, inside the guest, for a credential
+    // the guest does not have and must not be given. Dropping
+    // `WWW-Authenticate` does not prevent it — the status is the trigger — so
+    // the broker reports its own credential being refused instead.
     const refused = Broker.relay(allowed, 401)
     assert.strictEqual(refused?.status, 502)
     assert.include(refused?.reason ?? '', 'GITHUB_TOKEN')
   })
 
   it('answers a model call’s refused credential with a 403, which a client does not retry', () => {
-    // Measured: every harness retries a 502 as an outage, omp for over six
-    // minutes, and every one stops at a 403 and shows the reason.
+    // A model client retries a 502 as an outage, for minutes, and stops at a
+    // 403 with the reason shown.
     const refused = Broker.relay(
       {
         credential: 'ANTHROPIC_API_KEY',
@@ -1441,7 +1441,7 @@ describe('Broker.guestEnvironment', () => {
 
   it('holds no value a session variable cannot carry', () => {
     // NixOS writes these inside double quotes, unescaped: a JSON value here
-    // reached the guest with its quotes stripped, and opencode refused to start.
+    // reaches the guest with its quotes stripped, and opencode will not start.
     for (const [name, value] of Object.entries(Broker.guestEnvironment(inference, 3128))) {
       assert.notMatch(value, /["\\]/, name)
     }

@@ -278,8 +278,8 @@ const preflightHost: Preflight.Host = {
  *
  * This is not run before `up`. Most of these cost a process spawn, which is the
  * wrong tax on every launch for a set of facts that change about once per
- * machine. The launch failures that a
- * prerequisite explains name this command instead.
+ * machine. The launch failures that a prerequisite explains name this command
+ * instead.
  */
 const doctor = Command.make(
   'doctor',

@@ -196,7 +196,7 @@ describe('LaunchInputs.read', () => {
 
       // Not an empty record: absent and unchanged are different answers, and a
       // caller that confused them would report drift on every launch of a
-      // project whose last one predates this file.
+      // project with no record.
       assert.strictEqual(yield* LaunchInputs.read(`${dir}/missing.json`), undefined)
       assert.strictEqual(yield* LaunchInputs.read(`${dir}/garbage.json`), undefined)
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),

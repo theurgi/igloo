@@ -22,7 +22,7 @@ describe('Project.forRoot', () => {
 
   it('names the gc-root so `nh clean` will not reap it', () => {
     // `nh clean` deletes indirect roots matching `.*result.*` or `.*\.direnv.*`
-    // and then collects, which has taken the store out from under a live VM.
+    // and then collects, which takes the store out from under a live VM.
     const link = Project.forRoot('/home/you/projects/api').runnerRootLink
     assert.isFalse(/result|\.direnv/.test(link))
     assert.strictEqual(link, '/home/you/projects/api/.igloo/runners/current')
