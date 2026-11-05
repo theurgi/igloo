@@ -16,8 +16,8 @@ export class SecretsError extends Schema.TaggedError<SecretsError>()('SecretsErr
  *
  * `command` is the pluggability: `pass`, `keepassxc-cli`, `secret-tool`, the
  * 1Password CLI, a hardware-backed anything. One extension point rather than an
- * integration per store, which is what suits an audience of one — and it means
- * igloo stores nothing it does not have to.
+ * integration per store: whichever store a user keeps, igloo carries no code
+ * for it, and stores nothing it does not have to.
  */
 export type Source =
   | { readonly _tag: 'Command'; readonly argv: readonly [string, ...string[]] }
