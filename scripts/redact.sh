@@ -169,7 +169,9 @@ sort_rules >"$work/sorted"
 
 cat >"$work/redact.awk" <<'AWK'
 BEGIN { FS = "\t" }
-FNR == NR { kind[++n] = $1; label[n] = $2; value[n] = $3; next }
+# Rules are told by their file's name: `FNR == NR` would stay true through the
+# file being scrubbed when there are no rules, and take its lines for rules.
+FILENAME == ARGV[1] { kind[++n] = $1; label[n] = $2; value[n] = $3; next }
 {
 	line = $0
 	for (i = 1; i <= n; i++) {
