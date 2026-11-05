@@ -235,7 +235,7 @@ else
 fi
 
 if [ -n "$runner" ]; then
-	# The contract the host side now depends on: the runner says what to serve
+	# The contract the host side depends on: the runner says what to serve
 	# and what to call each socket.
 	step runner-declares-shares -- find "$runner/share/microvm/virtiofs" -type f -exec sh -c \
 		'printf "%s = %s\n" "$1" "$(cat "$1")"' _ {} \;
@@ -558,7 +558,7 @@ section "preflight"
 
 say ""
 step doctor -- "$repo/bin/igloo" doctor
-# The verdict is about whether the newer checks report at all, not about
+# The verdict is about whether these checks report at all, not about
 # whether this host passes them — a missing `loginctl` linger is the host's
 # business and would otherwise be recorded here as igloo being broken.
 if grep -q 'nix build sandbox' "$out/steps/doctor.txt" &&
@@ -885,8 +885,8 @@ if [ -d "$project/.igloo" ]; then
 	# into the store without asking restricted mode, the evaluation reads the
 	# copy there, and the copy stays. Landlock keeps the directory from nix, so
 	# each evaluation has to fail on that, and the copy nix would have made has
-	# to be absent. The canary differs on every run, so that a copy an earlier,
-	# unconfined igloo made is not this one.
+	# to be absent. The canary differs on every run, so that a copy an earlier
+	# run left is not taken for this one's.
 	mkdir -p "$project/.igloo/verify-flake"
 	printf 'igloo-verify-canary-%s\n' "$RANDOM$RANDOM$RANDOM" >"$project/.igloo/verify-flake/canary"
 	printf '{ outputs = _: { }; }\n' >"$project/.igloo/verify-flake/flake.nix"
@@ -1330,12 +1330,10 @@ EOF
 		# The same project, unchanged, launched a second time. Every derivation
 		# the first launch built is in the store and the generated flake is
 		# byte-identical, so the `evaluate`, `plan` and `build` steps are what
-		# a launch costs with nothing left to realise. Most of it is evaluating
-		# the runner's `nixosSystem`, which is the whole of what a build cache
-		# would skip.
+		# a launch costs with nothing left to realise, most of it evaluating
+		# the runner's `nixosSystem`.
 		#
-		# Recorded rather than judged. The number is the case for that cache or
-		# the case against it, and it is not one this script should decide.
+		# Recorded rather than judged: how long that takes is the host's.
 		section "the warm build"
 		say ""
 		say "Launching the same project again, to price the build…"
@@ -1357,8 +1355,8 @@ EOF
 		warm_evaluate=$(phase_ms "$out/artifacts/logs/up-warm" evaluate)
 		warm_plan=$(phase_ms "$out/artifacts/logs/up-warm" plan)
 		warm_build=$(phase_ms "$out/artifacts/logs/up-warm" build)
-		# The denominator: a build worth caching is one that is a large share of
-		# the launch, and the share is what the two numbers together say.
+		# The whole launch, so the record also says what share of it the build
+		# is.
 		warm_total=$(sed -n 's/.*"durationMs":\([0-9]*\),"event":"outcome".*/\1/p' \
 			"$out/artifacts/logs/up-warm/boot.jsonl" 2>/dev/null | tail -1)
 		if [ -n "$first_evaluate" ] && [ -n "$first_plan" ] && [ -n "$first_build" ] &&
@@ -2793,7 +2791,7 @@ EOF
 			# The half that only a host can answer: `restricted` is a claim about
 			# a booted guest having no route of its own, and no amount of
 			# in-process testing reaches it. Everything here runs against a VM
-			# with a NIC it does not have.
+			# with no NIC.
 			section "restricted, and the tunnel"
 			cat >"$broker_config/igloo/igloo-policy.nix" <<EOF
 {
@@ -3191,8 +3189,8 @@ EOF
 			#
 			# The only check that exercises a *streaming* response, which is the
 			# half of the inference profiles nothing else reaches: everything
-			# above stops at a 502, and a 502 has no event stream. It costs a
-			# handful of tokens.
+			# above stops at the broker's refusal of an invalid key, which has no
+			# event stream. It costs a handful of tokens.
 			#
 			# OpenRouter rather than Anthropic: one OpenRouter key takes a model
 			# call in each of the three shapes below, while the Anthropic profile
@@ -3247,7 +3245,7 @@ EOF
 							# Distinguished from a broken stream, because the two look
 							# identical from here and only one of them is igloo's fault:
 							# this branch is the provider's own 401, relayed as the
-							# broker's 502 before any stream could start.
+							# broker's 403 before any stream could start.
 							verdict FAIL "$1" "openrouter.ai refused the key itself — check IGLOO_VERIFY_OPENROUTER_KEY, not the broker"
 						elif grep -qi 'not a valid model\|"error"' "$out/artifacts/$2"; then
 							# The one input here that can go stale on its own.
