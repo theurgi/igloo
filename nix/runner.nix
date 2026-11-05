@@ -109,7 +109,6 @@ let
     # symptom is a boot that never completes rather than an error.
     # microvm.nix warns during evaluation; fail instead, since an eval
     # warning scrolls past and a hung VM does not explain itself.
-    # https://github.com/microvm-nix/microvm.nix/issues/171
     assert lib.assertMsg (mem != 2048) "mem must not be exactly 2048 (QEMU hangs); use 2047 or 4096";
     # A name with a comma in it would not be a bad name — it would be a
     # second `-fw_cfg` option. systemd also uses the name as a filename.
@@ -298,14 +297,14 @@ let
         "microvm.socket".value = "control.socket";
 
         # Device passthrough is the caller's to decide, not a guest
-        # module's. Pinned empty until there is a reason to expose it.
+        # module's, and the caller passes none.
         "microvm.devices".value = [ ];
 
         "microvm.qemu.extraArgs".value = qemuArgs;
         "microvm.interfaces".value = [ ];
 
-        # No host→guest forwards at all. Publishing a guest port is a
-        # capability to add deliberately, as its own argument.
+        # No QEMU forwards: a guest has no network card for one to reach. A
+        # published port is an ssh forward the host opens over vsock.
         "microvm.forwardPorts".value = [ ];
 
         # Host execution surfaces. The runner's scripts run on the host, as

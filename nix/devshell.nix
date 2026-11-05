@@ -7,13 +7,10 @@
   storeView,
 }:
 pkgs.mkShell {
-  # The guest's core packages are on PATH deliberately, not for
-  # convenience. The runner's virtiofsd wrapper calls `nproc` and `id` by
-  # bare name, and it runs in a namespace where /nix/store holds only the
-  # runner's closure — so those names have to resolve to *this* `pkgs`,
-  # whose store paths are closure members. Resolved against the ambient
-  # profile instead they are invisible inside the namespace, and the tell
-  # is a boot that stalls at the socket poll with an empty log.
+  # The guest's core packages are on PATH for the tests: their stand-ins
+  # run under units confined to the store, so the tools they call — `bash`,
+  # `sleep`, `cp` — have to be store paths, which this `pkgs`' are on any
+  # host.
   #
   # `perl` is the tests': their stand-ins for QEMU and `ssh` run under
   # units confined to the store, and bun will not start under those
@@ -58,8 +55,9 @@ pkgs.mkShell {
     # none.
     export IGLOO_BROKER="${broker}/bin/igloo-broker"
 
-    # What the broker and the published ports run under, keeping them from
-    # the user's loopback services and abstract sockets.
+    # What the broker, the published ports and nix's evaluation run under,
+    # keeping them from the user's loopback services and abstract sockets,
+    # and the evaluation from the user's files.
     export IGLOO_LANDLOCK="${landlock}/bin/igloo-landlock"
 
     # Frozen, so a `bun.lock` that disagrees with `package.json` fails

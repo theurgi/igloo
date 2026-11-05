@@ -182,7 +182,7 @@ lib.mapAttrs refusedOnEvaluation {
       };
   };
 }
-# Definitions a content module can write today, at no special priority.
+# Definitions a content module can write at no special priority.
 # Pinning these options would not stop a store path that is a symlink out
 # of the store.
 // lib.mapAttrs refusedOnBuild {

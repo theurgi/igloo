@@ -27,10 +27,12 @@ let
     $CC -std=c11 -O2 -Wall -Wextra -o $out/bin/igloo-store-view ${../src/store-view.c}
   '';
 
-  # Runs the broker and the published ports unable to reach the user's
-  # loopback services or abstract sockets. C, because it is a handful of
-  # system calls that have to be made before the program it runs starts a
-  # thread, and its closure is the libc that program already has.
+  # Runs the broker, the published ports and nix's evaluation unable to
+  # reach the user's loopback services or abstract sockets, and the
+  # evaluation unable to read the user's files. C, because it is a
+  # handful of system calls that have to be made before the program it
+  # runs starts a thread, and its closure is the libc that program
+  # already has.
   landlock = pkgs.runCommandCC "igloo-landlock" { } ''
     mkdir -p $out/bin
     $CC -std=c11 -O2 -Wall -Wextra -o $out/bin/igloo-landlock ${../src/landlock.c}
