@@ -7,6 +7,7 @@ import { ChildProcessSpawner } from 'effect/unstable/process'
 import * as path from 'node:path'
 
 import {
+  isCloudProfile,
   isHostname,
   isInferenceProfile,
   isModelServerName,
@@ -593,6 +594,14 @@ const readGrant = (
       }
       return { profile }
     }
+    if (isCloudProfile(profile)) {
+      if ('repos' in entry) {
+        return yield* bad(
+          `${where}: \`secrets.${name}.repos\` does not apply to the ${profile} profile, which reaches the whole account the key is for: what it may change there is fixed by the profile, and what it may spend is the account's balance. Delete the line.`,
+        )
+      }
+      return { profile }
+    }
 
     if (Array.isArray(entry['repos'])) return yield* refuseFlatRepos(where, name, entry)
     const byAccess = entry['repos'] === undefined ? {} : asRecord(entry['repos'])
@@ -874,7 +883,7 @@ const composeSecrets = (
       if (first !== undefined) {
         const elsewhere = fileOf(first) === fileOf(secret) ? '' : ` (in ${fileOf(first)})`
         return yield* bad(
-          `${fileOf(secret)}: \`${secret.name}\` and \`${first.name}\`${elsewhere} are both brokered for the ${secret.grant.profile} profile. ${isInferenceProfile(secret.grant.profile) ? 'A request names no credential' : 'A request to its API may name no repository'}, so the broker could not tell which one pays: keep one${isInferenceProfile(secret.grant.profile) ? '' : ', and list every repository in it'}.`,
+          `${fileOf(secret)}: \`${secret.name}\` and \`${first.name}\`${elsewhere} are both brokered for the ${secret.grant.profile} profile. ${'repos' in secret.grant ? 'A request to its API may name no repository' : 'A request names no credential'}, so the broker could not tell which one pays: keep one${'repos' in secret.grant ? ', and list every repository in it' : ''}.`,
         )
       }
       calling.set(secret.grant.profile, secret)

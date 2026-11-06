@@ -41,9 +41,9 @@ export interface RunnerSpec {
    */
   readonly brokerAuthority: string | undefined
   /**
-   * Environment the guest needs in order to reach the broker's inference
-   * profiles — a base URL per provider, and a placeholder where each provider's
-   * client expects a key. Empty for a VM with no such grant.
+   * Environment the guest needs in order to reach the broker's profiles — a
+   * base URL per provider, and a placeholder where each profile's client
+   * expects a key. Empty for a VM with no such grant.
    *
    * Emitted even when empty, for the same reason `credentials` is: whether a VM
    * was pointed at a broker should be readable here rather than inferred from an
@@ -64,6 +64,11 @@ export interface RunnerSpec {
    * grant.
    */
   readonly brokerFiles: readonly BrokerFile[]
+  /**
+   * The packages the guest's clients of the broker's grants need, by their
+   * names in the guest's package set. Empty for a VM whose grants need none.
+   */
+  readonly brokerPackages: readonly string[]
   /**
    * Emitted even when empty, so that this file says whether a VM was launched
    * with credentials — which is the sort of thing that should not have to be
@@ -165,6 +170,9 @@ const renderBrokerFiles = (files: readonly BrokerFile[]): string =>
         )
         .join('\n')}\n        ];`
 
+const renderBrokerPackages = (names: readonly string[]): string =>
+  `[ ${names.map(name => `"${nixString(name)}" `).join('')}];`
+
 const renderGitBroker = (gitBroker: RunnerSpec['gitBroker']): string =>
   gitBroker === undefined
     ? 'null;'
@@ -209,6 +217,7 @@ export const render = (spec: RunnerSpec): string =>
         brokerEnv = ${renderBrokerEnv(spec.brokerEnv)}
         brokerEtc = ${renderBrokerEtc(spec.brokerEtc)}
         brokerFiles = ${renderBrokerFiles(spec.brokerFiles)}
+        brokerPackages = ${renderBrokerPackages(spec.brokerPackages)}
         contentModules = ${renderContent(spec.contentModules)}
         credentials = ${renderCredentials(spec.credentials)}
         gitBroker = ${renderGitBroker(spec.gitBroker)}

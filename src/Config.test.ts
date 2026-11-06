@@ -1033,6 +1033,39 @@ describe('Config.compose: grants', () => {
     assert.include(message, 'are both brokered for the github profile')
     assert.include(message, 'list every repository in it')
   })
+
+  const driving = (over: Record<string, unknown> = {}) => ({
+    secrets: {
+      RUNPOD_API_KEY: { mode: 'broker', profile: 'runpod', source: { file: '/k' }, ...over },
+    },
+  })
+
+  it('carries a runpod grant through as its profile alone', () => {
+    const [secret] = composed({ project: driving() }).secrets
+    assert.deepStrictEqual(secret?.mode === 'broker' ? secret.grant : undefined, {
+      profile: 'runpod',
+    })
+  })
+
+  it('refuses `repos` on a runpod grant, and says what bounds it instead', () => {
+    const message = refused({ project: driving({ repos: { read: ['you/api'] } }) })
+    assert.include(message, '`secrets.RUNPOD_API_KEY.repos` does not apply to the runpod profile')
+    assert.include(message, "the account's balance")
+  })
+
+  it('refuses a second runpod credential, which a request could not choose between', () => {
+    const message = refused({
+      project: {
+        secrets: {
+          ...driving().secrets,
+          OTHER: { mode: 'broker', profile: 'runpod', source: { file: '/j' } },
+        },
+      },
+    })
+    assert.include(message, 'are both brokered for the runpod profile')
+    assert.include(message, 'A request names no credential')
+    assert.notInclude(message, 'repository')
+  })
 })
 
 /**

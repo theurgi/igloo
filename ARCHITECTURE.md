@@ -25,9 +25,9 @@ checked there, and a claim here that the code does not bear out is a bug in one 
 - **The broker**, `igloo-broker` (`src/broker.ts`). One process per VM that holds a grant or has a
   tunnel destination. It holds that VM's credentials, serves brokered requests on one Unix socket
   and an HTTPS tunnel on another, and constructs every upstream request itself. For the hosts its
-  git grants reach, it answers TLS on a third socket, which the tunnel hands those connections to.
-  It is packaged from that one file and Bun, and imports nothing: not Effect, and nothing else in
-  `src/`.
+  git and cloud grants reach, it answers TLS on a third socket, which the tunnel hands those
+  connections to. It is packaged from that one file and Bun, and imports nothing: not Effect, and
+  nothing else in `src/`.
 - **`igloo-landlock`** (`src/landlock.c`). Runs a command under a Landlock ruleset: TCP connections
   only to the ports named, TCP binds only on the ports named, no abstract Unix socket, and, given
   paths, reads and writes only beneath them; and under a seccomp filter that refuses the sockets
@@ -228,32 +228,49 @@ its socket a bare file name, and which one is the store's is decided by that com
 ### The broker constructs every upstream request from its grants
 
 A request is authorized by its method and its path, with git's `service` parameter for a ref
-advertisement, and by nothing else it carries (`decide`). On the TLS listener, the name a request
-was addressed to is read as well, and only as one of the hosts the broker's git grants reach: it
-stands where the path form puts the host, and the rest is `decide`'s (`decideAddressed`). The
-upstream URL is built from the profile's fixed host and the grant's own copy of what it allows: a
-git request for the repository as the grant spells it, a push only for one in its `write`
-(`routeGit`), a read through a git grant's API under `repos/` and that repository or of the API's
-root, a write there for one in its `write` at a path `apiWrites` lists, or a `POST` to the API's
-fixed `graphql` path (`routeApi`), an upload of a release's asset for one in its `write` at the
-fixed path its API takes one at (`routeUploads`), a model provider's request for an endpoint its
-profile lists in `inferenceEndpoints` (`routeInference`), and a model server's on loopback, at the
-port its grant names (`routeModelServer`). Nothing the guest sends reaches the upstream URL but an
-OpenRouter model listing's query, and an API request's path past its repository and its query: each
-query rebuilt so that each name and value is encoded, and the path's segments as the URL parser left
-them, with every `.` and `..` resolved, so that none leaves the repository. A path holding a
-percent-escape or an empty segment is refused, but for the one ending a host's root, and so is a
-push or a REST write for a repository no grant's `write` lists, a push at its ref advertisement as
-well as at the push, and a REST write `apiWrites` does not list.
+advertisement, and by nothing else it carries (`decide`), but for a cloud account's GraphQL request,
+below. On the TLS listener, the name a request was addressed to is read as well, and only as one of
+the hosts the broker's git and cloud grants reach: it stands where the path form puts the host, and
+the rest is `decide`'s (`decideAddressed`). The upstream URL is built from the profile's fixed host
+and the grant's own copy of what it allows: a git request for the repository as the grant spells it,
+a push only for one in its `write` (`routeGit`), a read through a git grant's API under `repos/` and
+that repository or of the API's root, a write there for one in its `write` at a path `apiWrites`
+lists, or a `POST` to the API's fixed `graphql` path (`routeApi`), an upload of a release's asset
+for one in its `write` at the fixed path its API takes one at (`routeUploads`), a model provider's
+request for an endpoint its profile lists in `inferenceEndpoints` (`routeInference`), a cloud
+account's read under its REST API's version, a write there at a path `cloudWrites` lists, a `POST`
+to its fixed `graphql` path, and a call of one of its serverless endpoints under `v2/<endpoint>/`
+(`routeCloud`), and a model server's on loopback, at the port its grant names (`routeModelServer`).
+Nothing the guest sends reaches the upstream URL but an OpenRouter model listing's query, an API
+request's path past its repository and its query, and a cloud account's request's path past its
+version or endpoint and its query: each query rebuilt so that each name and value is encoded, and
+the path's segments as the URL parser left them, with every `.` and `..` resolved, so that none
+leaves the repository, the version or the endpoint. A path holding a percent-escape or an empty
+segment is refused, but for the one ending a host's root, and so is a push or a REST write for a
+repository no grant's `write` lists, a push at its ref advertisement as well as at the push, a REST
+write `apiWrites` does not list, and a cloud account's write `cloudWrites` does not list: for
+Runpod, what reaches past what the account runs to who may use it, its organization's members,
+invitations, groups and roles, the account's SSH keys, cost centres and ECR delegations.
 
-A GraphQL query is the one request a grant's repositories do not bound. It names what it reads and
-writes in its body, much of it by node IDs that say which repository they belong to only after a
-lookup, so not even reading the body could match it against a grant; it is sent with the credential,
-its body unread like every other, and the token's own scope is its bound (`routeApi`). A push is
-bounded to its repository but not to its refs, which it names in its body: which branches and tags
-it updates is the repository's rulesets' to bound. A REST write is bounded to its repository and its
-path, and what it sets, a merge's base branch or a release's tag and commit, is in its body, for the
-rulesets to bound as they bound a push.
+A cloud account's GraphQL request is the one body the broker reads, since a query and a mutation
+share its path, and a mutation can mint the account a key the guest would then hold. It is read
+whole, up to `graphqlBodyLimit`, and sent only if it is one JSON object of `query`, `variables` and
+`operationName` alone, whose document holds queries and fragments and no other definition, and names
+no field in `graphqlWithheld`, which return a credential the account holds (`graphqlQuery`,
+`graphqlRefusal`). The document is read with the GraphQL spec's lexer, so a word in a string or a
+comment decides nothing; where it reads more loosely than the spec, the server refuses the document
+whole. What is sent is the object it read, written again as `application/json`, so a second parser
+reading the text differently cannot matter, and `extensions`, which can carry a persisted query, is
+refused with anything else. A query is trusted to read, as GraphQL defines it.
+
+A GraphQL query through a git grant's API is the one request a grant's repositories do not bound. It
+names what it reads and writes in its body, much of it by node IDs that say which repository they
+belong to only after a lookup, so not even reading the body could match it against a grant; it is
+sent with the credential, its body unread, and the token's own scope is its bound (`routeApi`). A
+push is bounded to its repository but not to its refs, which it names in its body: which branches
+and tags it updates is the repository's rulesets' to bound. A REST write is bounded to its
+repository and its path, and what it sets, a merge's base branch or a release's tag and commit, is
+in its body, for the rulesets to bound as they bound a push.
 
 On the TLS listener, a read no grant serves — a GET or HEAD, or git's fetch — is sent to the host it
 was addressed to, with its path and query as the guest sent them and no credential at all, when the
@@ -270,26 +287,30 @@ hop-by-hop ones and any its `Connection` names, `Host`, `Expect`, `Content-Lengt
 listing carries no body headers (`bodyHeaders`); the broker's credential is set after the guest's
 are dropped. No proxy or trusted certificate set in the user manager's environment carries the
 broker's requests or vouches for their upstream, since none of that environment reaches it
-(`Systemd.start`). An anonymous read is built as a model request is, and no credential is set. A
-redirect is never followed, a 401 becomes the broker's own refusal (`relay`), and an answer loses
-its cookies and authentication challenges on the way back (`responseHeaders`). The redirects of an
-API request and an anonymous read alone go back to the guest as they came: an API's leads to a
-signed URL for a log or an asset, and the broker neither follows it nor sends its credential there.
-An API answer's `Link` naming a page by the repository's number is put back in the
-`repos/<owner>/<repo>/` form (`pagesOf`), so a client following it stays within the grant.
+(`Systemd.start`). A cloud account's request is built as a model request is, its GraphQL request
+described as the JSON the broker wrote for it. An anonymous read is built as a model request is, and
+no credential is set. A redirect is never followed, a 401 becomes the broker's own refusal
+(`relay`), and an answer loses its cookies and authentication challenges on the way back
+(`responseHeaders`). The redirects of an API request and an anonymous read alone go back to the
+guest as they came: an API's leads to a signed URL for a log or an asset, and the broker neither
+follows it nor sends its credential there. An API answer's `Link` naming a page by the repository's
+number is put back in the `repos/<owner>/<repo>/` form (`pagesOf`), so a client following it stays
+within the grant.
 
-The body is streamed upstream as it arrives, in chunks, never read and never refused for its size
-(`handle`, `serveRequests`). An asset's upload sent with a `Content-Length` and no
+Every other body is streamed upstream as it arrives, in chunks, never read and never refused for its
+size (`handle`, `serveRequests`). An asset's upload sent with a `Content-Length` and no
 `Transfer-Encoding` goes with that length instead, and is held to it: a body that runs past it or
 ends short of it ends the request and its connection, so that no byte past the stated length reaches
 the upstream, which would read it as the start of another request (`uploadLength`, `heldTo`).
 `headerTimeoutMs` ends a request whose upstream has not answered in time, a body that never ends
 among them. What a provider does for a model, its hosted tools included, is the provider's, so under
-`restricted` workspace data can leave through one to any address.
+`restricted` workspace data can leave through one to any address. So is what a cloud account runs: a
+pod the guest creates reaches whatever its own network does, with whatever the guest put in it.
 
-**Held by:** `broker.ts`: `decide`, `decideAddressed`, `routeApi`, `routeGit`, `routeInference`,
-`routeModelServer`, `routeUploads`, `upstreamHeaders`, `uploadLength`, `heldTo`, `relay`,
-`responseHeaders`, `pagesOf`, `handle`; `Systemd.start`.
+**Held by:** `broker.ts`: `decide`, `decideAddressed`, `routeApi`, `routeCloud`, `routeGit`,
+`routeInference`, `routeModelServer`, `routeUploads`, `graphqlQuery`, `graphqlRefusal`,
+`upstreamHeaders`, `uploadLength`, `heldTo`, `relay`, `responseHeaders`, `pagesOf`, `handle`;
+`Systemd.start`.
 
 ### The tunnel reaches only public addresses, on port 443
 
@@ -307,8 +328,8 @@ nothing is injected.
 A listed name that resolves to a routable address private to a VPN this host is on passes every
 check here, and is reached.
 
-The one exception is a host the broker's git grants reach, `tlsNames`. A `CONNECT` to one is not
-tunnelled anywhere: whatever the destinations, it is joined to the broker's own TLS listener
+The one exception is a host the broker's git and cloud grants reach, `tlsNames`. A `CONNECT` to one
+is not tunnelled anywhere: whatever the destinations, it is joined to the broker's own TLS listener
 (`serveTunnel`), where each request is decided and constructed as on the broker's port, and a read
 no grant serves is sent on without a credential where the destinations take in the host
 (`serveTls`). That listener answers with a certificate for those hosts from an authority made for

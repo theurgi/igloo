@@ -11,6 +11,8 @@ const grants: readonly Broker.Grant[] = [
   { credential: 'GITHUB_TOKEN', profile: 'github', repos: ['you/api'] },
 ]
 
+const runpod: readonly Broker.Grant[] = [{ credential: 'RUNPOD_API_KEY', profile: 'runpod' }]
+
 const base = 'http://127.0.0.1:3128'
 
 const advertise = (path: string, query = '?service=git-upload-pack') =>
@@ -223,8 +225,27 @@ describe('Broker.tlsNames', () => {
     for (const name of Broker.tlsNames(twice)) assert.include(Broker.tlsNamesCovered, name)
   })
 
-  it('answers nothing for a grant that is not a git one', () => {
+  it('answers nothing for a grant that is not a git or cloud one', () => {
     assert.deepStrictEqual(Broker.tlsNames([...inference, ...servers]), [])
+  })
+
+  it('answers Runpod’s names for a runpod grant, beside GitHub’s for a github one', () => {
+    assert.deepStrictEqual(Broker.tlsNames(runpod), [
+      'rest.runpod.io',
+      'api.runpod.io',
+      'api.runpod.ai',
+    ])
+    assert.deepStrictEqual(Broker.tlsNames([...grants, ...runpod, ...inference]), [
+      'github.com',
+      'api.github.com',
+      'uploads.github.com',
+      'rest.runpod.io',
+      'api.runpod.io',
+      'api.runpod.ai',
+    ])
+    // The certificate covers every profile's names, so a project's grants
+    // changing never changes the authority its guest trusts.
+    assert.deepStrictEqual(Broker.tlsNamesCovered, Broker.tlsNames([...grants, ...runpod]))
   })
 })
 
@@ -295,6 +316,44 @@ describe('Broker.decideAddressed', () => {
       ...inference,
     ])
     assert.strictEqual(decided._tag, 'Deny')
+    const across = addressed('https://api.runpod.io/api.github.com/repos/you/api', 'GET', [
+      ...grants,
+      ...runpod,
+    ])
+    assert.strictEqual(across._tag, 'Deny')
+  })
+
+  it('decides a request addressed to one of Runpod’s names for a runpod grant, and not otherwise', () => {
+    assert.deepStrictEqual(addressed('https://api.runpod.io/graphql', 'POST', runpod), {
+      _tag: 'Cloud',
+      credential: 'RUNPOD_API_KEY',
+      host: 'api.runpod.io',
+      operation: 'query',
+      profile: 'runpod',
+      upstream: 'https://api.runpod.io/graphql',
+    })
+    assert.strictEqual(
+      outcome(addressed('https://rest.runpod.io/v1/pods', 'POST', runpod)),
+      'allow',
+    )
+    assert.strictEqual(
+      outcome(addressed('https://api.runpod.ai/v2/ep1/run', 'POST', runpod)),
+      'allow',
+    )
+    assert.strictEqual(
+      outcome(addressed('https://api.runpod.io/v2/organization/invites', 'POST', runpod)),
+      403,
+    )
+    for (const granted of [grants, inference, [...grants, ...inference, ...servers]]) {
+      assert.strictEqual(outcome(addressed('https://api.runpod.io/graphql', 'POST', granted)), 421)
+    }
+    // GitHub's names are answered for a github grant alone, beside a runpod one.
+    assert.strictEqual(
+      outcome(
+        addressed('https://github.com/you/api/info/refs?service=git-upload-pack', 'GET', runpod),
+      ),
+      421,
+    )
   })
 })
 
@@ -711,6 +770,310 @@ describe('Broker.decide, on an upload of a release’s asset', () => {
       ),
       404,
     )
+  })
+})
+
+describe('Broker.decide, on Runpod’s API', () => {
+  const at = (host: string, path: string, method = 'GET', granted = runpod) =>
+    Broker.decide(granted, method, `${base}/${host}${path}`)
+
+  it('reads anything under each REST API’s version, with its credential and query', () => {
+    assert.deepStrictEqual(
+      at('api.runpod.io', '/v2/catalog/gpus?include=AVAILABILITY&product=pod'),
+      {
+        _tag: 'Cloud',
+        credential: 'RUNPOD_API_KEY',
+        host: 'api.runpod.io',
+        operation: 'read',
+        profile: 'runpod',
+        upstream: 'https://api.runpod.io/v2/catalog/gpus?include=AVAILABILITY&product=pod',
+      },
+    )
+    assert.deepStrictEqual(at('rest.runpod.io', '/v1/pods'), {
+      _tag: 'Cloud',
+      credential: 'RUNPOD_API_KEY',
+      host: 'rest.runpod.io',
+      operation: 'read',
+      profile: 'runpod',
+      upstream: 'https://rest.runpod.io/v1/pods',
+    })
+    for (const path of ['/v2/pods/abc/logs', '/v2/billing/pods', '/v2/organization/invites']) {
+      assert.strictEqual(outcome(at('api.runpod.io', path)), 'allow', path)
+    }
+    assert.strictEqual(outcome(at('API.RunPod.io', '/v2/pods', 'HEAD')), 'allow')
+  })
+
+  it('sends the query encoded, and cannot leave the version by its path', () => {
+    const decided = at('api.runpod.io', '/v2/pods?name=a b&x=1,2')
+    assert.strictEqual(
+      decided._tag === 'Cloud' ? decided.upstream : '',
+      'https://api.runpod.io/v2/pods?name=a+b&x=1%2C2',
+    )
+    // `..` is resolved before anything is matched, so this asks for `/graphql`
+    // with GET, and a percent-escape is refused outright.
+    assert.strictEqual(outcome(at('api.runpod.io', '/v2/../graphql')), 405)
+    assert.strictEqual(outcome(at('api.runpod.io', '/v2/%2e%2e/graphql')), 405)
+    assert.strictEqual(outcome(at('api.runpod.io', '/v2/pods%2Fx')), 400)
+  })
+
+  it('writes what an account runs and what it is made from', () => {
+    const writes: ReadonlyArray<readonly [string, string, string]> = [
+      ['POST', 'api.runpod.io', '/v2/pods'],
+      ['PATCH', 'api.runpod.io', '/v2/pods/abc'],
+      ['DELETE', 'api.runpod.io', '/v2/pods/abc'],
+      ['POST', 'api.runpod.io', '/v2/pods/abc/action'],
+      ['POST', 'api.runpod.io', '/v2/templates'],
+      ['PATCH', 'api.runpod.io', '/v2/serverless/ep1'],
+      ['POST', 'api.runpod.io', '/v2/network-volumes'],
+      ['DELETE', 'api.runpod.io', '/v2/global-volumes/v1'],
+      ['POST', 'api.runpod.io', '/v2/clusters'],
+      ['POST', 'api.runpod.io', '/v2/registries'],
+      ['DELETE', 'api.runpod.io', '/v2/registries/r1'],
+      ['POST', 'api.runpod.io', '/v2/account/secrets'],
+      ['POST', 'rest.runpod.io', '/v1/pods'],
+      ['POST', 'rest.runpod.io', '/v1/pods/abc/stop'],
+      ['POST', 'rest.runpod.io', '/v1/pods/abc/start'],
+      ['DELETE', 'rest.runpod.io', '/v1/pods/abc'],
+      ['POST', 'rest.runpod.io', '/v1/templates/t1/update'],
+      ['POST', 'rest.runpod.io', '/v1/endpoints'],
+      ['POST', 'rest.runpod.io', '/v1/containerregistryauth'],
+    ]
+    for (const [method, host, path] of writes) {
+      const decided = at(host, path, method)
+      assert.strictEqual(
+        decided._tag === 'Cloud' ? decided.operation : decided._tag,
+        'write',
+        `${method} ${path}`,
+      )
+    }
+  })
+
+  it('refuses what reaches past what the account runs, to who may use it and how', () => {
+    const refused: ReadonlyArray<readonly [string, string]> = [
+      ['POST', '/v2/organization/invites'],
+      ['DELETE', '/v2/organization/invites/i1'],
+      ['PATCH', '/v2/organization/users/u1'],
+      ['DELETE', '/v2/organization/users/u1'],
+      ['POST', '/v2/organization/roles'],
+      ['PATCH', '/v2/organization/roles/r1'],
+      ['POST', '/v2/organization/groups'],
+      ['PUT', '/v2/organization/groups/g1/members/u1'],
+      ['PUT', '/v2/account/ssh-keys'],
+      ['POST', '/v2/cost-centers'],
+      ['PUT', '/v2/cost-centers/c1/pod/p1'],
+      ['POST', '/v2/registries/delegations'],
+      ['DELETE', '/v2/registries/delegations/d1'],
+      ['POST', '/v2/pods/abc/exec'],
+      ['PUT', '/v2/pods/abc'],
+    ]
+    for (const [method, path] of refused) {
+      assert.deepStrictEqual(
+        at('api.runpod.io', path, method),
+        {
+          _tag: 'Deny',
+          asked: { host: 'api.runpod.io' },
+          json: true,
+          reason: `${method} ${path} is not a write this VM may make through api.runpod.io`,
+          status: 403,
+        },
+        `${method} ${path}`,
+      )
+    }
+  })
+
+  it('refuses anything outside each REST API’s version, and a method that neither reads nor writes', () => {
+    assert.strictEqual(outcome(at('api.runpod.io', '/v1/pods')), 403)
+    assert.strictEqual(outcome(at('api.runpod.io', '/')), 403)
+    assert.strictEqual(outcome(at('rest.runpod.io', '/v2/pods')), 403)
+    assert.strictEqual(outcome(at('rest.runpod.io', '/v1/pods', 'POST')), 'allow')
+    assert.strictEqual(outcome(at('api.runpod.io', '/v2/pods', 'OPTIONS')), 405)
+    assert.strictEqual(outcome(at('api.runpod.io', '/v2/pods', 'TRACE')), 405)
+  })
+
+  it('takes a GraphQL request with POST alone, sent to the fixed path without its query', () => {
+    assert.deepStrictEqual(at('api.runpod.io', '/graphql?query=mutation{x}', 'POST'), {
+      _tag: 'Cloud',
+      credential: 'RUNPOD_API_KEY',
+      host: 'api.runpod.io',
+      operation: 'query',
+      profile: 'runpod',
+      upstream: 'https://api.runpod.io/graphql',
+    })
+    // GraphQL over GET puts the document in the query string, which nothing
+    // here reads, and a subscription's upgrade begins as a GET too.
+    assert.strictEqual(outcome(at('api.runpod.io', '/graphql?query={myself{id}}')), 405)
+    assert.strictEqual(outcome(at('api.runpod.io', '/graphql', 'PUT')), 405)
+    assert.strictEqual(outcome(at('rest.runpod.io', '/graphql', 'POST')), 403)
+  })
+
+  it('calls a serverless endpoint, reading with GET and calling with POST', () => {
+    assert.deepStrictEqual(at('api.runpod.ai', '/v2/ep1/runsync', 'POST'), {
+      _tag: 'Cloud',
+      credential: 'RUNPOD_API_KEY',
+      host: 'api.runpod.ai',
+      operation: 'invoke',
+      profile: 'runpod',
+      upstream: 'https://api.runpod.ai/v2/ep1/runsync',
+    })
+    const status = at('api.runpod.ai', '/v2/ep1/status/job-1?wait=5000')
+    assert.strictEqual(status._tag === 'Cloud' ? status.operation : status._tag, 'read')
+    assert.strictEqual(
+      status._tag === 'Cloud' ? status.upstream : '',
+      'https://api.runpod.ai/v2/ep1/status/job-1?wait=5000',
+    )
+    assert.strictEqual(
+      outcome(at('api.runpod.ai', '/v2/ep1/openai/v1/chat/completions', 'POST')),
+      'allow',
+    )
+    assert.strictEqual(outcome(at('api.runpod.ai', '/v2/ep1/health')), 'allow')
+    assert.strictEqual(outcome(at('api.runpod.ai', '/v2/ep1/run', 'DELETE')), 405)
+    assert.strictEqual(outcome(at('api.runpod.ai', '/v2/ep1')), 404)
+    assert.strictEqual(outcome(at('api.runpod.ai', '/v1/ep1/run', 'POST')), 404)
+  })
+
+  it('serves Runpod’s names only for a runpod grant', () => {
+    assert.strictEqual(outcome(at('api.runpod.io', '/v2/pods', 'GET', grants)), 404)
+    assert.strictEqual(outcome(at('api.runpod.ai', '/v2/ep1/run', 'POST', inference)), 404)
+  })
+})
+
+describe('Broker.graphqlRefusal', () => {
+  it('sends a document whose every operation is a query', () => {
+    for (const document of [
+      '{ myself { clientBalance currentSpendPerHr spendLimit } }',
+      'query { gpuTypes { id displayName } }',
+      'query Balance { myself { clientBalance } }',
+      'query A { myself { id } } query B { gpuTypes { id } }',
+      'query Pods($input: PodFilter = {limit: 5, tags: {a: "}"}}) @live { myself { pods(input: $input) { id } } }',
+      'query { ...Me } fragment Me on Query { myself { id } }',
+      'query { myself { ...on User { id } } }',
+      '# mutation { createApiKey { id } }\n{ myself { id } }',
+      'query { pods(name: "mutation { createApiKey }") { id } }',
+      'query { pods(name: """a "quoted" mutation \\""" registryAuth""") { id } }',
+      'query mutation { myself { mutation: id } }',
+      '\uFEFF{ myself { id } }',
+      'query { pods(limit: 5, cost: -1.5e3, flag: true, none: null, kind: SPOT, ids: ["a", "b"]) { id } }',
+    ]) {
+      assert.isUndefined(Broker.graphqlRefusal(document), document)
+    }
+  })
+
+  it('refuses a mutation and a subscription, alone or beside a query', () => {
+    const mutation =
+      'a mutation writes, and this VM may only read through GraphQL; write through the REST API instead'
+    for (const document of [
+      'mutation { createApiKey(input: {name: "x"}) { id rawKey } }',
+      'mutation Make { podFindAndDeployOnDemand(input: {}) { id } }',
+      'query { myself { id } } mutation { createApiKey { id } }',
+      '{ myself { id } }\nmutation { createApiKey { id } }',
+      '# a comment\nmutation { createApiKey { id } }',
+      'query Q($a: In = {b: "}"}) { x } mutation { createApiKey { id } }',
+      'query { a(s: """ """) } mutation { createApiKey { id } }',
+    ]) {
+      assert.strictEqual(Broker.graphqlRefusal(document), mutation, document)
+    }
+    assert.strictEqual(
+      Broker.graphqlRefusal('subscription { podStatus { id } }'),
+      'a subscription is not a query, and this VM may only query through GraphQL',
+    )
+  })
+
+  it('refuses a document naming a field that holds a credential, however it names it', () => {
+    const withheld = 'the query names registryAuth, which holds a credential, so it is not sent'
+    for (const document of [
+      '{ myself { containerRegistryCreds { id registryAuth } } }',
+      '{ myself { containerRegistryCreds { auth: registryAuth } } }',
+      'query { myself { containerRegistryCreds { ...Creds } } } fragment Creds on ContainerRegistryAuth { registryAuth }',
+      'query { myself { containerRegistryCreds { ... @include(if: true) { registryAuth } } } }',
+    ]) {
+      assert.strictEqual(Broker.graphqlRefusal(document), withheld, document)
+    }
+  })
+
+  it('refuses what is not a document of operations and fragments, or cannot be read as one', () => {
+    for (const document of [
+      '',
+      '   # nothing but a comment',
+      'fragment F on Query { myself { id } }',
+      'type Query { x: Int }',
+      'schema { query: Query }',
+      'Mutation { createApiKey { id } }',
+      '{ myself { id }',
+      '{ myself { id } } }',
+      'query Q) { x }',
+      'query Q { x } }',
+      '{ a(s: "unterminated) }',
+      '{ a(s: "line\nbreak") }',
+      '{ a(s: """unterminated) }',
+      '{ a(n: 1e) }',
+      '{ a(n: 12abc) }',
+      '{ a(n: .5) }',
+      '{ a(n: - 5) }',
+      '{ a } ; mutation { b }',
+      '{ a(n: 1) } é',
+    ]) {
+      assert.isDefined(Broker.graphqlRefusal(document), JSON.stringify(document))
+    }
+  })
+})
+
+describe('Broker.graphqlQuery', () => {
+  it('writes the request it read again, and nothing else', () => {
+    assert.deepStrictEqual(
+      Broker.graphqlQuery('{"query":"{ myself { id } }","variables":{"a":1},"operationName":null}'),
+      { body: '{"operationName":null,"query":"{ myself { id } }","variables":{"a":1}}' },
+    )
+    assert.deepStrictEqual(Broker.graphqlQuery('{"query":"{ myself { id } }"}'), {
+      body: '{"query":"{ myself { id } }"}',
+    })
+    assert.deepStrictEqual(
+      Broker.graphqlQuery('{"variables":null,"query":"query Q { a }","operationName":"Q"}'),
+      {
+        body: '{"operationName":"Q","query":"query Q { a }","variables":null}',
+      },
+    )
+  })
+
+  it('reads a key given twice as the last, and sends that alone', () => {
+    // Whatever a second parser would make of the text, the server is sent the
+    // object this one read.
+    assert.deepStrictEqual(
+      Broker.graphqlQuery('{"query":"mutation { createApiKey { id } }","query":"{ a }"}'),
+      { body: '{"query":"{ a }"}' },
+    )
+    assert.deepStrictEqual(
+      Broker.graphqlQuery('{"query":"{ a }","query":"mutation { createApiKey { id } }"}'),
+      {
+        reason:
+          'a mutation writes, and this VM may only read through GraphQL; write through the REST API instead',
+      },
+    )
+  })
+
+  it('refuses a request that is not one JSON object of a query in full', () => {
+    const refusals: ReadonlyArray<readonly [string, string]> = [
+      ['query { a }', 'a GraphQL request is sent as JSON, and this one is not'],
+      ['', 'a GraphQL request is sent as JSON, and this one is not'],
+      ['[{"query":"{ a }"}]', 'a GraphQL request is one JSON object, and a batch is not sent'],
+      ['"{ a }"', 'a GraphQL request is one JSON object, and a batch is not sent'],
+      ['null', 'a GraphQL request is one JSON object, and a batch is not sent'],
+      [
+        '{"extensions":{"persistedQuery":{"version":1,"sha256Hash":"ab"}}}',
+        'a GraphQL request is sent with query, variables and operationName alone, and this one sets more',
+      ],
+      [
+        '{"query":"{ a }","extensions":{"persistedQuery":{"version":1,"sha256Hash":"ab"}}}',
+        'a GraphQL request is sent with query, variables and operationName alone, and this one sets more',
+      ],
+      ['{}', 'a GraphQL request is sent with its query in full, and this one has none'],
+      ['{"query":null}', 'a GraphQL request is sent with its query in full, and this one has none'],
+      ['{"query":"{ a }","variables":[1]}', 'a GraphQL request’s variables are an object'],
+      ['{"query":"{ a }","variables":"{}"}', 'a GraphQL request’s variables are an object'],
+      ['{"query":"{ a }","operationName":1}', 'a GraphQL request’s operationName is a string'],
+    ]
+    for (const [text, reason] of refusals) {
+      assert.deepStrictEqual(Broker.graphqlQuery(text), { reason }, text)
+    }
   })
 })
 
@@ -1480,6 +1843,16 @@ describe('Broker.guestEnvironment', () => {
     assert.deepStrictEqual(Broker.guestClientFiles(grants, 3128), [])
   })
 
+  it('gives a runpod grant the key its clients read, and their CLI', () => {
+    assert.deepStrictEqual(Broker.guestEnvironment(runpod, 3128), {
+      RUNPOD_API_KEY: Broker.guestPlaceholderKey,
+    })
+    assert.deepStrictEqual(Broker.guestPackages(runpod), ['runpodctl'])
+    assert.deepStrictEqual(Broker.guestEtcFiles(runpod, 3128), {})
+    assert.deepStrictEqual(Broker.guestClientFiles(runpod, 3128), [])
+    assert.deepStrictEqual(Broker.guestPackages([...grants, ...inference, ...servers]), [])
+  })
+
   it('builds a base URL the profile’s own endpoints hang off', () => {
     // The two halves have to meet: a client appends its endpoint to this, and
     // the result has to be a path `decide` routes.
@@ -1861,9 +2234,22 @@ describe('Broker.parseGrants', () => {
       { credential: 'K', maxOutputTokens: 64, profile: 'openrouter' },
       { credential: 'K', profile: 'anthropic-messages', repos: ['you/api'] },
       { credential: 'T', models: ['m'], profile: 'github', repos: ['you/api'] },
+      { credential: 'R', profile: 'runpod', repos: ['you/api'] },
+      { credential: 'R', profile: 'runpod', write: ['you/api'] },
     ]) {
       assert.include(message(JSON.stringify([grant])), 'which this broker does not read')
     }
+  })
+
+  it('reads a runpod grant, the profile alone, and refuses a second', () => {
+    assert.deepStrictEqual(Broker.parseGrants('[{"credential":"R","profile":"runpod"}]'), {
+      grants: [{ credential: 'R', profile: 'runpod' }],
+    })
+    assert.include(message('[{"profile":"runpod"}]'), 'needs a credential name')
+    assert.include(
+      message('[{"credential":"R","profile":"runpod"},{"credential":"S","profile":"runpod"}]'),
+      'two runpod grants',
+    )
   })
 
   it('refuses a second grant for one profile, which nothing could choose between', () => {
@@ -3184,6 +3570,167 @@ describe('Broker.serveRequests, on GitHub’s API', () => {
       }),
     )
   })
+})
+
+/** The audit lines of one event, each without the time it was written at. */
+const untimed = (audited: ReadonlyArray<unknown>, event: string): ReadonlyArray<unknown> =>
+  audited
+    .filter(
+      (line): line is Record<string, unknown> =>
+        typeof line === 'object' && line !== null && 'event' in line && line.event === event,
+    )
+    .map(({ t: _t, ...rest }) => rest)
+
+describe('Broker.serveRequests, on Runpod’s API', () => {
+  const credentials: ReadonlyMap<string, string> = new Map([['RUNPOD_API_KEY', 'rp-test']])
+  const sent: Array<{
+    readonly body: string | undefined
+    readonly init: RequestInit
+    readonly url: string
+  }> = []
+  /** Runpod standing in: every request answered, and what was sent kept. */
+  const runpodApi = async (url: string, init: RequestInit): Promise<Response> => {
+    const body =
+      init.body === undefined || init.body === null
+        ? undefined
+        : await new Response(init.body).text()
+    sent.push({ body, init, url })
+    return new Response('{"data":{"myself":{"clientBalance":25}}}', {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+  const post = (
+    path: string,
+    body: NonNullable<RequestInit['body']>,
+    headers: Record<string, string> = {},
+  ) =>
+    new Request(`http://broker${path}`, {
+      body,
+      headers: { Authorization: `Bearer ${Broker.guestPlaceholderKey}`, ...headers },
+      method: 'POST',
+    })
+
+  it('sends a query with the broker’s key, as the object it read, written again as JSON', () =>
+    auditing(audited =>
+      serving(runpod, credentials, runpodApi, async server => {
+        sent.length = 0
+        const response = await server.fetch(
+          post(
+            '/api.runpod.io/graphql',
+            '{ "query" : "query { myself { clientBalance } }", "variables": {} }',
+            { 'Content-Type': 'text/plain', 'Content-Encoding': 'identity' },
+          ),
+        )
+        assert.strictEqual(response.status, 200)
+        assert.strictEqual(await response.text(), '{"data":{"myself":{"clientBalance":25}}}')
+        assert.strictEqual(sent.length, 1)
+        assert.strictEqual(sent[0]?.url, 'https://api.runpod.io/graphql')
+        assert.strictEqual(
+          sent[0]?.body,
+          '{"query":"query { myself { clientBalance } }","variables":{}}',
+        )
+        const headers = new Headers(sent[0]?.init.headers)
+        assert.strictEqual(headers.get('Authorization'), 'Bearer rp-test')
+        assert.strictEqual(headers.get('Content-Type'), 'application/json')
+        assert.isNull(headers.get('Content-Encoding'))
+        assert.deepStrictEqual(untimed(audited, 'allow'), [
+          {
+            credential: 'RUNPOD_API_KEY',
+            event: 'allow',
+            host: 'api.runpod.io',
+            id: 1,
+            operation: 'query',
+          },
+        ])
+      }),
+    ))
+
+  it('refuses a mutation before anything is sent or the key is read, with its reason as the message', () =>
+    auditing(audited =>
+      serving(runpod, credentials, runpodApi, async server => {
+        sent.length = 0
+        const response = await server.fetch(
+          post(
+            '/api.runpod.io/graphql',
+            JSON.stringify({
+              query: 'mutation { createApiKey(input: {name: "x"}) { id rawKey } }',
+            }),
+          ),
+        )
+        assert.strictEqual(response.status, 403)
+        assert.deepStrictEqual(await response.json(), {
+          message:
+            'broker: a mutation writes, and this VM may only read through GraphQL; write through the REST API instead',
+        })
+        assert.strictEqual(response.headers.get('x-should-retry'), 'false')
+        assert.strictEqual(sent.length, 0)
+        assert.deepStrictEqual(untimed(audited, 'deny'), [
+          {
+            event: 'deny',
+            host: 'api.runpod.io',
+            id: 1,
+            reason:
+              'a mutation writes, and this VM may only read through GraphQL; write through the REST API instead',
+            status: 403,
+          },
+        ])
+        assert.deepStrictEqual(untimed(audited, 'allow'), [])
+      }),
+    ))
+
+  it('refuses a body past its limit, or one that is not text, without sending either', () =>
+    auditing(() =>
+      serving(runpod, credentials, runpodApi, async server => {
+        sent.length = 0
+        const padded = JSON.stringify({
+          query: `query { myself { id } }${' '.repeat(Broker.graphqlBodyLimit)}`,
+        })
+        const large = await server.fetch(post('/api.runpod.io/graphql', padded))
+        assert.strictEqual(large.status, 413)
+        assert.include(await large.text(), `at most ${String(Broker.graphqlBodyLimit)} bytes`)
+        const binary = await server.fetch(
+          post('/api.runpod.io/graphql', new Uint8Array([0x7b, 0xff, 0xfe, 0x7d])),
+        )
+        assert.strictEqual(binary.status, 403)
+        const empty = await server.fetch(
+          new Request('http://broker/api.runpod.io/graphql', { method: 'POST' }),
+        )
+        assert.strictEqual(empty.status, 403)
+        assert.strictEqual(sent.length, 0)
+      }),
+    ))
+
+  it('streams a REST write and a call of an endpoint as they came, with the broker’s key', () =>
+    auditing(() =>
+      serving(runpod, credentials, runpodApi, async server => {
+        sent.length = 0
+        const pod = '{"name":"bench","templateId":"t1","gpu":{"count":1}}'
+        const created = await server.fetch(
+          post('/api.runpod.io/v2/pods', pod, { 'Content-Type': 'application/json' }),
+        )
+        assert.strictEqual(created.status, 200)
+        const run = await server.fetch(post('/api.runpod.ai/v2/ep1/runsync', '{"input":{}}'))
+        assert.strictEqual(run.status, 200)
+        const health = await server.fetch(
+          new Request('http://broker/api.runpod.ai/v2/ep1/health', {
+            headers: { Authorization: 'Bearer igloo-broker-holds-the-real-key' },
+          }),
+        )
+        assert.strictEqual(health.status, 200)
+
+        assert.deepStrictEqual(
+          sent.map(each => [each.url, each.body]),
+          [
+            ['https://api.runpod.io/v2/pods', pod],
+            ['https://api.runpod.ai/v2/ep1/runsync', '{"input":{}}'],
+            ['https://api.runpod.ai/v2/ep1/health', undefined],
+          ],
+        )
+        for (const each of sent) {
+          assert.strictEqual(new Headers(each.init.headers).get('Authorization'), 'Bearer rp-test')
+        }
+      }),
+    ))
 })
 
 describe('Broker.serveRequests, on how a refusal is written', () => {

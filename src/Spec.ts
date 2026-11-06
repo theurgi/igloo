@@ -157,6 +157,7 @@ export const fromConfig = (
     brokerEnv,
     brokerEtc: Broker.guestEtcFiles(grants, Vm.brokerGuestPort),
     brokerFiles: Broker.guestClientFiles(grants, Vm.brokerGuestPort),
+    brokerPackages: Broker.guestPackages(grants),
     contentModules: config.content.map(({ file }) => file),
     credentials: credentials.map(({ hostPath, name }) => ({ hostPath, name })),
     gitBroker: gitHosts.length === 0 ? undefined : { hosts: gitHosts },
@@ -183,9 +184,9 @@ export const fromConfig = (
       .map(grant =>
         Broker.isModelServerGrant(grant)
           ? `${grant.profile} ${grant.name} port=${String(grant.port)}${grant.credential === undefined ? '' : ` ${grant.credential}`}`
-          : Broker.isInferenceGrant(grant)
-            ? `${grant.profile} ${grant.credential}`
-            : `${grant.profile} ${grant.credential} repos=${grant.repos.toSorted().join(',')}${grant.write === undefined ? '' : ` write=${grant.write.toSorted().join(',')}`}`,
+          : Broker.isGitGrant(grant)
+            ? `${grant.profile} ${grant.credential} repos=${grant.repos.toSorted().join(',')}${grant.write === undefined ? '' : ` write=${grant.write.toSorted().join(',')}`}`
+            : `${grant.profile} ${grant.credential}`,
       )
       .toSorted(),
     `brokerMem=${config.policy.brokerMem === undefined ? 'unbounded' : String(config.policy.brokerMem)}`,

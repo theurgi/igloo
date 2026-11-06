@@ -59,6 +59,10 @@ let
       # exist, so a user's own file is never replaced. Content, as
       # `brokerEnv` is.
       brokerFiles ? [ ],
+      # Packages the guest's clients of the broker's grants need, by their
+      # names in the guest's package set, as [ "runpodctl" ]. Content, as
+      # `brokerEnv` is: a guest without them reaches the broker no less.
+      brokerPackages ? [ ],
       # NixOS modules composing the guest environment — the content plane.
       # They compose by normal module semantics and may override anything in
       # `coreModule` or disable it whole; they may not set any of the
@@ -152,6 +156,15 @@ let
               }
             ) gitBroker.hosts
           );
+        };
+
+      # Install the clients the broker's grants are for, from the guest's
+      # package set, so a content module's overlay applies to them as to
+      # anything else the guest installs.
+      brokerPackagesModule =
+        { pkgs, ... }:
+        {
+          environment.systemPackages = map (name: pkgs.${name}) brokerPackages;
         };
 
       # Trust the authority behind the broker's certificate, beside the
@@ -375,6 +388,7 @@ let
         ++ lib.optional (brokerAuthority != null) brokerAuthorityModule
         ++ lib.optional (brokerEnv != { }) brokerEnvModule
         ++ lib.optional (brokerFiles != [ ]) brokerFilesModule
+        ++ lib.optional (brokerPackages != [ ]) brokerPackagesModule
         ++ contentModules
         ++ [
           {

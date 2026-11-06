@@ -81,7 +81,7 @@ holds its own TLS certificate and key under them.
 | ------------- | ------------------ | --------------------------------------------------------------------------- |
 | `source`      | every credential   | `{ file = "…"; }` or `{ command = [ … ]; }`                                 |
 | `mode`        | every credential   | `"broker"` or `"deliver"`                                                   |
-| `profile`     | brokered           | `"anthropic-messages"`, `"openrouter"` or `"github"`                        |
+| `profile`     | brokered           | `"anthropic-messages"`, `"openrouter"`, `"github"` or `"runpod"`            |
 | `repos.read`  | brokered, `github` | Repositories to fetch and read, as `owner/repo`.                            |
 | `repos.write` | brokered, `github` | Repositories to push to and write through the API as well, as `owner/repo`. |
 | `projects`    | user layer only    | Absolute paths of the projects' root directories.                           |
@@ -259,15 +259,17 @@ a token that can write.
 ### How the guest reaches GitHub
 
 The broker answers `github.com`, `api.github.com` and `uploads.github.com` over TLS with a
-certificate of its own, so the guest has to trust what issued it. On the first launch with a
-`github` grant, igloo makes a certificate authority for the project with `openssl`, and a
-certificate for those names signed by it. It keeps both in `.igloo/tls/`, with the certificate's
-key, readable only by you. The guest is built trusting that authority beside the system's own, and
+certificate of its own, so the guest has to trust what issued it, and answers Runpod's names for a
+`runpod` grant the same way. On the first launch with either grant, igloo makes a certificate
+authority for the project with `openssl`, and a certificate signed by it for the names the broker
+answers for any profile. It keeps both in `.igloo/tls/`, with the certificate's key, readable only
+by you. The guest is built trusting that authority beside the system's own, and
 `NODE_EXTRA_CA_CERTS` points Node and Bun at the same list.
 
-- The authority can sign for `github.com` and its subdomains and nothing else: its name constraints
-  say so, and its own key is deleted once it has signed the one certificate. What `.igloo/tls/`
-  holds can answer GitHub's names to this project's guest, and sign nothing.
+- The authority can sign for `github.com`, `rest.runpod.io`, `api.runpod.io` and `api.runpod.ai`,
+  and their subdomains, and nothing else: its name constraints say so, and its own key is deleted
+  once it has signed the one certificate. What `.igloo/tls/` holds can answer those names to this
+  project's guest, and sign nothing. The broker answers only the names its own grants are for.
 - Every request the guest makes to any of them over HTTPS reaches the broker. What the grant covers
   is served with the token. A read no grant covers, a release download, a clone of a public
   repository the grant does not list or an install script's read through the API, is sent to GitHub
@@ -285,6 +287,61 @@ key, readable only by you. The guest is built trusting that authority beside the
 Without a repository in `repos.write`, pushing happens from the host, in a repository the agent has
 written. Before running `git` there, look at `.git/config` and `.git/hooks`: git runs what they
 name, as you.
+
+### `runpod`
+
+- **Upstream:** Runpod's API, with a Runpod API key sent as a bearer token: its REST API at
+  `https://rest.runpod.io/v1` and `https://api.runpod.io/v2`, its GraphQL API at
+  `https://api.runpod.io/graphql`, and the API a serverless endpoint is called through, at
+  `https://api.runpod.ai/v2`.
+- **Operations:**
+  - Reading, with `GET` or `HEAD`, anything under `v1/` at `rest.runpod.io` and under `v2/` at
+    `api.runpod.io`, with its query: the GPU catalog with prices and availability, pods and their
+    logs, templates, volumes, serverless endpoints, billing.
+  - Writing through the REST API what the account runs and what it is made from: creating, changing
+    and deleting pods, templates, serverless endpoints, network and global volumes, clusters,
+    registry logins and secrets, and starting, stopping, restarting and resetting a pod
+    (`v1/pods/<id>/start` and the like, `v2/pods/<id>/action`).
+  - A GraphQL query, `POST graphql`, that only reads. The broker reads the request and sends it only
+    if every operation in it is a query. A mutation is refused, since one can create an API key that
+    the guest would then hold, and so is a query naming `registryAuth`, which holds a registry's
+    login. The request has to be one JSON object of `query`, `variables` and `operationName`, at
+    most 256 KiB: a batch, `extensions` (which carries a persisted query) and GraphQL over `GET` are
+    refused. What is sent is the object the broker read, written again as JSON.
+  - Calling a serverless endpoint: `GET` or `POST` anything under `v2/<endpoint>/` at
+    `api.runpod.ai`, so `run`, `runsync`, `status`, `stream`, `cancel`, `retry`, `health`,
+    `purge-queue`, and a vLLM worker's OpenAI-compatible API under `openai/v1/`.
+  - Everything else is refused: a write that reaches past what the account runs to who may use it,
+    an organization's invitations, members, groups and roles, the account's SSH keys, cost centres
+    and ECR delegations; any write the list above does not name; and any path outside `v1/`, `v2/`
+    and `graphql`.
+- **Grant:** the profile alone. Creating pods takes a key with **All** permissions: a **Read only**
+  key reads, and **Restricted** sets access per serverless endpoint and nothing else.
+- **In the guest:** `runpodctl`, and `RUNPOD_API_KEY=igloo-broker-holds-the-real-key`, the variable
+  `runpodctl` and Runpod's other clients read their key from. The broker answers `rest.runpod.io`,
+  `api.runpod.io` and `api.runpod.ai` itself, as it answers GitHub's names
+  ([How the guest reaches GitHub](#how-the-guest-reaches-github)), so a client's ordinary Runpod
+  URLs reach it, under every network mode and with no `tunnel` entry.
+
+`runpodctl` 2.15.0 writes some things through GraphQL, and those commands are refused: `pod create`
+for a GPU pod (a CPU pod goes through the REST API), `serverless create`, the parts of
+`serverless update` that change an endpoint's template or models, and anything that adds an SSH key
+to the account (`ssh add-key`, and that step of `doctor` and `config`). The REST API does each but
+the last: `POST v2/pods` with a template creates a GPU pod, and `POST v2/serverless` an endpoint.
+`runpodctl user` reads the balance through GraphQL, and works.
+
+A Runpod key reaches the whole account, so the bounds that matter most are Runpod's own:
+
+- **Spending.** Nothing on the key caps what it spends. The account's balance does, with automatic
+  top-up off, and so does its hourly spend limit. Keep on the account only what you would let an
+  agent spend.
+- **What a pod does.** A pod is a machine with its own network. What the guest puts in a template, a
+  container image, a start command, environment variables, goes wherever the pod sends it, so under
+  `restricted` a pod is a way around the VM's [network mode](network.md#network-modes).
+- **What the account holds.** A read through either API returns what the account holds in plain
+  text, an environment variable of any template, pod or endpoint among it, and a GraphQL query reads
+  whatever a query can. Keep a value that matters in a Runpod secret, which no read returns, and
+  give it to a pod by reference.
 
 ## Model servers on this machine
 
@@ -394,7 +451,8 @@ A key written in either file is not used: the broker drops it.
 ## What the broker checks
 
 The broker decides from a request's path where it goes and which credential it carries. It does not
-read the body, which it streams upstream as it arrives. So **the model** is not checked: any model
+read the body, which it streams upstream as it arrives, but for a GraphQL request to Runpod, which
+it reads to refuse a mutation ([`runpod`](#runpod)). So **the model** is not checked: any model
 passes, or none, with whatever `max_tokens` the request sets. Nor are **the provider's own tools**:
 a request may ask for web search, web fetch, code execution or an MCP connector, use OpenRouter's
 plugins or a `:online` model, or give an image by URL for the provider to download, under every
@@ -408,7 +466,7 @@ On every brokered request:
 
 - The guest's `Authorization`, `x-api-key`, `Proxy-Authorization` and `Cookie` are dropped, and the
   broker sets its own credential.
-- On an inference profile, a model server or GitHub's API, the guest's other headers pass,
+- On an inference profile, a model server, GitHub's API or Runpod's, the guest's other headers pass,
   `anthropic-version`, `anthropic-beta`, `x-session-id` and `X-GitHub-Api-Version` included. Those
   about the guest's connection do not: `Host`, `Connection` and the headers it names, the other
   hop-by-hop ones, and `Expect`. Nor do those a server in front of the upstream could take another
@@ -419,29 +477,33 @@ On every brokered request:
   `Transfer-Encoding`, which goes with that length and is cut off if it runs past it or ends short.
   A request that sends no body, a model listing or a read, carries no `Content-Type` or
   `Content-Encoding` either. On git's requests to `github.com`, the broker builds the headers and
-  carries over only git's protocol version and request-body encoding, each checked first. A `github`
-  request arrives over TLS and names no host in its path, so the host it was sent to is read
-  instead, and only `github.com`, `api.github.com` and `uploads.github.com` are answered.
-- The response passes back with its status and body. On an inference profile, a model server or
-  GitHub's API its headers pass too, `retry-after`, rate limits and request ids included, except
-  `Set-Cookie`, `WWW-Authenticate`, `Proxy-Authenticate`, `Alt-Svc`, `Content-Length`,
-  `Content-Encoding` and the hop-by-hop ones. On git's, `Content-Type` is its only header.
+  carries over only git's protocol version and request-body encoding, each checked first. A GraphQL
+  request to Runpod goes as `Content-Type: application/json`, the body the broker wrote. A `github`
+  or `runpod` request arrives over TLS and names no host in its path, so the host it was sent to is
+  read instead, and only the names its grant is for are answered.
+- The response passes back with its status and body. On an inference profile, a model server,
+  GitHub's API or Runpod's, its headers pass too, `retry-after`, rate limits and request ids
+  included, except `Set-Cookie`, `WWW-Authenticate`, `Proxy-Authenticate`, `Alt-Svc`,
+  `Content-Length`, `Content-Encoding` and the hop-by-hop ones. On git's, `Content-Type` is its only
+  header.
 - An upstream `401` comes back saying the host's credential was refused: as a `403` on an inference
-  profile, a model server or GitHub's API, which a client reports at once rather than retrying, and
-  as a `502` on git's requests to `github.com`, so that git does not prompt for credentials the
-  guest must not have. A redirect is not followed. One from GitHub's API comes back to the guest,
-  which follows it to a signed URL elsewhere without the credential.
+  profile, a model server, GitHub's API or Runpod's, which a client reports at once rather than
+  retrying, and as a `502` on git's requests to `github.com`, so that git does not prompt for
+  credentials the guest must not have. A redirect is not followed. One from GitHub's API comes back
+  to the guest, which follows it to a signed URL elsewhere without the credential.
 - A refusal the broker writes itself gives its reason as `broker: <reason>`, in text, which git
-  prints as `remote: broker: …`. On GitHub's API, at `api.github.com` and `uploads.github.com`, it
-  is JSON instead, `{"message":"broker: <reason>"}`, as GitHub writes an error of its own, and `gh`
-  shows it as `HTTP <status>: broker: <reason> (<URL>)`.
+  prints as `remote: broker: …`. On GitHub's API, at `api.github.com` and `uploads.github.com`, and
+  at each of Runpod's names, it is JSON instead, `{"message":"broker: <reason>"}`, as GitHub writes
+  an error of its own, and `gh` shows it as `HTTP <status>: broker: <reason> (<URL>)`. `runpodctl`
+  reads the same field.
 - Every refusal the broker writes itself carries `x-should-retry: false`, except the one that may
   pass: an upstream that did not answer.
-- No request body is refused for its size. The upstream's own limit is the one a body meets, and on
-  an inference profile the upstream's refusal comes back as it gave it. A call is given up on when
-  its upstream has not answered within 10 minutes of a model call, a push or an asset's upload, or
-  30 seconds of any other request, or when the guest leaves before it answers; a body still being
-  sent then is cut off.
+- No request body is refused for its size, but a GraphQL request to Runpod, which is read whole and
+  refused past 256 KiB. The upstream's own limit is the one a body meets, and on an inference
+  profile the upstream's refusal comes back as it gave it. A call is given up on when its upstream
+  has not answered within 10 minutes of a model call, a push, an asset's upload, a write through
+  Runpod's API or a call of a serverless endpoint, or 30 seconds of any other request, or when the
+  guest leaves before it answers; a body still being sent then is cut off.
 - The broker serves as many requests and tunnels at once as the guest opens. Its memory is not
   bounded unless you set `brokerMem`; see [Configuration](configuration.md#policy-settings) and
   [when the broker is killed](troubleshooting.md#when-the-broker-is-killed).
@@ -465,6 +527,12 @@ On every brokered request:
   what it sets is in its body. A merge lands on whatever branch the pull request targets, and a
   release creates the tag it names, on the commit it names. The repository's rulesets bound those,
   as they bound a push.
+- **What a Runpod account spends and runs.** A `runpod` grant reaches every GPU the account can
+  rent, and every pod it creates reaches its own network with whatever the guest gave it. The
+  account's balance bounds the first; nothing the broker does bounds the second
+  ([`runpod`](#runpod)).
+- **What a Runpod read returns.** Either API returns what the account holds in plain text,
+  environment variables included, to a read the grant allows.
 
 ## Pointing an agent at the broker
 
@@ -526,7 +594,7 @@ that way, since it never enters the guest.
 
 ## Known limits
 
-- There are three profiles, each with a fixed upstream, and model servers on this machine. Other
+- There are four profiles, each with a fixed upstream, and model servers on this machine. Other
   providers, and a model server on another machine, cannot be brokered.
 - Each profile serves only the endpoints listed. Anthropic's model listing, and file and batch
   endpoints, are not served.
@@ -570,4 +638,19 @@ that way, since it never enters the guest.
   system's, does not trust the broker's, and fails to reach `github.com` from the guest. Node and
   Bun read `NODE_EXTRA_CA_CERTS`, which the guest sets; point any other at
   `/etc/ssl/certs/ca-certificates.crt`.
+- `runpod` reaches a pod by its API alone. SSH to a pod uses port 22 at an address, which the
+  [tunnel](network.md#the-tunnel) does not carry, so `runpodctl ssh` does not connect, and neither
+  do `runpodctl send` and `receive`, whose relays are on other ports. A pod's HTTP ports, at
+  `<pod>-<port>.proxy.runpod.net`, are reached through the tunnel under `internet`, and under
+  `restricted` only by listing each pod's name, since `tunnel` takes no wildcards. A network
+  volume's S3 API takes keys of its own, which sign each request, so the broker cannot hold them.
+- `runpod` refuses every GraphQL mutation, so a client that writes through GraphQL is refused where
+  the REST API would have done the same write: `runpodctl pod create` for a GPU pod, among others
+  ([`runpod`](#runpod)).
+- A serverless endpoint of the load-balancing kind is called at a name of its own,
+  `<endpoint>.api.runpod.ai`, which the broker does not answer.
+- Runpod's hosted MCP server, `mcp.runpod.io`, is not brokered: every operation of the REST API is
+  one of its tools, those `runpod` refuses among them, and which one a request calls is in its body.
+  Signing in to it from the guest puts a token there, as any
+  [login inside the guest](#logins-inside-the-guest) does.
 - A credential's value is read only when the VM boots.

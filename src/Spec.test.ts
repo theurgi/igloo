@@ -219,6 +219,45 @@ describe('Spec.fromConfig, on what the drift report hashes', () => {
   })
 })
 
+describe('Spec.fromConfig, for a runpod grant', () => {
+  const runpodGrant = {
+    grant: { profile: 'runpod' },
+    layer: 'project',
+    mode: 'broker',
+    name: 'RUNPOD_API_KEY',
+    source: file('/secrets/runpod'),
+  } as const
+  const plan = planFor({ secrets: [runpodGrant] })
+
+  it('grants the broker the account, and holds its key there', () => {
+    assert.deepStrictEqual(plan.grants, [{ credential: 'RUNPOD_API_KEY', profile: 'runpod' }])
+    assert.deepStrictEqual(
+      plan.brokered.map(each => each.name),
+      ['RUNPOD_API_KEY'],
+    )
+    assert.deepStrictEqual(plan.credentials, [])
+    assert.isTrue(plan.broker)
+  })
+
+  it('has the guest reach Runpod’s names through the tunnel, trusting the broker’s authority', () => {
+    assert.strictEqual(plan.runner.brokerAuthority, facts.tlsAuthority)
+    assert.strictEqual(plan.runner.brokerEnv['RUNPOD_API_KEY'], 'igloo-broker-holds-the-real-key')
+    assert.strictEqual(plan.runner.brokerEnv['HTTPS_PROXY'], 'http://127.0.0.1:3129')
+    assert.strictEqual(
+      plan.runner.brokerEnv['NODE_EXTRA_CA_CERTS'],
+      '/etc/ssl/certs/ca-certificates.crt',
+    )
+    assert.deepStrictEqual(plan.runner.brokerPackages, ['runpodctl'])
+    assert.isUndefined(plan.runner.gitBroker)
+    assert.deepStrictEqual(planFor({}).runner.brokerPackages, [])
+  })
+
+  it('records the grant as what the broker was started with', () => {
+    assert.include(plan.hostSide, 'runpod RUNPOD_API_KEY')
+    assert.notStrictEqual(plan.hostSide, planFor({}).hostSide)
+  })
+})
+
 describe('Spec.fromConfig, for a model server', () => {
   const keyless: Config.ModelServerDeclaration = { layer: 'user', name: 'llama-swap', port: 8080 }
   const keyed: Config.ModelServerDeclaration = {

@@ -14,6 +14,7 @@ const spec: Flake.RunnerSpec = {
   brokerEnv: {},
   brokerEtc: {},
   brokerFiles: [],
+  brokerPackages: [],
   contentModules: [],
   credentials: [],
   gitBroker: undefined,
@@ -120,6 +121,14 @@ describe('Flake.render', () => {
     assert.include(Flake.render(spec), 'brokerEnv = { };')
     assert.include(Flake.render(spec), 'brokerFiles = [ ];')
     assert.include(Flake.render(spec), 'brokerEtc = { };')
+    assert.include(Flake.render(spec), 'brokerPackages = [ ];')
+  })
+
+  it('emits the packages the broker’s clients need, as Nix strings', () => {
+    assert.include(
+      Flake.render({ ...spec, brokerPackages: ['runpodctl'] }),
+      'brokerPackages = [ "runpodctl" ];',
+    )
   })
 
   it('emits the /etc files that point a client at the broker, escaped as Nix strings', () => {
