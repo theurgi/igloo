@@ -71,7 +71,8 @@ still read. The report starts with how many of each kind it replaced, never what
   that is a name igloo itself uses, and each value wherever else it appears too.
 - Email addresses, and IP addresses other than loopback.
 - In each URL, everything but the scheme, and the host when it is loopback or one igloo names:
-  `cache.nixos.org`, `github.com`, `api.anthropic.com` and `openrouter.ai`.
+  `cache.nixos.org`, `api.anthropic.com`, `openrouter.ai`, and each name the broker answers for
+  GitHub and Runpod.
 
 A value shorter than three characters, or an everyday word such as `dev`, `root` or `nixos`, is left
 as it is, so that a user called `dev` does not take `/dev` with them.

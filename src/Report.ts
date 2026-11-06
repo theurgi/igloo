@@ -13,7 +13,7 @@ import { isIPv4, isIPv6 } from 'node:net'
 import * as path from 'node:path'
 
 import * as BootLog from './BootLog.ts'
-import { profiles } from './broker.ts'
+import { profiles, tlsNamesCovered } from './broker.ts'
 import * as Flake from './Flake.ts'
 import * as Project from './Project.ts'
 
@@ -98,11 +98,13 @@ const ordinary = [
 
 /**
  * The hosts igloo itself names: the binary cache every guest is built from,
- * and each broker profile's upstream. A URL keeps one of these.
+ * each broker profile's upstream, and every name the broker answers for one.
+ * A URL keeps one of these.
  */
 const namedHosts: ReadonlySet<string> = new Set([
   'cache.nixos.org',
   ...Object.values(profiles).map(profile => profile.host),
+  ...tlsNamesCovered,
 ])
 
 /**
@@ -120,7 +122,12 @@ const vocabulary: ReadonlySet<string> = new Set([
 ])
 
 /** Kept wherever they occur as whole names, before any value is looked for. */
-const kept: readonly string[] = [...namedHosts, '/nix/store']
+const kept: readonly string[] = [...namedHosts, '/nix/store'].toSorted(
+  // Longest first, so a name is kept whole before any name inside it, such as
+  // `github.com` in `api.github.com`, settles part of it and leaves the rest
+  // to be read as a value.
+  (one, other) => other.length - one.length,
+)
 
 /** `host` and `:port` of an authority, a bracketed IPv6 address's brackets kept. */
 const splitHostPort = (hostPort: string): { readonly host: string; readonly port: string } => {

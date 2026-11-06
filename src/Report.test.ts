@@ -325,6 +325,10 @@ describe('Report.render', () => {
             text: `${json({ credential: 'anthropic', event: 'allow', host: 'api.anthropic.com' })}\n`,
           },
           { name: 'serial.log', text: 'api calls api.anthropic.com and github.com\n' },
+          {
+            name: 'guest.log',
+            text: 'api reads api.github.com and api.runpod.io, and calls api.runpod.ai\n',
+          },
         ],
         id: 'b',
       },
@@ -332,6 +336,10 @@ describe('Report.render', () => {
       version: '0.1.0',
     })
     assert.include(named, '<project> calls api.anthropic.com and github.com')
+    assert.include(
+      named,
+      '<project> reads api.github.com and api.runpod.io, and calls api.runpod.ai',
+    )
     assert.include(named, '"credential":"<credential-1>"')
   })
 
