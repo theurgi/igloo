@@ -1711,6 +1711,12 @@ EOF
       profile = "anthropic-messages";
       projects = [ "$project" ];
     };
+    IGLOO_VERIFY_CLOUD = {
+      source = { file = "$broker_config/from-file"; };
+      mode = "broker";
+      profile = "runpod";
+      projects = [ "$project" ];
+    };
   };
   modelServers.igloo-verify = {
     port = $model_port;
@@ -2291,6 +2297,97 @@ EOF
 				;;
 			*)
 				verdict FAIL github-upload-refuses "read artifacts/github-api.txt"
+				;;
+			esac
+
+			# ---------------------------------------------- the runpod profile --
+			#
+			# Runpod's API, answered by the broker as GitHub's is. The key is
+			# the same invalid one, so a request reaching Runpod comes back as
+			# Runpod refusing the broker's credential, and a call of an endpoint
+			# that does not exist as Runpod's own 404: nothing here creates or
+			# spends anything. runpodctl is Go, which verifies against the
+			# system's authorities and takes its proxy from HTTPS_PROXY, so it
+			# reaching Runpod shows both reach it.
+			section "the runpod profile"
+			{
+				echo "=== the key the guest's clients read, and their CLI"
+				guest 'printenv RUNPOD_API_KEY 2>&1; command -v runpodctl 2>&1'
+				echo
+				echo "=== a read through the REST API"
+				guest 'timeout 30 curl -sS https://api.runpod.io/v2/pods 2>&1 | head -3'
+				echo
+				echo "=== a GraphQL query of the balance"
+				guest 'timeout 30 curl -sS -H "Content-Type: application/json" -d "{\"query\":\"query{myself{clientBalance}}\"}" https://api.runpod.io/graphql 2>&1 | head -3'
+				echo
+				echo "=== a GraphQL mutation that would mint a key"
+				guest 'timeout 30 curl -sS -H "Content-Type: application/json" -d "{\"query\":\"mutation{createApiKey{id}}\"}" https://api.runpod.io/graphql 2>&1 | head -3'
+				echo
+				echo "=== a GraphQL read of a registry's login"
+				guest 'timeout 30 curl -sS -H "Content-Type: application/json" -d "{\"query\":\"query{myself{containerRegistryCreds{registryAuth}}}\"}" https://api.runpod.io/graphql 2>&1 | head -3'
+				echo
+				echo "=== an invitation to the account's organization"
+				guest 'timeout 30 curl -sS -X POST -H "Content-Type: application/json" -d "{}" https://api.runpod.io/v2/organization/invites 2>&1 | head -3'
+				echo
+				echo "=== a call of a serverless endpoint that does not exist"
+				guest 'timeout 30 curl -sS https://api.runpod.ai/v2/igloo-verify/health 2>&1 | head -3'
+				echo
+				echo "=== runpodctl, reading the account"
+				guest 'timeout 60 runpodctl user 2>&1 | head -5 | tr "\n" " "; echo'
+				echo
+				# The broker's log is live, unlike the boot record kept above.
+				echo "=== the tunnel's hand-offs to the broker for Runpod's names, from its log"
+				grep '"answered":true' "$(boot_log broker.log)" | grep 'runpod'
+			} >"$out/artifacts/runpod.txt" 2>&1
+			if grep -qx 'igloo-broker-holds-the-real-key' "$out/artifacts/runpod.txt" &&
+				grep -q '/runpodctl$' "$out/artifacts/runpod.txt"; then
+				verdict PASS runpod-guest "the guest has runpodctl, and RUNPOD_API_KEY is the placeholder, which the broker replaces"
+			else
+				verdict FAIL runpod-guest "read artifacts/runpod.txt"
+			fi
+			if grep -q '"answered":true,"event":"tunnel-open","id":[0-9]*,"target":"api.runpod.io:443"' "$out/artifacts/runpod.txt" &&
+				grep -q '"answered":true,"event":"tunnel-open","id":[0-9]*,"target":"api.runpod.ai:443"' "$out/artifacts/runpod.txt"; then
+				verdict PASS runpod-answered "the guest's connections to api.runpod.io and api.runpod.ai reached the broker's own TLS listener, not Runpod"
+			else
+				verdict FAIL runpod-answered "read artifacts/runpod.txt, then logs/up-broker/broker.log"
+			fi
+			read_said=$(after_header "$out/artifacts/runpod.txt" "=== a read through the REST API")
+			query_said=$(after_header "$out/artifacts/runpod.txt" "=== a GraphQL query of the balance")
+			case "$read_said|$query_said" in
+			*'api.runpod.io refused IGLOO_VERIFY_CLOUD'*'|'*'api.runpod.io refused IGLOO_VERIFY_CLOUD'*)
+				verdict PASS runpod-reaches-upstream "a REST read and a GraphQL query reach api.runpod.io through the broker, which reports its own credential being refused"
+				;;
+			*)
+				verdict FAIL runpod-reaches-upstream "read artifacts/runpod.txt, then logs/up-broker/broker.log"
+				;;
+			esac
+			if grep -qxF '{"message":"broker: a mutation writes, and this VM may only read through GraphQL; write through the REST API instead"}' "$out/artifacts/runpod.txt" &&
+				grep -qxF '{"message":"broker: the query names registryAuth, which holds a credential, so it is not sent"}' "$out/artifacts/runpod.txt"; then
+				verdict PASS runpod-graphql-refuses "a GraphQL mutation, which could mint a key, and a query naming a registry's login are refused before reaching Runpod, each with its reason"
+			else
+				verdict FAIL runpod-graphql-refuses "read artifacts/runpod.txt"
+			fi
+			if grep -qxF '{"message":"broker: POST /v2/organization/invites is not a write this VM may make through api.runpod.io"}' "$out/artifacts/runpod.txt"; then
+				verdict PASS runpod-rest-refuses "an invitation to the account's organization is refused through the REST API, with its reason"
+			else
+				verdict FAIL runpod-rest-refuses "read artifacts/runpod.txt"
+			fi
+			invoke_said=$(after_header "$out/artifacts/runpod.txt" "=== a call of a serverless endpoint")
+			case $invoke_said in
+			*'endpoint not found'*)
+				verdict PASS runpod-invoke-reaches-upstream "a call of a serverless endpoint reaches api.runpod.ai through the broker, which answers that there is no such endpoint"
+				;;
+			*)
+				verdict FAIL runpod-invoke-reaches-upstream "read artifacts/runpod.txt, then logs/up-broker/broker.log"
+				;;
+			esac
+			cli_said=$(after_header "$out/artifacts/runpod.txt" "=== runpodctl, reading the account")
+			case $cli_said in
+			*'refused IGLOO_VERIFY_CLOUD'*)
+				verdict PASS runpodctl-through-broker "runpodctl reaches Runpod through the tunnel, trusting the broker's authority, and shows the broker's reason"
+				;;
+			*)
+				verdict FAIL runpodctl-through-broker "read artifacts/runpod.txt: an x509 error means runpodctl did not trust the broker's authority"
 				;;
 			esac
 
