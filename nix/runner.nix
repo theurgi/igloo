@@ -278,6 +278,14 @@ let
         "microvm.mem".value = mem;
         "microvm.vcpu".value = vcpu;
 
+        # A virtio-balloon with free page reporting, which nothing on the
+        # host inflates. The guest reports the pages it frees and QEMU
+        # discards them, so the host holds what the guest uses rather than
+        # the most it has ever used. Without it, guest RAM is a memfd the
+        # host fills as the guest touches it and empties only when QEMU
+        # exits.
+        "microvm.balloon".value = true;
+
         # Compared on the fields set here. The option's own type may add
         # defaults to each entry, which would make a whole-value comparison
         # fail on a VM that is perfectly correct.

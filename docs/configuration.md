@@ -100,11 +100,11 @@ igloo: a content module overrode policy that mkRunner owns: microvm.mem.
 Policy is set by mkRunner's arguments, from outside the workspace. A content module cannot set it.
 ```
 
-The options owned this way are the VM's memory, CPUs, shares, whether the store comes from a disk
-image instead of its share, network interfaces, forwarded ports, devices, volumes, credential files,
-hypervisor and its arguments, the virtio-fs daemons' arguments, the control socket, vsock CID and
-SSH setting, the host-side binaries and scripts that run the VM, the guest's hostname, root's
-authorised SSH keys, and the guest's NTP servers.
+The options owned this way are the VM's memory and its balloon, CPUs, shares, whether the store
+comes from a disk image instead of its share, network interfaces, forwarded ports, devices, volumes,
+credential files, hypervisor and its arguments, the virtio-fs daemons' arguments, the control
+socket, vsock CID and SSH setting, the host-side binaries and scripts that run the VM, the guest's
+hostname, root's authorised SSH keys, and the guest's NTP servers.
 
 ### The guest core
 
@@ -180,6 +180,11 @@ one project that builds something heavy can have more without every VM holding m
 a project's value: its `igloo-policy.nix` is outside the workspace, so you wrote it, for your own
 machine. `mem = 2048` is refused: QEMU hangs at exactly 2 GiB, with no output and no exit. Use 2047
 or 4096.
+
+`mem` is a ceiling, not a reservation. The host gives the VM memory as the guest first uses it, and
+the guest hands back what it frees a few seconds later, so a VM holds roughly what its guest is
+using. The guest's file cache counts as in use: after reading large files, a guest keeps them
+cached, and the host holds that memory for as long as the guest keeps the cache.
 
 **`brokerMem`** bounds the broker, the host process that holds a VM's brokered credentials and
 carries its requests, as a positive whole number of MiB. A bounded broker uses no swap, so the bound

@@ -139,6 +139,14 @@ lib.mapAttrs refusedOnEvaluation {
         services.chrony.servers = lib.mkOverride 9 [ "pool.ntp.org" ];
       };
   };
+  balloon-override = {
+    option = "microvm.balloon";
+    module =
+      { lib, ... }:
+      {
+        microvm.balloon = lib.mkOverride 9 false;
+      };
+  };
   # A substituted package set is caught by what `writeShellScript`
   # produces, so the substitution has to change that. Replacing the
   # function itself is both the most direct way to do it and the thing

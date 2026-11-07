@@ -144,9 +144,9 @@ directory has since moved or been deleted.
 List the VMs your user manager is running, with their status, uptime, memory, broker and project
 root. Status is `running`, `starting`, or `broken`. A broken VM is a half-started one: its virtio-fs
 daemons are running and its QEMU is not. `igloo down` clears it. Memory is shown for every VM
-because a VM nobody has attached to for days still holds its whole allocation. The broker column is
-`-` for a VM without one, and otherwise says whether it is up, how often it has been restarted, and
-how many of the VM's processes were killed for memory; see
+because a VM nobody has attached to for days still holds what its guest is using, file cache
+included. The broker column is `-` for a VM without one, and otherwise says whether it is up, how
+often it has been restarted, and how many of the VM's processes were killed for memory; see
 [Troubleshooting](troubleshooting.md#when-the-broker-is-killed).
 
 `--verbose` adds each VM's CID, systemd slice and runtime directory.
