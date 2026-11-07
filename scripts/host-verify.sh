@@ -1286,6 +1286,59 @@ EOF
 			verdict FAIL store-owner "the guest sees the store owned by $(printf '%s' "$owners" | tr '\n' ' ')— read artifacts/guest.txt"
 		fi
 
+		# Memory the guest frees goes back to the host. Guest RAM is a memfd
+		# the host fills as the guest first touches it, and only the balloon's
+		# free page reporting empties it again before QEMU exits. A file in the
+		# guest's tmpfs is filled and deleted, and QEMU's unit's memory read
+		# before, at the peak, and until it falls back. The fill is three
+		# quarters of the room in the guest's tmpfs, which the kernel caps at
+		# half its memory, and at most 1.5 GiB.
+		qemu_unit=$(own_units 'igloo-*-qemu.service' | head -1)
+		held_mib() { # held_mib — QEMU's unit's memory in MiB, or nothing if it is not accounted
+			local bytes
+			bytes=$(systemctl --user show -P MemoryCurrent "$qemu_unit" 2>/dev/null)
+			[[ $bytes =~ ^[0-9]+$ ]] && echo $((bytes / 1048576))
+		}
+		room=$(guest 'df -m --output=avail /dev/shm | tail -1' 2>/dev/null | tr -d ' ')
+		fill=0
+		[[ $room =~ ^[0-9]+$ ]] && fill=$((room * 3 / 4))
+		[ "$fill" -gt 1536 ] && fill=1536
+		before=$(held_mib)
+		if [ -z "$qemu_unit" ] || [ -z "$before" ]; then
+			verdict NOTE memory-returned "not checked: QEMU's unit has no memory count to read"
+		elif [ "$fill" -lt 256 ]; then
+			verdict NOTE memory-returned "not checked: the guest's tmpfs has room for ${room:-no} MiB, too little to tell from noise"
+		else
+			filled=$(guest "dd if=/dev/zero of=/dev/shm/igloo-verify-fill bs=1M count=$fill status=none && echo FILLED" 2>&1)
+			peak=$(held_mib)
+			guest 'rm -f /dev/shm/igloo-verify-fill'
+			freed_at=$EPOCHREALTIME
+			after=$peak
+			# Reported a block at a time, a couple of seconds after it is
+			# freed.
+			for _ in $(seq 1 30); do
+				sleep 1
+				after=$(held_mib)
+				[ $((${peak:-0} - ${after:-${peak:-0}})) -ge $(((${peak:-0} - before) * 4 / 5)) ] && break
+			done
+			timed memory-returned "$freed_at"
+			rose=$((${peak:-0} - before))
+			back=$((${peak:-0} - ${after:-${peak:-0}}))
+			waited=$(($(ms_between "$freed_at" "$EPOCHREALTIME") / 1000))
+			printf 'fill %s MiB\nQEMU unit before %s MiB, filled %s MiB, %s s after the delete %s MiB\n' \
+				"$fill" "$before" "${peak:-?}" "$waited" "${after:-?}" >"$out/artifacts/memory-returned.txt"
+			if ! printf '%s\n' "$filled" | grep -qx FILLED; then
+				printf '%s\n' "$filled" >>"$out/artifacts/memory-returned.txt"
+				verdict FAIL memory-returned "the guest could not fill its tmpfs, so this shows nothing — read artifacts/memory-returned.txt"
+			elif [ "$rose" -lt $((fill / 2)) ]; then
+				verdict FAIL memory-returned "a fill of $fill MiB raised QEMU's memory by $rose MiB, so this shows nothing — read artifacts/memory-returned.txt"
+			elif [ "$back" -ge $((rose * 4 / 5)) ]; then
+				verdict PASS memory-returned "QEMU's memory rose $rose MiB as the guest filled its tmpfs, and $back MiB of it went back to the host within ${waited}s of the delete"
+			else
+				verdict FAIL memory-returned "QEMU's memory rose $rose MiB as the guest filled its tmpfs, and only $back MiB went back to the host in ${waited}s — read artifacts/memory-returned.txt"
+			fi
+		fi
+
 	fi
 
 	# With a runner built, the guest's profile comes first on the fallback's
