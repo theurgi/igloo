@@ -88,7 +88,7 @@ describe('Project.init and find', () => {
         const tmp = yield* fs.makeTempDirectoryScoped()
         const root = path.join(tmp, 'api')
 
-        const created = yield* Project.init(root)
+        const { project: created } = yield* Project.init(root)
         assert.isTrue(yield* fs.exists(path.join(root, '.igloo/project.json')))
         assert.isTrue(yield* fs.exists(created.homeDir))
         assert.isTrue(yield* fs.exists(created.workspaceDir))
@@ -116,7 +116,7 @@ describe('Project.init and find', () => {
         const tmp = yield* fs.makeTempDirectoryScoped()
         const root = path.join(tmp, 'api')
 
-        const first = yield* Project.init(root)
+        const { project: first } = yield* Project.init(root)
         const marker = path.join(root, '.igloo/project.json')
         const original = yield* fs.readFileString(marker)
         yield* fs.remove(path.join(first.iglooDir, '.gitignore'))
@@ -172,7 +172,7 @@ describe('Project.init and find', () => {
       )
     })
 
-    const refusal = <A>(result: Result.Result<A, Project.ProjectError>) =>
+    const refusal = <A>(result: Result.Result<A, { readonly message: string }>) =>
       Result.isFailure(result) ? result.failure.message : ''
 
     // The guest writes the workspace and /root, so a marker there could be its
@@ -181,7 +181,9 @@ describe('Project.init and find', () => {
       provided(
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem
-          const outer = yield* Project.init(path.join(yield* fs.makeTempDirectoryScoped(), 'api'))
+          const { project: outer } = yield* Project.init(
+            path.join(yield* fs.makeTempDirectoryScoped(), 'api'),
+          )
           const checkout = path.join(outer.workspaceDir, 'repo')
           yield* plant(checkout)
           yield* fs.makeDirectory(path.join(checkout, 'src'))
@@ -199,7 +201,9 @@ describe('Project.init and find', () => {
       provided(
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem
-          const outer = yield* Project.init(path.join(yield* fs.makeTempDirectoryScoped(), 'api'))
+          const { project: outer } = yield* Project.init(
+            path.join(yield* fs.makeTempDirectoryScoped(), 'api'),
+          )
           const inHome = path.join(outer.homeDir, 'src')
           yield* plant(outer.workspaceDir)
           yield* plant(inHome)
@@ -220,7 +224,9 @@ describe('Project.init and find', () => {
       provided(
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem
-          const outer = yield* Project.init(path.join(yield* fs.makeTempDirectoryScoped(), 'api'))
+          const { project: outer } = yield* Project.init(
+            path.join(yield* fs.makeTempDirectoryScoped(), 'api'),
+          )
           const middle = path.join(outer.workspaceDir, 'repo')
           const inner = path.join(middle, 'tools')
           yield* plant(middle)
@@ -238,7 +244,9 @@ describe('Project.init and find', () => {
       provided(
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem
-          const outer = yield* Project.init(path.join(yield* fs.makeTempDirectoryScoped(), 'api'))
+          const { project: outer } = yield* Project.init(
+            path.join(yield* fs.makeTempDirectoryScoped(), 'api'),
+          )
           const beside = `${outer.workspaceDir}-old`
           yield* plant(beside)
 
@@ -251,7 +259,9 @@ describe('Project.init and find', () => {
       provided(
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem
-          const outer = yield* Project.init(path.join(yield* fs.makeTempDirectoryScoped(), 'api'))
+          const { project: outer } = yield* Project.init(
+            path.join(yield* fs.makeTempDirectoryScoped(), 'api'),
+          )
           const nested = path.join(outer.workspaceDir, 'repo')
 
           assert.include(
@@ -267,7 +277,7 @@ describe('Project.init and find', () => {
   // A share that is a link has its guest write where the link leads, below no
   // marker, so a project its guest made there would not be inside anything.
   describe('with a share that is a link', () => {
-    const refusal = <A>(result: Result.Result<A, Project.ProjectError>) =>
+    const refusal = <A>(result: Result.Result<A, { readonly message: string }>) =>
       Result.isFailure(result) ? result.failure.message : ''
 
     it.effect('refuses a workspace that is a link, naming where it leads', () =>
@@ -275,7 +285,7 @@ describe('Project.init and find', () => {
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem
           const dir = yield* fs.realPath(yield* fs.makeTempDirectoryScoped())
-          const project = yield* Project.init(path.join(dir, 'api'))
+          const { project } = yield* Project.init(path.join(dir, 'api'))
           const code = path.join(dir, 'code')
           yield* fs.makeDirectory(code)
           yield* fs.remove(project.workspaceDir, { recursive: true })
@@ -294,7 +304,7 @@ describe('Project.init and find', () => {
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem
           const dir = yield* fs.realPath(yield* fs.makeTempDirectoryScoped())
-          const project = yield* Project.init(path.join(dir, 'api'))
+          const { project } = yield* Project.init(path.join(dir, 'api'))
           const elsewhere = path.join(dir, 'state')
           yield* fs.rename(project.iglooDir, elsewhere)
           yield* fs.symlink(elsewhere, project.iglooDir)
@@ -328,13 +338,201 @@ describe('Project.init and find', () => {
     )
   })
 
+  describe('with templates', () => {
+    const failure = <A>(result: Result.Result<A, { readonly message: string }>) =>
+      Result.isFailure(result) ? result.failure.message : ''
+
+    /** A templates directory holding `files`, and a directory to make projects in. */
+    const declared = Effect.fnUntraced(function* (files: Readonly<Record<string, string>>) {
+      const fs = yield* FileSystem.FileSystem
+      const tmp = yield* fs.realPath(yield* fs.makeTempDirectoryScoped())
+      const dir = path.join(tmp, 'layer/templates')
+      for (const [relative, content] of Object.entries(files)) {
+        yield* fs.makeDirectory(path.join(dir, path.dirname(relative)), { recursive: true })
+        yield* fs.writeFileString(path.join(dir, relative), content)
+      }
+      return { dir, projects: path.join(tmp, 'projects') }
+    })
+
+    it.effect('writes them into a project it creates, filled in for it', () =>
+      provided(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const { dir, projects } = yield* declared({
+            '.vscode/settings.json': '{ "fmt": "@oxfmt@", "title": "@project_name@" }\n',
+            'workspace/CLAUDE.md': '# @project_name@, at @project_root@\n',
+          })
+          yield* fs.symlink('CLAUDE.md', path.join(dir, 'workspace/AGENTS.md'))
+          // Reached through a link, so the root a template is given is the
+          // canonical one and not the path `init` was called with.
+          yield* fs.makeDirectory(projects)
+          yield* fs.symlink(projects, `${projects}-link`)
+
+          const { created, project, templates } = yield* Project.init(`${projects}-link/atlas`, {
+            dir,
+            set: { oxfmt: 'node_modules/.bin/oxfmt' },
+          })
+          assert.isTrue(created)
+          assert.strictEqual(project.root, path.join(projects, 'atlas'))
+          assert.deepStrictEqual(templates, [
+            { kind: 'wrote', path: '.vscode/settings.json' },
+            { kind: 'linked', path: 'workspace/AGENTS.md', target: 'CLAUDE.md' },
+            { kind: 'wrote', path: 'workspace/CLAUDE.md' },
+          ])
+          assert.strictEqual(
+            yield* fs.readFileString(path.join(project.root, '.vscode/settings.json')),
+            '{ "fmt": "node_modules/.bin/oxfmt", "title": "atlas" }\n',
+          )
+          assert.strictEqual(
+            yield* fs.readFileString(path.join(project.workspaceDir, 'CLAUDE.md')),
+            `# atlas, at ${project.root}\n`,
+          )
+          assert.strictEqual(
+            yield* fs.readLink(path.join(project.workspaceDir, 'AGENTS.md')),
+            'CLAUDE.md',
+          )
+          assert.isTrue(yield* fs.exists(path.join(project.root, '.igloo/project.json')))
+        }),
+      ),
+    )
+
+    it.effect('creates nothing, the directory included, when one cannot be filled in', () =>
+      provided(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const { dir, projects } = yield* declared({
+            '.vscode/settings.json': '{ "fmt": "@oxfmt@" }\n',
+            'README.md': 'filled in with nothing\n',
+          })
+          const absent = path.join(projects, 'atlas')
+          const held = path.join(projects, 'blog')
+          yield* fs.makeDirectory(held, { recursive: true })
+          yield* fs.writeFileString(path.join(held, 'notes.md'), 'mine\n')
+
+          for (const root of [absent, held]) {
+            assert.include(
+              failure(yield* Project.init(root, { dir, set: {} }).pipe(Effect.result)),
+              '\n  .vscode/settings.json: @oxfmt@\n',
+            )
+          }
+          assert.isFalse(yield* fs.exists(absent))
+          assert.deepStrictEqual(yield* fs.readDirectory(held), ['notes.md'])
+          assert.deepStrictEqual(yield* fs.readDirectory(projects), ['blog'])
+        }),
+      ),
+    )
+
+    it.effect('creates nothing when one would be written through a link', () =>
+      provided(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const { dir, projects } = yield* declared({ '.vscode/settings.json': '{ }\n' })
+          const root = path.join(projects, 'atlas')
+          const elsewhere = path.join(projects, 'elsewhere')
+          yield* fs.makeDirectory(root, { recursive: true })
+          yield* fs.makeDirectory(elsewhere)
+          yield* fs.symlink(elsewhere, path.join(root, '.vscode'))
+
+          assert.include(
+            failure(yield* Project.init(root, { dir, set: {} }).pipe(Effect.result)),
+            `refusing the template .vscode/settings.json: ${path.join(root, '.vscode')} is a link`,
+          )
+          assert.deepStrictEqual(yield* fs.readDirectory(root), ['.vscode'])
+          assert.deepStrictEqual(yield* fs.readDirectory(elsewhere), [])
+        }),
+      ),
+    )
+
+    it.effect('writes none when the skeleton fails', () =>
+      provided(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const { dir, projects } = yield* declared({ 'README.md': 'read me\n' })
+          const root = path.join(projects, 'atlas')
+          const code = path.join(projects, 'code')
+          yield* fs.makeDirectory(root, { recursive: true })
+          yield* fs.makeDirectory(code)
+          yield* fs.symlink(code, path.join(root, 'workspace'))
+
+          assert.include(
+            failure(yield* Project.init(root, { dir, set: {} }).pipe(Effect.result)),
+            `refusing ${path.join(root, 'workspace')}: it leads to ${code}.`,
+          )
+          assert.isFalse(yield* fs.exists(path.join(root, 'README.md')))
+        }),
+      ),
+    )
+
+    it.effect('leaves what the directory already holds, and says which it skipped', () =>
+      provided(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const { dir, projects } = yield* declared({
+            'README.md': 'from the template\n',
+            'workspace/CLAUDE.md': 'from the template\n',
+          })
+          const root = path.join(projects, 'atlas')
+          yield* fs.makeDirectory(path.join(root, 'workspace'), { recursive: true })
+          yield* fs.writeFileString(path.join(root, 'README.md'), 'mine\n')
+          yield* fs.symlink('nowhere', path.join(root, 'workspace/CLAUDE.md'))
+
+          const { templates } = yield* Project.init(root, { dir, set: {} })
+          assert.deepStrictEqual(templates, [
+            { kind: 'skipped', path: 'README.md' },
+            { kind: 'skipped', path: 'workspace/CLAUDE.md' },
+          ])
+          assert.strictEqual(yield* fs.readFileString(path.join(root, 'README.md')), 'mine\n')
+          assert.strictEqual(yield* fs.readLink(path.join(root, 'workspace/CLAUDE.md')), 'nowhere')
+        }),
+      ),
+    )
+
+    it.effect('writes none into what is already a project, and still backfills', () =>
+      provided(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          // One that could not be filled in, which an existing project never
+          // finds out: its templates are not read.
+          const { dir, projects } = yield* declared({ 'README.md': '@owner@\n' })
+          const root = path.join(projects, 'atlas')
+          const { project } = yield* Project.init(root)
+          yield* fs.remove(path.join(project.iglooDir, '.gitignore'))
+
+          const again = yield* Project.init(root, { dir, set: {} })
+          assert.isFalse(again.created)
+          assert.deepStrictEqual(again.templates, [])
+          assert.isFalse(yield* fs.exists(path.join(root, 'README.md')))
+          assert.isTrue(yield* fs.exists(path.join(project.iglooDir, '.gitignore')))
+        }),
+      ),
+    )
+
+    it.effect('creates the skeleton alone when none are declared', () =>
+      provided(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const { dir, projects } = yield* declared({})
+          const root = path.join(projects, 'atlas')
+
+          const { created, templates } = yield* Project.init(root, { dir, set: {} })
+          assert.isTrue(created)
+          assert.deepStrictEqual(templates, [])
+          assert.deepStrictEqual((yield* fs.readDirectory(root)).toSorted(), [
+            '.igloo',
+            'workspace',
+          ])
+        }),
+      ),
+    )
+  })
+
   it.effect('resolves the starting path, so a symlinked route gives one identity', () =>
     provided(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const tmp = yield* fs.makeTempDirectoryScoped()
         const root = path.join(tmp, 'api')
-        const created = yield* Project.init(root)
+        const { project: created } = yield* Project.init(root)
 
         const link = path.join(tmp, 'link-to-api')
         yield* fs.symlink(root, link)

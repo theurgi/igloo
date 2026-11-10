@@ -116,7 +116,8 @@ Every module but `index.ts` has its tests beside it, in `src/<Module>.test.ts`.
 | ------------------------------ | --------------------------------------------------------------------------------------------- |
 | `index.ts`                     | The CLI's commands, and the one module of it that reads the process environment.              |
 | `Binaries.ts`                  | The external programs igloo runs, each overridable by an `IGLOO_*` variable.                  |
-| `Project.ts`                   | The marker, finding a project, and every path derived from its root.                          |
+| `Project.ts`                   | The marker, finding a project, creating one, and every path derived from its root.            |
+| `Templates.ts`                 | A new project's starting files: the user layer's templates, filled in and written by `init`.  |
 | `Cid.ts`                       | The vsock CID, a hash of the project's canonical root.                                        |
 | `Config.ts`                    | Finding, evaluating and composing the layers: the policy, and the content modules.            |
 | `Evaluation.ts`                | The confinement for every nix evaluation of a layer or policy file.                           |
