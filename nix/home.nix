@@ -1,6 +1,7 @@
 # The user layer, declared rather than hand-written, and the `igloo` that
 # carries it. The layer is a store directory holding the two files a
-# project's layer holds, and the installed `igloo` is wrapped with
+# project's layer holds, and with them the templates a new project's
+# files are written from. The installed `igloo` is wrapped with
 # `IGLOO_USER_LAYER` naming it — so nothing is written under `~/.config`
 # for anyone to mistake for a file to edit, and a generation's `igloo` and
 # its configuration roll back together.
@@ -78,18 +79,39 @@ let
     }
   '';
 
+  # A path is copied into the store under a name of its own: under its
+  # basename, a directory such as `.templates` would be refused, since no
+  # store path begins with a dot. Anything else is a derivation or a store
+  # path already.
+  templates =
+    if builtins.isPath cfg.templates then
+      builtins.path {
+        path = cfg.templates;
+        name = "igloo-templates";
+      }
+    else
+      cfg.templates;
+
   # The same two names a project's layer uses, in one directory, so a
-  # layer reads the same whichever of the two it is.
-  layer = pkgs.linkFarm "igloo-user-layer" [
-    {
-      name = "igloo.nix";
-      path = guestFile;
+  # layer reads the same whichever of the two it is. The templates are
+  # the user layer's alone: a project is not there yet when they are
+  # written.
+  layer = pkgs.linkFarm "igloo-user-layer" (
+    [
+      {
+        name = "igloo.nix";
+        path = guestFile;
+      }
+      {
+        name = "igloo-policy.nix";
+        path = policyFile;
+      }
+    ]
+    ++ lib.optional (cfg.templates != null) {
+      name = "templates";
+      path = templates;
     }
-    {
-      name = "igloo-policy.nix";
-      path = policyFile;
-    }
-  ];
+  );
 
   # A wrapper around the package's own wrapper, which already sets
   # everything else igloo needs, so a new layer is a new shell script
@@ -134,6 +156,24 @@ in
         The user layer's policy, written to `igloo-policy.nix`. Freeform
         on purpose: igloo validates these keys itself, naming the file
         and the layer a misplaced setting belongs in.
+      '';
+    };
+
+    templates = lib.mkOption {
+      type = lib.types.nullOr lib.types.path;
+      default = null;
+      example = lib.literalExpression "./igloo/templates";
+      description = ''
+        A directory of files every new project starts with, laid out
+        like a project's root: `.vscode/settings.json` in it becomes
+        `.vscode/settings.json` in the project, and
+        `workspace/CLAUDE.md` becomes `workspace/CLAUDE.md`. A link in
+        it is made as a link. `igloo init` writes them when it creates
+        a project, filling in `@project_root@`, `@project_name@` and
+        each `@name@` given as `--set name=value`, and never again:
+        from then on a file is the project's. A path, or a derivation
+        that builds the directory, for a value this configuration
+        knows, such as a package's path.
       '';
     };
 
