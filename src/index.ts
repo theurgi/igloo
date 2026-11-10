@@ -21,6 +21,7 @@ import * as Preflight from './Preflight.ts'
 import * as Project from './Project.ts'
 import * as Report from './Report.ts'
 import * as Spec from './Spec.ts'
+import * as Templates from './Templates.ts'
 import * as Tls from './Tls.ts'
 import * as Vm from './Vm.ts'
 
@@ -340,16 +341,36 @@ const dir = Argument.String('dir').pipe(
   Argument.optional,
 )
 
+const set = Flag.String('set').pipe(
+  Flag.withDescription(
+    'A value for a template to fill in, as name=value: a template spells it @name@. Repeat for more',
+  ),
+  Flag.atLeast(0),
+)
+
 const init = Command.make(
   'init',
-  { dir },
+  { dir, set },
   Effect.fn(function* (config) {
     const fs = yield* FileSystem.FileSystem
     // Resolved, because the project's root is: comparing one against a raw
     // `cwd` would print a `cd` hint for a directory the caller is already in
     // whenever anything above it is a symlink.
     const cwd = yield* fs.realPath(process.cwd()).pipe(Effect.orElseSucceed(() => process.cwd()))
-    const project = yield* Project.init(Option.getOrElse(config.dir, () => process.cwd()))
+    const source: Templates.Source = {
+      dir: userLayerDir === undefined ? undefined : Templates.dirIn(userLayerDir),
+      set: yield* Effect.fromResult(Templates.parseSet(config.set)),
+    }
+    const { created, project, templates } = yield* Project.init(
+      Option.getOrElse(config.dir, () => process.cwd()),
+      source,
+    )
+    // Said rather than left to be noticed: `init` again is how someone would
+    // ask an older project for the templates, and it gives it none.
+    const kept =
+      !created && (config.set.length > 0 || (yield* Templates.declared(source)))
+        ? `igloo: it was already a project, so no template was written\n`
+        : ''
     const files = Config.projectLayer(project.root)
     // Every other command finds a project by walking up, so one created in a
     // subdirectory is invisible from where it was created — and `up` there says
@@ -362,15 +383,22 @@ const init = Command.make(
     yield* Effect.sync(() =>
       process.stderr.write(
         `igloo: ${project.label} initialised at ${project.root} (cid ${project.cid})\n` +
-          // Neither file is created: an absent layer is the normal case, and a
-          // stub would be one more file to read on every launch for nothing. But
-          // they are undiscoverable unless something names them.
+          kept +
+          Templates.report(templates) +
+          // Neither file is created without a template for it: an absent layer
+          // is the normal case, and a stub would be one more file to read on
+          // every launch for nothing. But they are undiscoverable unless
+          // something names them.
           `igloo: configure it in ${files.content} (packages, services) and ${files.policy} (network)\n` +
           hint,
       ),
     )
   }),
-).pipe(Command.withDescription('Create the project skeleton — marker, .igloo/, workspace/'))
+).pipe(
+  Command.withDescription(
+    'Create the project skeleton — marker, .igloo/, workspace/ — and a new project’s files from your templates',
+  ),
+)
 
 const up = Command.make(
   'up',

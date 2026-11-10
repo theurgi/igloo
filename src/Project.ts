@@ -2,6 +2,7 @@ import { DateTime, Effect, FileSystem, Schema } from 'effect'
 import * as path from 'node:path'
 
 import * as Cid from './Cid.ts'
+import * as Templates from './Templates.ts'
 
 export class ProjectError extends Schema.TaggedError<ProjectError>()('ProjectError', {
   message: Schema.String,
@@ -209,28 +210,63 @@ export const find = Effect.fnUntraced(function* (startDir: string) {
 })
 
 /**
- * Create the project skeleton. Idempotent: an existing marker is left alone, but
- * a missing `.gitignore` is backfilled so a project made by an older version
+ * The canonical root `dir` would have as a project, with nothing created: as
+ * much of it as exists resolved through symlinks, and the rest as written,
+ * which is what creating it and resolving it then would give.
+ */
+const rootOf = Effect.fnUntraced(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem
+  const missing: Array<string> = []
+  let existing = path.resolve(dir)
+  while (!(yield* fs.exists(existing).pipe(Effect.orElseSucceed(() => false)))) {
+    const parent = path.dirname(existing)
+    if (parent === existing) break
+    missing.unshift(path.basename(existing))
+    existing = parent
+  }
+  const real = yield* fs
+    .realPath(existing)
+    .pipe(Effect.mapError(() => new ProjectError({ message: `cannot resolve ${existing}` })))
+  return path.join(real, ...missing)
+})
+
+/** No templates directory and no `--set`: `init` creates the skeleton alone. */
+const NO_TEMPLATES: Templates.Source = { dir: undefined, set: {} }
+
+/**
+ * Create the project skeleton, and for a project this creates, its starting
+ * files from `templates`. Idempotent: an existing marker is left alone, but a
+ * missing `.gitignore` is backfilled so a project made by an older version
  * picks it up. Refused where `find` would refuse the result.
+ *
+ * Templates are for a directory that was not a project. Its VM has never run,
+ * so nothing a template is written beside was put there by a guest. They are
+ * read and filled in before anything is created, so one that cannot be filled
+ * in leaves `dir` as it was, and written after the skeleton, so a skeleton
+ * that fails leaves none.
  *
  * `.igloo/.gitignore` is `*` because none of this belongs in the project's own
  * history — it is a keypair, a gc-root, logs, and a home directory an agent
  * writes to continuously.
  */
-export const init = Effect.fnUntraced(function* (dir: string) {
+export const init = Effect.fnUntraced(function* (
+  dir: string,
+  templates: Templates.Source = NO_TEMPLATES,
+) {
   const fs = yield* FileSystem.FileSystem
-  const root = yield* fs.makeDirectory(dir, { recursive: true }).pipe(
-    Effect.andThen(() => fs.realPath(dir)),
-    Effect.mapError(() => new ProjectError({ message: `cannot create ${dir}` })),
-  )
+  const root = yield* rootOf(dir)
   yield* refuseNested(root)
   const project = forRoot(root)
+  const markerPath = path.join(root, MARKER)
+  const created = !(yield* fs.exists(markerPath).pipe(Effect.orElseSucceed(() => false)))
+  const planned = created ? yield* Templates.plan(templates, root) : []
 
   const make = (target: string) =>
     fs
       .makeDirectory(target, { recursive: true })
       .pipe(Effect.mapError(() => new ProjectError({ message: `cannot create ${target}` })))
 
+  yield* make(root)
   yield* make(project.iglooDir)
   yield* make(project.homeDir)
   yield* make(project.workspaceDir)
@@ -243,8 +279,7 @@ export const init = Effect.fnUntraced(function* (dir: string) {
       .pipe(Effect.mapError(() => new ProjectError({ message: `cannot write ${gitignore}` })))
   }
 
-  const markerPath = path.join(root, MARKER)
-  if (!(yield* fs.exists(markerPath).pipe(Effect.orElseSucceed(() => false)))) {
+  if (created) {
     const marker = yield* Schema.encodeEffect(MarkerJson)({
       createdAt: DateTime.formatIso(yield* DateTime.now),
       version: 1,
@@ -254,5 +289,5 @@ export const init = Effect.fnUntraced(function* (dir: string) {
       .pipe(Effect.mapError(() => new ProjectError({ message: `cannot write ${markerPath}` })))
   }
 
-  return project
+  return { created, project, templates: yield* Templates.write(root, planned) }
 })

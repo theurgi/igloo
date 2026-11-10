@@ -386,7 +386,7 @@ describe('Report.run', () => {
   const brokenProject = Effect.fnUntraced(function* () {
     const fs = yield* FileSystem.FileSystem
     const base = yield* fs.makeTempDirectoryScoped()
-    const project = yield* Project.init(`${base}/acme-widgets`)
+    const { project } = yield* Project.init(`${base}/acme-widgets`)
     yield* fs.writeFileString(
       `${project.root}/igloo.nix`,
       '{ pkgs, ... }: { environment.systemPackages = [ pkgs.ripgrep-from-acme\n',
