@@ -130,6 +130,7 @@ wrapped with your user layer.
 | `programs.igloo.enable`         | boolean          | `false`                            |
 | `programs.igloo.package`        | package          | `igloo.packages.${system}.default` |
 | `programs.igloo.policy`         | attribute set    | `{ }`                              |
+| `programs.igloo.templates`      | path, or null    | `null`                             |
 | `programs.igloo.guest.modules`  | list of paths    | `[ ]`                              |
 | `programs.igloo.guest.packages` | list of packages | `[ ]`                              |
 
@@ -141,6 +142,9 @@ wrapped with your user layer.
   layer it belongs in. Every key is described in [Configuration](configuration.md#policy-settings).
   The value is serialised to JSON, so write paths as strings: a path literal such as `./token` is
   copied into the world-readable Nix store.
+- **`templates`** is a directory of files that `igloo init` writes into each new project, laid out
+  like a project's root. It is a path, or a derivation that builds the directory.
+  [Templates](configuration.md#templates) describes what goes in it.
 - **`guest.modules`** are NixOS modules for every VM you run, as paths. They are evaluated later,
   when a VM is built, against igloo's own nixpkgs rather than home-manager's. Each must be inside
   the Nix store — in a flake-based configuration every path is — and home-manager refuses the
@@ -244,5 +248,6 @@ then `igloo up` moves it to the new version.
 
 For working on igloo itself: `nix develop` in a checkout, then `bin/igloo` runs the checkout's
 source rather than the installed package. It has no user layer unless `IGLOO_USER_LAYER` names a
-directory holding `igloo.nix` and `igloo-policy.nix`. The `user layer` line of `igloo doctor`, run
-with the installed `igloo`, prints the one home-manager built.
+directory holding `igloo.nix` and `igloo-policy.nix`, and `templates/` if `init` is to write any.
+The `user layer` line of `igloo doctor`, run with the installed `igloo`, prints the one home-manager
+built.

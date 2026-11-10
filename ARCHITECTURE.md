@@ -155,7 +155,7 @@ defines it; `flake.nix` wires them together:
 | `lib.mkRunner`              | `nix/runner.nix`   | One VM's runner, from policy arguments and content modules.                                                   |
 | `nixosModules.default`      | `nix/host.nix`     | The host side: lingering for the users who run igloo.                                                         |
 | `nixosModules.guest`        | `nix/guest.nix`    | The guest core every VM starts from, with the packages in `nix/core-packages.nix`.                            |
-| `homeModules.default`       | `nix/home.nix`     | The user layer, built into the store, and the CLI wrapped with `IGLOO_USER_LAYER` naming it.                  |
+| `homeModules.default`       | `nix/home.nix`     | The user layer and templates, built into the store, and the CLI wrapped with `IGLOO_USER_LAYER` naming it.    |
 | `overlays.default`          | `flake.nix`        | The CLI as this flake built it, as `pkgs.igloo`.                                                              |
 | `devShells.default`         | `nix/devshell.nix` | The development shell, with the `IGLOO_*` programs pointed at this flake's own builds.                        |
 | `formatter`                 | `flake.nix`        | `nix fmt`: nixfmt over the Nix files.                                                                         |

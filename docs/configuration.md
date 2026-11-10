@@ -249,6 +249,106 @@ and the user layer's to the projects each one lists.
 }
 ```
 
+## Templates
+
+Templates are the files each of your projects starts with: editor settings, a starter
+`igloo-policy.nix`, the instructions your agents read. You declare them once, as a directory, and
+`igloo init` writes them into every project it creates:
+
+```nix
+programs.igloo.templates = ./igloo/templates;
+```
+
+The directory is laid out like a project's root, so each file's path in it is its path in the
+project:
+
+```
+igloo/templates/
+├── .vscode/
+│   └── settings.json
+├── igloo-policy.nix
+└── workspace/
+    ├── CLAUDE.md
+    └── AGENTS.md -> CLAUDE.md
+```
+
+A template is written once. From then on the file is the project's, to edit or delete, and a later
+change to the template reaches new projects only.
+
+### Values
+
+A template can leave a value to be filled in, written as a name between two `@`:
+
+```jsonc
+// igloo/templates/.vscode/settings.json
+{
+  "window.title": "@project_name@",
+  "terminal.integrated.cwd": "@project_root@/workspace",
+  "cSpell.language": "@language@",
+}
+```
+
+| Placeholder      | Filled in with                                         |
+| ---------------- | ------------------------------------------------------ |
+| `@project_root@` | The project's root, as an absolute path.               |
+| `@project_name@` | The project's label, which is its directory's name.    |
+| `@at@`           | `@` itself, for text that would read as a placeholder. |
+| any other `@…@`  | The value given as `--set name=value` to `igloo init`. |
+
+```
+$ igloo init ~/projects/atlas --set language=en-GB
+igloo: atlas initialised at /home/you/projects/atlas (cid 1125672963)
+templates
+  wrote    .vscode/settings.json
+  wrote    igloo-policy.nix
+  linked   workspace/AGENTS.md -> CLAUDE.md
+  wrote    workspace/CLAUDE.md
+```
+
+A name is made of letters, digits and `_`, and does not start with a digit. Anything else between
+two `@` is left as it is, an email address and `@scope/package@1.2.3` included. Text that does have
+that shape and is not meant as a placeholder, such as the handle `@you@example.com`, is written
+`@at@you@at@example.com`.
+
+Every template is filled in before anything is created. One that names a value `init` was not given
+fails it, with the template and the name, and then nothing is created, the project's directory
+included.
+
+A value your configuration knows, such as a package's store path, needs no placeholder left for
+`init`. Build the directory with it already in place, here for a `settings.json` holding
+`"nix.formatterPath": "@nixfmt@"`:
+
+```nix
+{ lib, pkgs, ... }:
+{
+  programs.igloo.templates = pkgs.runCommand "igloo-templates" { } ''
+    cp -r ${./igloo/templates} $out
+    chmod -R u+w $out
+    substituteInPlace $out/.vscode/settings.json \
+      --replace-fail '@nixfmt@' '${lib.getExe pkgs.nixfmt}'
+  '';
+}
+```
+
+### What `init` writes, and what it leaves
+
+- **Only into a project it creates.** In a directory that is already a project, `init` writes no
+  template, and says so.
+- **Never over what exists.** The directory may already hold files of yours. A template whose target
+  is there already is skipped, and `init` prints `skipped` for it. A link counts as there even when
+  it leads nowhere.
+- **Never through a link.** If a directory in the project that a template would be written into is a
+  link, `init` fails before it creates anything.
+- **Files are written with mode 0644**, less what your umask takes, whatever the template's mode. A
+  template in the store is read-only, and its copy has to be editable. A template that is executable
+  is not executable in the project.
+- **A link is made as a link**, with the same target, which is how `AGENTS.md` above stays the same
+  file as `CLAUDE.md`. Build the directory with `cp`, as above, rather than `pkgs.linkFarm`, whose
+  every file is a link into the store.
+- **Only text is filled in.** A file that is not UTF-8, or that holds a NUL byte, is copied byte for
+  byte, and so is any file with no placeholder in it.
+- **A directory is made for the files in it.** An empty one in the templates is not created.
+
 ## Applying a change
 
 The layers are read every time a VM boots, and only then. A VM that is already running keeps the

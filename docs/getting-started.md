@@ -53,7 +53,9 @@ demo/
 
 `init` creates the marker, `.igloo/` with `home/` and its `.gitignore`, and `workspace/`. It does
 not create either layer file. A project with neither is normal, and gets the guest core plus your
-user layer. [Configuration](configuration.md) describes both files.
+user layer. [Configuration](configuration.md) describes both files, and
+[templates](configuration.md#templates), which are files of your own that `init` writes into each
+new project.
 
 A project's identity is its canonical root path, with symlinks resolved. The guest's CID — the
 address of its management channel — is derived from that path, and so is the name of each systemd
@@ -98,12 +100,29 @@ Some things do not work inside the guest:
 Every command except `init` acts on the project found from the current directory. `--cid` applies to
 all of them, and is described [below](#--cid).
 
-### `igloo init [dir]`
+### `igloo init [dir] [--set name=value]…`
 
 Create the project skeleton in `dir`, or in the current directory if `dir` is omitted. `dir` is
 created if it does not exist. `init` is idempotent: an existing marker is left alone. It prints the
 project's label, root and CID, and the paths of the two layer files. If the project is somewhere
 other than the current directory, it prints the `cd` that reaches it.
+
+When it creates a project, `init` also writes your [templates](configuration.md#templates) into it,
+and prints a line for each:
+
+```
+$ igloo init ~/projects/atlas --set language=en-GB
+igloo: atlas initialised at /home/you/projects/atlas (cid 1125672963)
+templates
+  wrote    .vscode/settings.json
+  wrote    igloo-policy.nix
+  linked   workspace/AGENTS.md -> CLAUDE.md
+  skipped  workspace/CLAUDE.md (exists)
+```
+
+`--set name=value` gives a template the value it spells `@name@`, and is repeated for more than one.
+A template that names a value `init` was not given fails it, and then nothing is created, not even
+`dir`. In a directory that is already a project `init` writes no template.
 
 ### `igloo up`
 
