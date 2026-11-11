@@ -84,7 +84,8 @@ Everything else is a tmpfs, built fresh on every boot. A file written outside `/
 the layers instead.
 
 A project whose policy sets [`disk`](configuration.md#policy-settings) has one more place that is
-kept: `/persist`, a filesystem of the guest's own, for what the two shares hold badly.
+kept: `/persist`, a filesystem of the guest's own, for what the two shares hold badly, such as
+[a Nix store the guest adds to](configuration.md#a-store-the-guest-adds-to).
 
 `/root` is where state that should outlive a boot lives: shell configuration in `~/.bash_profile`,
 each agent's configuration and history, and the guest's SSH host keys. It is also written by
@@ -95,7 +96,8 @@ The guest has no network card. What it can reach goes through the broker on the 
 
 Some things do not work inside the guest:
 
-- **Nix builds.** The store is read-only, so `nix build`, `nix profile install` and `nix-env` fail.
+- **Nix builds.** The store is read-only, so `nix build`, `nix profile install` and `nix-env` fail,
+  unless the project has [a store the guest adds to](configuration.md#a-store-the-guest-adds-to).
   Add packages to a layer and restart the VM.
 - **An agent's own self-update.** It installs a second copy into `/root`, which then shadows the one
   the layer provides and no longer changes when the layer does. Update agents through the layer.

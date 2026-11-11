@@ -122,6 +122,48 @@ Every VM starts from `nixosModules.guest`. Any of it can be overridden by a cont
   not leave the guest behind.
 - **A login shell** starts in `/workspace`.
 
+### A store the guest adds to
+
+The guest's `/nix/store` is the host's store, read-only, showing only the VM's closure. A project
+whose VM has a [`disk`](#policy-settings) can give it a store it adds to:
+
+```nix
+{ ... }:
+{
+  igloo.writableStore.enable = true;
+  programs.direnv.enable = true;
+}
+```
+
+Then `nix build`, `nix develop`, `nix profile install` and a flake's devshell work in the guest.
+What they fetch and build is kept on the disk, under `/persist/nix`, with Nix's database, so it is
+still there after `igloo down` and `igloo up`. Flakes and the `nix` command are enabled; set
+`nix.settings.experimental-features` to change that. Without a disk, `igloo up` stops with a message
+saying to set one.
+
+- **The share stays read-only.** The guest's store is an overlay: the share below and the disk
+  above, which is where everything the guest adds is written. The host's store gains nothing from
+  the guest.
+- **direnv is separate.** `programs.direnv.enable` installs it with nix-direnv and hooks it into
+  bash. In a project whose `.envrc` is `use flake`, run `direnv allow` once, and the devshell loads
+  on `cd`. The first load fetches the devshell's toolchain, several hundred MB for a small one; a
+  later load takes well under a second.
+- **Agents.** The hook runs at an interactive prompt only. An agent started from a shell that has
+  loaded the devshell has it; otherwise run a command in it with `direnv exec . <command>`.
+- **After a layer change.** A path the guest fetched may refer to one the VM's closure supplied,
+  such as glibc. When a layer change takes that path out of the closure, the next boot fetches it
+  from the cache once the tunnel is open, a second or two after the guest is up. Until then a
+  devshell that needs it fails to load. `journalctl -u igloo-store-reconcile` shows what was
+  fetched, and what could not be: a path the host built rather than fetched is in no cache.
+- **What it reaches.** Nix fetches through the [tunnel](network.md#the-tunnel). Under `restricted`,
+  list `cache.nixos.org` in `tunnel`. A flake input from GitHub needs `github.com` and
+  `codeload.github.com`, and `api.github.com` as well when it names a branch rather than a revision.
+  A nixpkgs revision the cache holds comes from the cache, and needs none of the three.
+- **It is the guest's.** Root in the guest can change any file in its store, the closure's included:
+  the change is written to the disk, and is still there after `igloo down` and `igloo up`. It
+  reaches nothing outside this VM. To start again, run `igloo down` and delete `.igloo/disk.img`,
+  which empties all of `/persist`.
+
 ## Policy
 
 ### Where policy comes from
@@ -201,8 +243,8 @@ number of MiB: `disk = 20 * 1024;` is 20 GiB. Like `mem`, a project's value repl
 layer's. Unset in both, the VM has none, and `/workspace` and `/root` are the only places where what
 the guest writes outlives a stop. Those two are directories of yours that the guest reaches through
 the host, which is slow for many small files and keeps every file owned by you. The disk is an
-ordinary filesystem that belongs to the guest, so it suits what the shares do not: a package store,
-a database's files, container images.
+ordinary filesystem that belongs to the guest, so it suits what the shares do not:
+[a package store](#a-store-the-guest-adds-to), a database's files, container images.
 
 The disk is one file, `.igloo/disk.img` in the project, which igloo creates at the next `igloo up`.
 The guest formats it the first time it boots with it.
