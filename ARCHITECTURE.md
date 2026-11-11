@@ -147,21 +147,21 @@ Every module but `index.ts` has its tests beside it, in `src/<Module>.test.ts`.
 And the flake's outputs, the per-system ones for `x86_64-linux` only, each with the file that
 defines it; `flake.nix` wires them together:
 
-| Output                      | Defined in         | What it is                                                                                                    |
-| --------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------- |
-| `packages.default`, `igloo` | `nix/packages.nix` | The CLI, as `cli` wraps it.                                                                                   |
-| `packages.broker`           | `nix/packages.nix` | The broker: `bun` and `src/broker.ts`.                                                                        |
-| `packages.landlock`         | `nix/packages.nix` | `igloo-landlock`.                                                                                             |
-| `packages.storeView`        | `nix/packages.nix` | `igloo-store-view`.                                                                                           |
-| `packages.testVm`           | `nix/test-vm.nix`  | A runner that is built and never booted. Building it checks the pins and the boot files.                      |
-| `checks`                    | `nix/checks.nix`   | The packages, and `testVm` with content modules that have to be refused, change nothing, or disable the core. |
-| `lib.mkRunner`              | `nix/runner.nix`   | One VM's runner, from policy arguments and content modules.                                                   |
-| `nixosModules.default`      | `nix/host.nix`     | The host side: lingering for the users who run igloo.                                                         |
-| `nixosModules.guest`        | `nix/guest.nix`    | The guest core every VM starts from, with the packages in `nix/core-packages.nix`.                            |
-| `homeModules.default`       | `nix/home.nix`     | The user layer and templates, built into the store, and the CLI wrapped with `IGLOO_USER_LAYER` naming it.    |
-| `overlays.default`          | `flake.nix`        | The CLI as this flake built it, as `pkgs.igloo`.                                                              |
-| `devShells.default`         | `nix/devshell.nix` | The development shell, with the `IGLOO_*` programs pointed at this flake's own builds.                        |
-| `formatter`                 | `flake.nix`        | `nix fmt`: nixfmt over the Nix files.                                                                         |
+| Output                      | Defined in         | What it is                                                                                                                                          |
+| --------------------------- | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages.default`, `igloo` | `nix/packages.nix` | The CLI, as `cli` wraps it.                                                                                                                         |
+| `packages.broker`           | `nix/packages.nix` | The broker: `bun` and `src/broker.ts`.                                                                                                              |
+| `packages.landlock`         | `nix/packages.nix` | `igloo-landlock`.                                                                                                                                   |
+| `packages.storeView`        | `nix/packages.nix` | `igloo-store-view`.                                                                                                                                 |
+| `packages.testVm`           | `nix/test-vm.nix`  | A runner that is built and never booted. Building it checks the pins and the boot files.                                                            |
+| `checks`                    | `nix/checks.nix`   | The packages, and `testVm` with content modules that have to be refused, change nothing, or disable the core.                                       |
+| `lib.mkRunner`              | `nix/runner.nix`   | One VM's runner, from policy arguments and content modules.                                                                                         |
+| `nixosModules.default`      | `nix/host.nix`     | The host side: lingering for the users who run igloo.                                                                                               |
+| `nixosModules.guest`        | `nix/guest.nix`    | The guest core every VM starts from, with the packages in `nix/core-packages.nix` and the `igloo.writableStore` option in `nix/writable-store.nix`. |
+| `homeModules.default`       | `nix/home.nix`     | The user layer and templates, built into the store, and the CLI wrapped with `IGLOO_USER_LAYER` naming it.                                          |
+| `overlays.default`          | `flake.nix`        | The CLI as this flake built it, as `pkgs.igloo`.                                                                                                    |
+| `devShells.default`         | `nix/devshell.nix` | The development shell, with the `IGLOO_*` programs pointed at this flake's own builds.                                                              |
+| `formatter`                 | `flake.nix`        | `nix fmt`: nixfmt over the Nix files.                                                                                                               |
 
 A running VM's drift report covers every file under `nix/`, found by walking it
 (`LaunchInputs.ofIgloo`), so igloo's Nix lives there or in `flake.nix` and nowhere else; a test
@@ -227,7 +227,10 @@ runner's closure and nothing else, each path bound read-only, and serves it with
 empty closure stops the launch rather than serving the whole store. The rest of the project, the
 host's key in `.igloo/ssh/` among it, is not shared. A launch serves a runner's shares only if they
 are those three, each by its tag with its source exactly and its socket a bare file name, and which
-one is the store's is decided by that comparison.
+one is the store's is decided by that comparison. A guest with `igloo.writableStore` mounts an
+overlay over that share, with its upper layer and Nix's database on its own disk
+(`nix/writable-store.nix`): what it adds to its store is written there, and the share and the host's
+store are as they were.
 
 **Held by:** `mkRunner`'s `pins`, `Spec.fromConfig`, `Vm.launch`, `Virtiofs.match`, `store-view.c`,
 `Virtiofs.argv`.

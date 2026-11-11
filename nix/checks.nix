@@ -422,4 +422,30 @@ lib.mapAttrs refusedOnEvaluation {
       ! grep -q mkfs ${runner}/bin/microvm-run
       touch $out
     '';
+
+  # The writable store. With a disk it changes the guest and no pin; the
+  # store share is the one the runner was given. With no disk there is
+  # nowhere to keep it, and the runner's evaluation fails.
+  writable-store =
+    let
+      enabled =
+        { ... }:
+        {
+          igloo.writableStore.enable = true;
+        };
+      withDisk = withContent enabled // {
+        disk.image = "/var/empty/igloo-check.img";
+      };
+      found = overridden withDisk;
+    in
+    assert lib.assertMsg (
+      found == [ ]
+    ) "writable-store: mkRunner refuses the writable store: ${lib.concatStringsSep ", " found}";
+    assert lib.assertMsg (
+      (mkRunner withDisk).drvPath != (mkRunner (testVm // { inherit (withDisk) disk; })).drvPath
+    ) "writable-store: enabling it left the runner unchanged";
+    assert lib.assertMsg (
+      !(builtins.tryEval (mkRunner (withContent enabled)).drvPath).success
+    ) "writable-store: mkRunner returned a runner with the store on a disk the VM does not have";
+    pkgs.runCommandLocal "igloo-check-writable-store" { } "touch $out";
 }

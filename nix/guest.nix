@@ -2,6 +2,8 @@
 # caller's `contentModules`; see `mkRunner` for what is not.
 { lib, pkgs, ... }:
 {
+  imports = [ ./writable-store.nix ];
+
   # Working loader for non-Nix ELF binaries. Language package managers
   # routinely download prebuilt executables (rustup toolchains, uv's
   # CPython, elan, anything installed with `npm i -g`), and without this
