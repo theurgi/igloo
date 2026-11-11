@@ -36,7 +36,8 @@ The VM boundary is KVM and QEMU. QEMU runs as your user, confined to the Nix sto
 runtime directory and the two devices it drives, so a guest that escapes into it finds none of your
 files, processes or sockets there, and none of your session's environment. The virtio-fs daemons
 that serve the shares talk to the guest too, each from virtiofsd's own sandbox, which holds its
-share and nothing else.
+share and nothing else. They refuse to give a file a set-user-id or set-group-id bit, so the guest
+cannot leave behind a program that runs as you for another user of the host.
 
 The broker holds the project's credentials and serves the guest's requests. Of the host's files it
 sees the Nix store, its own sockets and credentials, and the files the host resolves names from:

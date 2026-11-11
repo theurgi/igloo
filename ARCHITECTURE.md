@@ -46,13 +46,13 @@ reaching the guest's sshd over vsock through systemd's `systemd-ssh-proxy`; `ssh
 A VM is a set of transient systemd user units in one slice, `igloo-<id>.slice`, where `<id>` is
 `<label>-<cid in hex>` and the label is the project directory's name.
 
-| Unit                         | Runs                                                                                               | Confinement                               | Started                             |
-| ---------------------------- | -------------------------------------------------------------------------------------------------- | ----------------------------------------- | ----------------------------------- |
-| `igloo-<id>-virtiofsd-<tag>` | `virtiofsd` for one share: `ro-store`, `workspace` or `home`; the store's under `igloo-store-view` | virtiofsd's own sandbox                   | always                              |
-| `igloo-<id>-qemu`            | the runner's `bin/microvm-run`                                                                     | `Systemd.Hypervisor`                      | always                              |
-| `igloo-<id>-broker`          | `igloo-broker`, under `igloo-landlock`                                                             | `Systemd.CredentialHolder`                | when the VM has a grant or a tunnel |
-| `igloo-<id>-tether`          | `ssh -R`: the guest's `127.0.0.1:3128` to the broker's socket, and `:3129` to the tunnel's         | `Systemd.Forwarder`, a network of its own | with the broker                     |
-| `igloo-<id>-ports`           | `ssh -L`: each published port, from the host's `127.0.0.1` to the guest's; under `igloo-landlock`  | `Systemd.Forwarder`, the host's network   | when the project publishes ports    |
+| Unit                         | Runs                                                                                               | Confinement                                   | Started                             |
+| ---------------------------- | -------------------------------------------------------------------------------------------------- | --------------------------------------------- | ----------------------------------- |
+| `igloo-<id>-virtiofsd-<tag>` | `virtiofsd` for one share: `ro-store`, `workspace` or `home`; the store's under `igloo-store-view` | virtiofsd's own sandbox, `Systemd.FileServer` | always                              |
+| `igloo-<id>-qemu`            | the runner's `bin/microvm-run`                                                                     | `Systemd.Hypervisor`                          | always                              |
+| `igloo-<id>-broker`          | `igloo-broker`, under `igloo-landlock`                                                             | `Systemd.CredentialHolder`                    | when the VM has a grant or a tunnel |
+| `igloo-<id>-tether`          | `ssh -R`: the guest's `127.0.0.1:3128` to the broker's socket, and `:3129` to the tunnel's         | `Systemd.Forwarder`, a network of its own     | with the broker                     |
+| `igloo-<id>-ports`           | `ssh -L`: each published port, from the host's `127.0.0.1` to the guest's; under `igloo-landlock`  | `Systemd.Forwarder`, the host's network       | when the project publishes ports    |
 
 Each unit's environment is what its launch gives it, `PATH` and a forward's `SHELL`, and the
 variables systemd sets for it, such as `CREDENTIALS_DIRECTORY`. None of the user manager's reaches
@@ -493,10 +493,20 @@ store path the runner was not built from, fails the runner's build (`mkRunner`'s
 `Virtiofs.argv` asks for it by name, `--sandbox=namespace` and `--seccomp=kill`: the worker serving
 the guest has user, mount, PID and network namespaces of its own, its share as its root, and a
 seccomp filter that kills it for any call serving does not need. A daemon that cannot enter the
-sandbox exits rather than serve without it. The daemons' units are not otherwise confined, since the
-sandbox is made of namespaces a confined unit could not create.
+sandbox exits rather than serve without it.
 
-**Held by:** `Virtiofs.argv`.
+A file the guest makes in its workspace or its home is the user's on the host, in the group the user
+makes files with: the daemon can give it no other owner and no other group. So that no such file
+runs as the user for someone else on the host, each daemon's unit refuses a mode with a set-user-id
+or set-group-id bit (`RestrictSUIDSGID=`), on a file or directory being made and on one that is
+there, and the guest's call fails with `EPERM`. That includes a `chmod` that only keeps a bit a file
+already had, such as on a set-group-id directory the project came with. The filter cannot read a
+mode passed in memory, so it takes `openat2(2)` from the daemon, which then opens with `openat(2)`
+and without the limits on path resolution the newer call adds; its worker's root is the share either
+way. The units are not otherwise confined, since the sandbox is made of namespaces a confined unit
+could not create.
+
+**Held by:** `Virtiofs.argv`, `Systemd.FileServer`, `Vm.launch`.
 
 ### The tether and ports units see the store, the user database and their key, and little else
 

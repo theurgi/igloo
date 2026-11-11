@@ -180,6 +180,19 @@ describe('Systemd.startArgs', () => {
     assert.include(args, '--property=PrivateUsers=self')
   })
 
+  it('refuses a file server set-id modes and leaves it its own sandbox', () => {
+    const plain = Systemd.startArgs(unit('igloo-example'))
+    const args = Systemd.startArgs({ ...unit('igloo-example'), confine: { kind: 'file-server' } })
+    assert.include(args, '--property=RestrictSUIDSGID=yes')
+    // virtiofsd makes user, mount, PID and network namespaces for its worker,
+    // and pivots into its share; any property that took those from it would
+    // have it exit rather than serve.
+    assert.sameMembers(
+      args.filter(arg => !plain.includes(arg)),
+      ['--property=NoNewPrivileges=yes', '--property=RestrictSUIDSGID=yes'],
+    )
+  })
+
   it("keeps a forwarder off IP unless it keeps the host's network", () => {
     const own = Systemd.startArgs({
       ...unit('igloo-example'),

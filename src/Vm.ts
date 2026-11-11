@@ -1522,6 +1522,7 @@ const launch = Effect.fnUntraced(function* (bins: Binaries, spec: VmSpec, boot: 
           argv: share.store
             ? StoreView.argv({ argv: daemon, helper: bins.storeView, paths: storePaths })
             : daemon,
+          confine: { kind: 'file-server' },
           env: spec.unitEnv,
           logFile: daemonLog(boot, share.tag),
           name: virtiofsdUnit(spec.id, share.tag),

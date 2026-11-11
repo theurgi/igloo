@@ -1286,6 +1286,60 @@ EOF
 			verdict FAIL store-owner "the guest sees the store owned by $(printf '%s' "$owners" | tr '\n' ' ')— read artifacts/guest.txt"
 		fi
 
+		# A file the guest makes in a share is the user's on the host, so one
+		# with a set-user-id or set-group-id bit would run as the user, or with
+		# the user's group, for anyone on the host who could reach it. The guest
+		# asks for both bits every way it can: on a file and a directory that are
+		# there, and on a directory as it is made. What counts is the mode the
+		# host reads back, since the guest's own view is the daemon's answer. An
+		# ordinary mode has to go through still, or the refusal is of chmod.
+		#
+		# The groups a guest can give a file are counted the same way: root's,
+		# and each of the user's other than the primary one the files are made
+		# with. Counts only, since the list is the host's group database.
+		other_groups="0 $(id -G | tr ' ' '\n' | grep -vx "$(id -g)" | tr '\n' ' ')"
+		setid_found="" setid_ran=0 plain_kept=0 groups_given=0
+		for share in workspace home; do
+			case $share in
+			workspace) guest_dir=/workspace host_dir="$project/workspace" ;;
+			*) guest_dir=/root host_dir="$project/.igloo/home" ;;
+			esac
+			probe_dir=".igloo-verify-setid"
+			{
+				printf '\n=== set-id modes asked for from the guest, in %s\n' "$guest_dir"
+				guest "mkdir $guest_dir/$probe_dir && cd $guest_dir/$probe_dir && touch suid sgid plain group && mkdir dir && echo PROBE-MADE; chmod 4755 suid; chmod 2755 sgid; chmod 2755 dir; mkdir -m 2755 made; chmod 600 plain && chmod 755 plain && echo PLAIN-OK; chown :$(id -g) group && echo PRIMARY-GROUP-OK; for g in $other_groups; do chown :\$g group 2>/dev/null && echo OTHER-GROUP-GIVEN; done; true"
+				echo "=== the modes the host reads"
+				(cd "$host_dir/$probe_dir" && stat -c '%A %n' -- *)
+			} >"$scratch/setid-$share" 2>&1
+			cat "$scratch/setid-$share" >>"$out/artifacts/guest.txt"
+			if grep -q 'PROBE-MADE' "$scratch/setid-$share" && [ -e "$host_dir/$probe_dir/suid" ]; then
+				setid_ran=$((setid_ran + 1))
+			fi
+			setid_found="$setid_found$(find "$host_dir/$probe_dir" -perm /6000 2>/dev/null)"
+			if grep -q 'PLAIN-OK' "$scratch/setid-$share" &&
+				[ "$(stat -c %a "$host_dir/$probe_dir/plain" 2>/dev/null)" = 755 ]; then
+				plain_kept=$((plain_kept + 1))
+			fi
+			groups_given=$((groups_given + $(grep -c 'OTHER-GROUP-GIVEN' "$scratch/setid-$share")))
+			rm -rf "${host_dir:?}/$probe_dir"
+		done
+		if [ "$setid_ran" != 2 ]; then
+			verdict FAIL set-id-refused "the guest could not make its probe files in both shares, so this shows nothing — read artifacts/guest.txt"
+		elif [ -n "$setid_found" ]; then
+			verdict FAIL set-id-refused "a set-id bit the guest asked for is on a file on the host — read artifacts/guest.txt"
+		elif [ "$plain_kept" != 2 ]; then
+			verdict FAIL set-id-refused "no set-id bit reached the host, but an ordinary chmod from the guest did not either — read artifacts/guest.txt"
+		else
+			verdict PASS set-id-refused "no set-user-id or set-group-id bit the guest asks for, in the workspace or its home, reaches a file on the host, and an ordinary chmod does"
+		fi
+		if [ "$setid_ran" != 2 ]; then
+			verdict NOTE share-groups "not checked: the guest could not make its probe files"
+		elif [ "$groups_given" = 0 ]; then
+			verdict PASS share-groups "a guest can give a file in a share no group but the one its owner makes files with: not root's, and none of the user's $(($(printf '%s' "$other_groups" | wc -w) - 1)) others"
+		else
+			verdict FAIL share-groups "a guest gave a file in a share a group other than its owner's primary one, $groups_given times of $(($(printf '%s' "$other_groups" | wc -w) * 2)) tried — read artifacts/guest.txt"
+		fi
+
 		# Memory the guest frees goes back to the host. Guest RAM is a memfd
 		# the host fills as the guest first touches it, and only the balloon's
 		# free page reporting empties it again before QEMU exits. A file in the

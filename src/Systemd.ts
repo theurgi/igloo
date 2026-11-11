@@ -146,13 +146,33 @@ export interface Forwarder {
 }
 
 /**
- * How a unit is confined: one of three presets, each whole.
+ * A virtio-fs daemon, which makes files on the host as the user at a guest's
+ * word: nothing it makes or changes can carry a set-user-id or set-group-id
+ * bit, so a guest cannot leave the host a program that runs as the user for
+ * whoever starts it. A mode with either bit is refused, on a new file or
+ * directory and on one that is there, and the guest's call fails with
+ * `EPERM`. That takes in a mode that only keeps a bit a file already has.
+ *
+ * The refusal is a system call filter, which reads a mode passed as an
+ * argument and cannot read one passed in memory, so it takes `openat2(2)` away
+ * altogether, and the daemon opens with `openat(2)` as it does on a kernel
+ * without the newer call.
+ *
+ * Nothing else: the daemon's sandbox is its own, made of namespaces the other
+ * presets would keep it from creating.
+ */
+export interface FileServer {
+  readonly kind: 'file-server'
+}
+
+/**
+ * How a unit is confined: one of four presets, each whole.
  *
  * Presets rather than a set of switches, because each is an account of what one
  * kind of process needs, and every property in it has a reason that holds for
  * that kind as a whole. A unit that wanted part of one would be another kind.
  */
-export type Confinement = CredentialHolder | Forwarder | Hypervisor
+export type Confinement = CredentialHolder | FileServer | Forwarder | Hypervisor
 
 /**
  * A transient user service to launch. `argv[0]` must be an absolute path:
@@ -379,10 +399,18 @@ const forwarderArgs = (confine: Forwarder): Array<string> => [
   '--property=MemoryDenyWriteExecute=yes',
 ]
 
+const fileServerArgs: readonly string[] = [
+  // The filter needs it, and a user manager would add it unasked.
+  '--property=NoNewPrivileges=yes',
+  '--property=RestrictSUIDSGID=yes',
+]
+
 const confinementArgs = (confine: Confinement): Array<string> => {
   switch (confine.kind) {
     case 'credentials':
       return credentialHolderArgs(confine)
+    case 'file-server':
+      return [...fileServerArgs]
     case 'forwarder':
       return forwarderArgs(confine)
     case 'hypervisor':
