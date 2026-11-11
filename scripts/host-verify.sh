@@ -1665,6 +1665,147 @@ EOF
 	fi
 	rm -f "$project/igloo-policy.nix" "$disk_image"
 
+	# ------------------------------------------------ a store the guest adds to --
+	#
+	# igloo.writableStore, under a scratch user layer so that the network is
+	# this section's to choose. The guest builds a derivation whose output
+	# refers to cowsay, which the content layer puts in the VM's closure, then
+	# the VM is stopped twice: once with nothing changed, and once with cowsay
+	# taken out of the layer, which leaves the output referring to a path the
+	# store share no longer has.
+	section "a store the guest adds to"
+	say ""
+	say "Launching again, with a store the guest adds to…"
+
+	store_config="$scratch/store-config"
+	mkdir -p "$store_config/igloo"
+	printf '{ }\n' >"$store_config/igloo/igloo-policy.nix"
+	use_layer "$store_config/igloo"
+	printf '{ disk = 1024; network = "internet"; }\n' >"$project/igloo-policy.nix"
+	cat >"$project/igloo.nix" <<'EOF'
+{ pkgs, ... }:
+{
+  igloo.writableStore.enable = true;
+  environment.systemPackages = [ pkgs.cowsay ];
+}
+EOF
+	cat >"$project/workspace/igloo-verify-ref.nix" <<'EOF'
+{ bash, cowsay }:
+derivation {
+  name = "igloo-verify-ref";
+  system = builtins.currentSystem;
+  builder = builtins.storePath bash;
+  args = [ "-c" "echo ${builtins.storePath cowsay} >$out" ];
+}
+EOF
+	# Prints key=value lines. `state` first waits for the unit that reconciles
+	# Nix's database with the store, which waits for the tunnel.
+	cat >"$project/workspace/igloo-verify-store.sh" <<'EOF'
+link=/persist/igloo-verify-ref
+case $1 in
+build)
+	cowsay=$(dirname "$(dirname "$(readlink -f "$(command -v cowsay)")")")
+	bash=$(readlink -f /run/current-system/sw/bin/bash)
+	nix build --impure --out-link "$link" -f /workspace/igloo-verify-ref.nix \
+		--argstr bash "$bash" --argstr cowsay "$cowsay"
+	;;
+state)
+	for _ in $(seq 180); do
+		[ "$(systemctl show -P ActiveState igloo-store-reconcile)" = activating ] || break
+		sleep 1
+	done
+	;;
+esac
+ref=$(readlink -f "$link")
+cowsay=$(cat "$ref" 2>/dev/null)
+yes_no() { if "$@" >/dev/null 2>&1; then echo yes; else echo no; fi; }
+echo "ref=$ref"
+echo "ref-valid=$(yes_no nix path-info "$ref")"
+echo "ref-in-upper=$(yes_no test -e "/persist/nix/rw-store/store/${ref##*/}")"
+echo "cowsay=$cowsay"
+echo "cowsay-in-share=$(yes_no test -e "/nix/.ro-store/${cowsay##*/}")"
+echo "cowsay-runs=$(yes_no "$cowsay/bin/cowsay" moo)"
+echo "reconcile=$(systemctl show -P ActiveState igloo-store-reconcile)"
+echo "reconcile-fetched=$(journalctl -b -u igloo-store-reconcile -o cat | grep -c '^copying path')"
+echo "stale=$(nix-store --verify 2>&1 | grep -c disappeared)"
+EOF
+	store_log="$out/artifacts/writable-store.txt"
+	store_state() { # store_state <label> <build|state> — the guest's answers, kept in the log too
+		echo "=== $1" >>"$store_log"
+		guest "bash /workspace/igloo-verify-store.sh $2" 2>&1 | tee -a "$store_log"
+	}
+	field() { sed -n "s/^$1=//p" <<<"$2" | tail -1; } # field <key> <answers>
+
+	if step up-store -- "$repo/bin/igloo" up; then
+		vm_up=yes
+	else
+		verdict FAIL writable-store-builds "a VM with igloo.writableStore did not come up — read steps/up-store.txt"
+	fi
+	keep_boot up-store
+
+	if [ -n "$vm_up" ]; then
+		built=$(store_state "first boot, building" build)
+		ref=$(field ref "$built")
+		if [ "$(field ref-valid "$built")" = yes ] && [ "$(field ref-in-upper "$built")" = yes ] &&
+			[ "$(field cowsay-in-share "$built")" = yes ] && [ "$(field cowsay-runs "$built")" = yes ]; then
+			verdict PASS writable-store-builds "the guest builds into its store, onto its disk, an output referring to a path of the VM's closure"
+		else
+			verdict FAIL writable-store-builds "the guest's build did not land in the upper layer, or its reference does not run — read artifacts/writable-store.txt"
+		fi
+		if [ -n "$ref" ] && [ ! -e "$ref" ]; then
+			verdict PASS writable-store-host-untouched "what the guest built is not in the host's store"
+		else
+			verdict FAIL writable-store-host-untouched "the guest's build ${ref:-(none)} is in the host's store, or there was none"
+		fi
+
+		step down-store -- "$repo/bin/igloo" down
+		vm_up=""
+		if step up-store-again -- "$repo/bin/igloo" up; then
+			vm_up=yes
+			kept=$(store_state "second boot, nothing changed" state)
+			if [ "$(field ref "$kept")" = "$ref" ] && [ "$(field ref-valid "$kept")" = yes ] &&
+				[ "$(field cowsay-runs "$kept")" = yes ] && [ "$(field reconcile "$kept")" = active ] &&
+				[ "$(field reconcile-fetched "$kept")" = 0 ] && [ "$(field stale "$kept")" = 0 ]; then
+				verdict PASS writable-store-kept "after down and up, what the guest built is still in its store and valid, and nothing is fetched again"
+			else
+				verdict FAIL writable-store-kept "after down and up, the guest's build is gone or not valid, or something was fetched again — read artifacts/writable-store.txt"
+			fi
+			step down-store-again -- "$repo/bin/igloo" down
+			vm_up=""
+		else
+			verdict FAIL writable-store-kept "the VM did not come up again — read steps/up-store-again.txt"
+		fi
+		keep_boot up-store-again
+
+		# The same VM without cowsay. The output still refers to it, and the
+		# database still records it, so it is fetched at boot from the cache.
+		cat >"$project/igloo.nix" <<'EOF'
+{ ... }:
+{
+  igloo.writableStore.enable = true;
+}
+EOF
+		if step up-store-changed -- "$repo/bin/igloo" up; then
+			vm_up=yes
+			changed=$(store_state "third boot, cowsay gone from the closure" state)
+			if [ "$(field cowsay-in-share "$changed")" = no ] && [ "$(field cowsay-runs "$changed")" = yes ] &&
+				[ "$(field ref-valid "$changed")" = yes ] && [ "$(field reconcile "$changed")" = active ] &&
+				[ "$(field reconcile-fetched "$changed")" = 1 ] && [ "$(field stale "$changed")" = 0 ]; then
+				verdict PASS writable-store-reconciled "after the closure loses a path the guest's build refers to, the boot fetches that path alone, and the build's reference runs"
+			else
+				verdict FAIL writable-store-reconciled "after a closure change, the guest's build is broken or more than the lost path was fetched — read artifacts/writable-store.txt"
+			fi
+			step down-store-changed -- "$repo/bin/igloo" down
+			vm_up=""
+		else
+			verdict FAIL writable-store-reconciled "the VM did not come up after the closure change — read steps/up-store-changed.txt"
+		fi
+		keep_boot up-store-changed
+	fi
+	rm -f "$project/igloo.nix" "$project/igloo-policy.nix" "$project/.igloo/disk.img" \
+		"$project/workspace/igloo-verify-ref.nix" "$project/workspace/igloo-verify-store.sh"
+	use_layer
+
 	# ------------------------------------------------------ delivered credentials --
 	#
 	# A second launch of the same project, with a scratch user layer. That is
