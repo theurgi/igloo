@@ -1575,6 +1575,96 @@ EOF
 	# content module left behind would be in their builds too.
 	rm -f "$project/igloo.nix" "$project/igloo-policy.nix"
 
+	# ------------------------------------------------- a disk that outlives a stop --
+	#
+	# The guest's root is a tmpfs, so this is the only place besides its two
+	# shares where what it writes is there at the next boot. The file is the
+	# host's to make and the guest's to format: it starts as a length with
+	# nothing in it.
+	section "a disk that outlives a stop"
+	say ""
+	say "Launching again, with a disk…"
+
+	disk_image="$project/.igloo/disk.img"
+	disk_allocated() { echo $(($(stat -c %b "$disk_image") * 512 / 1048576)); } # in MiB
+	disk_length() { echo $(($(stat -c %s "$disk_image") / 1048576)); }          # in MiB
+	disk_state() { # disk_state <label> — what the guest has at /persist
+		echo "=== $1"
+		guest 'findmnt -no SOURCE,FSTYPE,OPTIONS /persist; df -m --output=size,used /persist | tail -1; cat /persist/igloo-verify 2>&1'
+		echo "host file: $(disk_length) MiB long, $(disk_allocated) MiB allocated"
+	}
+	printf '{ disk = 1024; }\n' >"$project/igloo-policy.nix"
+	if step up-disk -- "$repo/bin/igloo" up; then
+		vm_up=yes
+	else
+		verdict FAIL disk-kept "a VM with a disk did not come up — read steps/up-disk.txt"
+	fi
+	keep_boot up-disk
+
+	if [ -n "$vm_up" ]; then
+		guest 'echo kept-across-a-stop >/persist/igloo-verify && dd if=/dev/urandom of=/persist/igloo-verify-fill bs=1M count=200 status=none && sync' \
+			>"$out/artifacts/disk.txt" 2>&1
+		disk_state "first boot, after writing 200 MiB" >>"$out/artifacts/disk.txt" 2>&1
+		filled=$(disk_allocated)
+
+		# QEMU's unit has the one file, and nothing else of the directory it is
+		# in: the host's key for this guest is two entries away.
+		disk_pid=$(systemctl --user show -P MainPID "$(own_units 'igloo-*-qemu.service' | head -1)")
+		if [ -e "/proc/$disk_pid/root$disk_image" ] && [ ! -e "/proc/$disk_pid/root$project/.igloo/ssh" ] &&
+			[ ! -e "/proc/$disk_pid/root$project/.igloo/home" ]; then
+			verdict PASS disk-confined "QEMU's unit sees the disk's file and nothing else of the project's .igloo/"
+		else
+			verdict FAIL disk-confined "QEMU's unit does not see the disk's file alone in the project's .igloo/"
+		fi
+
+		guest 'rm -f /persist/igloo-verify-fill && sync && fstrim -v /persist' >>"$out/artifacts/disk.txt" 2>&1
+		step down-disk -- "$repo/bin/igloo" down
+		vm_up=""
+		trimmed=$(disk_allocated)
+		echo "host file after the guest deleted the 200 MiB and stopped: $trimmed MiB allocated" >>"$out/artifacts/disk.txt"
+		if [ "$(disk_length)" = 1024 ] && [ "$filled" -ge 200 ] && [ "$filled" -lt 600 ] && [ "$trimmed" -lt $((filled - 150)) ]; then
+			verdict PASS disk-sparse "a 1024 MiB disk took $filled MiB of the host with 200 MiB written to it, and $trimmed MiB once the guest deleted them"
+		else
+			verdict FAIL disk-sparse "a 1024 MiB disk is $(disk_length) MiB long, took $filled MiB with 200 MiB written and $trimmed MiB after the delete — read artifacts/disk.txt"
+		fi
+
+		# The same file under a larger size: the host lengthens it, and the
+		# guest grows its filesystem into the room.
+		printf '{ disk = 2048; }\n' >"$project/igloo-policy.nix"
+		if step up-disk-again -- "$repo/bin/igloo" up; then
+			vm_up=yes
+			disk_state "second boot, at twice the size" >>"$out/artifacts/disk.txt" 2>&1
+			kept=$(guest 'cat /persist/igloo-verify' 2>/dev/null)
+			grown=$(guest 'df -m --output=size /persist | tail -1' 2>/dev/null | tr -d ' ')
+			if [ "$kept" = kept-across-a-stop ]; then
+				verdict PASS disk-kept "a file the guest wrote to its disk is there after down and up"
+			else
+				verdict FAIL disk-kept "a file the guest wrote to its disk is not there after down and up — read artifacts/disk.txt"
+			fi
+			if [ "$(disk_length)" = 2048 ] && [[ $grown =~ ^[0-9]+$ ]] && [ "$grown" -gt 1800 ]; then
+				verdict PASS disk-grown "a disk given twice the size is twice as long on the host, and the guest's filesystem fills it"
+			else
+				verdict FAIL disk-grown "a disk given 2048 MiB is $(disk_length) MiB long and the guest's filesystem ${grown:-?} MiB — read artifacts/disk.txt"
+			fi
+			step down-disk-again -- "$repo/bin/igloo" down
+			vm_up=""
+		else
+			verdict FAIL disk-kept "the VM did not come up again with its disk — read steps/up-disk-again.txt"
+		fi
+		keep_boot up-disk-again
+
+		printf '{ disk = 1024; }\n' >"$project/igloo-policy.nix"
+		if step disk-shrink-refused -- "$repo/bin/igloo" up; then
+			"$repo/bin/igloo" down >>"$out/steps/disk-shrink-refused.txt" 2>&1
+			verdict FAIL disk-shrink-refused "a disk given a smaller size launched its VM"
+		elif grep -q 'does not shrink' "$out/steps/disk-shrink-refused.txt" && [ "$(disk_length)" = 2048 ]; then
+			verdict PASS disk-shrink-refused "a disk given a smaller size is refused before anything is built, and left as it was"
+		else
+			verdict FAIL disk-shrink-refused "the launch failed, but not on the size, or the file changed — read steps/disk-shrink-refused.txt"
+		fi
+	fi
+	rm -f "$project/igloo-policy.nix" "$disk_image"
+
 	# ------------------------------------------------------ delivered credentials --
 	#
 	# A second launch of the same project, with a scratch user layer. That is
@@ -2007,7 +2097,7 @@ EOF
 
 		# ------------------------------------------------- what QEMU can open --
 		#
-		# QEMU's unit sees the store, this VM's runtime directory and two devices.
+		# QEMU's unit sees the store, this VM's runtime directory, its disk if it has one, and two devices.
 		# Asked over its own control socket to open files, which it does with its
 		# own open(), it has to find each of these missing: one in the home
 		# directory, one under /tmp, one in another VM's runtime directory, and
