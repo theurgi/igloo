@@ -63,6 +63,8 @@ In the project, which is on disk:
 - `.igloo/project.json`, the marker that makes a directory a project.
 - `igloo.nix` and `igloo-policy.nix`, the project's layer: content and policy.
 - `workspace/`, the guest's `/workspace`, and `.igloo/home/`, the guest's `/root`.
+- `.igloo/disk.img`, for a project whose policy sets `disk`: the guest's disk, a sparse file igloo
+  creates and lengthens (`Vm.ensureDisk`) and the guest formats and mounts at `/persist`.
 - `.igloo/ssh/id`, the key the host reaches the guest with. Its public half is built into the guest.
 - `.igloo/tls/`, for a project whose broker answers a name: `certificate.pem` and `key.pem`, what
   the broker answers with, and `authority.pem`, the authority that issued them, which the guest
@@ -95,7 +97,8 @@ In `$XDG_RUNTIME_DIR/igloo/`, a tmpfs:
 3. If the VM is already running, nothing is built: `up` says which of its inputs changed since it
    launched (`LaunchInputs`) and makes sure its broker, tether and ports are up. Otherwise:
 4. The slice is stopped, and the runtime directory and the broker's removed. A launch that cannot
-   remove them stops there.
+   remove them stops there. The disk's file, for a VM with one, is created or lengthened
+   (`Vm.ensureDisk`), and a launch that would have to shorten it stops there too.
 5. The credentials are fetched (`Secrets.write`), first, since a source may prompt for a passphrase.
 6. The runner is evaluated once, confined, to a `.drv` (`Vm.ts`'s `instantiate`). The build plan is
    checked (`BuildPlan.check`) and that same `.drv` built (`Vm.ts`'s `build`), pinned by the
@@ -212,16 +215,19 @@ with a grant or somewhere to tunnel to. The broker does not know the network mod
 
 **Held by:** `mkRunner`'s `pins`, `Systemd.Hypervisor`, `Config.compose`, `Spec.fromConfig`.
 
-### The guest sees its workspace, its home and its own closure, and nothing else of the host
+### The guest sees its workspace, its home, its disk and its own closure, and nothing else of the host
 
 `microvm.shares` is pinned to three shares: the store, the project's `workspace/` and its
-`.igloo/home/` (`Spec.fromConfig`). `microvm.storeOnDisk` is pinned off, and `microvm.devices` and
-`microvm.volumes` empty. The store's virtio-fs daemon runs under `igloo-store-view`, in a mount
-namespace whose `/nix/store` holds the runner's closure and nothing else, each path bound read-only,
-and serves it with `--readonly`. An empty closure stops the launch rather than serving the whole
-store. The rest of the project, the host's key in `.igloo/ssh/` among it, is not shared. A launch
-serves a runner's shares only if they are those three, each by its tag with its source exactly and
-its socket a bare file name, and which one is the store's is decided by that comparison.
+`.igloo/home/` (`Spec.fromConfig`). `microvm.storeOnDisk` is pinned off, and `microvm.devices`
+empty. `microvm.volumes` is pinned empty too, or for a project whose policy sets `disk`, to the one
+file `.igloo/disk.img`, which the runner's script neither creates nor formats: the host gives it a
+length (`Vm.ensureDisk`) and never reads it, and everything in it is the guest's. The store's
+virtio-fs daemon runs under `igloo-store-view`, in a mount namespace whose `/nix/store` holds the
+runner's closure and nothing else, each path bound read-only, and serves it with `--readonly`. An
+empty closure stops the launch rather than serving the whole store. The rest of the project, the
+host's key in `.igloo/ssh/` among it, is not shared. A launch serves a runner's shares only if they
+are those three, each by its tag with its source exactly and its socket a bare file name, and which
+one is the store's is decided by that comparison.
 
 **Held by:** `mkRunner`'s `pins`, `Spec.fromConfig`, `Vm.launch`, `Virtiofs.match`, `store-view.c`,
 `Virtiofs.argv`.
@@ -457,14 +463,15 @@ grants name before it serves anything, so no grant can send it upstream (`broker
 `ensureBroker`, `broker.ts`'s `upstreamHeaders`, `audit` and `main`, `mkRunner`'s `credentialArgs`,
 `Tls.ensure`.
 
-### QEMU sees the store, its VM's runtime directory and two devices, and nothing else of the host
+### QEMU sees the store, its VM's runtime directory, its disk and two devices, and nothing else of the host
 
 QEMU's unit has an empty, read-only root holding the store, read-only; its VM's runtime directory,
-writable, with the brokered credentials' directory in it hidden; and `/dev/kvm` and
-`/dev/vhost-vsock`. Its namespaces are its own: user, mount, PID, network and IPC. It may open Unix
-sockets and no other kind, so neither IP nor vsock; its guest's vsock it drives through the device.
-It has no capabilities and no memory both writable and executable. The whole store is readable to
-it, as it is to every user of the host.
+writable, with the brokered credentials' directory in it hidden; the file that is its VM's disk, for
+a VM with one, writable and bound alone, so nothing else of the project's `.igloo/` comes with it;
+and `/dev/kvm` and `/dev/vhost-vsock`. Its namespaces are its own: user, mount, PID, network and
+IPC. It may open Unix sockets and no other kind, so neither IP nor vsock; its guest's vsock it
+drives through the device. It has no capabilities and no memory both writable and executable. The
+whole store is readable to it, as it is to every user of the host.
 
 Its runtime directory is writable to it, so a fresh `up` removes that directory before writing into
 it, and `down` removes it too. QEMU can take its owner's write permission away from any directory
@@ -514,12 +521,12 @@ against the pins, but with igloo's own QEMU and igloo's own `pkgs` as the packag
 come from, whatever the merged configuration holds; the pins on both refuse a content module that
 names another. It reads neither `microvm.runner` nor `microvm.declaredRunner`, which a content
 module could set. The options the runner's host-side scripts are built from — `preStart`,
-`extraArgsScript`, `credentialFiles` and `volumes` — are pinned empty. Of the runner, the host reads
-the share metadata, refused unless it names exactly the shares the launch asked for
-(`Virtiofs.match`), and runs `bin/microvm-run` under QEMU's confinement. The virtio-fs daemons are
-igloo's own binary with igloo's own arguments (`Virtiofs.argv`): the runner's virtiofsd is pinned
-only so that binary is in its closure, which the store's daemon needs, and a launch refuses a runner
-whose closure lacks it.
+`extraArgsScript`, `credentialFiles` and `volumes` — are pinned empty, but for the one volume a
+`disk` gives, which the scripts leave alone. Of the runner, the host reads the share metadata,
+refused unless it names exactly the shares the launch asked for (`Virtiofs.match`), and runs
+`bin/microvm-run` under QEMU's confinement. The virtio-fs daemons are igloo's own binary with
+igloo's own arguments (`Virtiofs.argv`): the runner's virtiofsd is pinned only so that binary is in
+its closure, which the store's daemon needs, and a launch refuses a runner whose closure lacks it.
 
 `down` sends the power event over QMP itself, to the QEMU unit's `MainPID` alone, checked on the
 connection with `SO_PEERCRED` (`Qmp.powerdown`), and then waits on the unit rather than the socket.

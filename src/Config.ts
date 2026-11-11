@@ -185,6 +185,12 @@ export interface Policy {
    * runs out instead, the kernel kills the broker first.
    */
   readonly brokerMem: number | undefined
+  /**
+   * The size of the VM's disk, in MiB, or `undefined` for a VM with none. The
+   * disk is a file in the project's `.igloo/` that the guest mounts at
+   * `/persist`, and it outlives a stop.
+   */
+  readonly disk: number | undefined
   readonly mem: number
   /** The project's own, and the user layer's that list this project. */
   readonly modelServers: readonly ModelServerDeclaration[]
@@ -218,6 +224,7 @@ export interface Policy {
  */
 const coreDefaults = {
   brokerMem: undefined,
+  disk: undefined,
   mem: 4096,
   modelServers: [],
   network: 'internet',
@@ -230,7 +237,7 @@ const coreDefaults = {
 /**
  * Which layer may set what, and the only place that decides it.
  *
- * `mem`, `vcpu` and `brokerMem` are a user default that a project replaces, and
+ * `mem`, `vcpu`, `brokerMem` and `disk` are a user default that a project replaces, and
  * nothing bounds them: the project's file is outside the workspace, so it is
  * written by the same person whose machine the VM and its broker run on.
  * `network` is a user default, an optional user ceiling, and a project request
@@ -240,6 +247,7 @@ const coreDefaults = {
  */
 const settings = new Map<string, 'both' | 'project' | 'user'>([
   ['brokerMem', 'both'],
+  ['disk', 'both'],
   ['mem', 'both'],
   ['modelServers', 'both'],
   ['network', 'both'],
@@ -314,10 +322,10 @@ const readInt = (where: string, key: string, raw: unknown): Result.Result<number
     ? Result.succeed(raw)
     : bad(`${where}: \`${key}\` must be a positive whole number, not ${JSON.stringify(raw)}.`)
 
-/** One layer's `mem`, `vcpu` or `brokerMem`, or `undefined` where it sets none. */
+/** One layer's `mem`, `vcpu`, `brokerMem` or `disk`, or `undefined` where it sets none. */
 const readSize = (
   layer: PolicyLayer | undefined,
-  key: 'brokerMem' | 'mem' | 'vcpu',
+  key: 'brokerMem' | 'disk' | 'mem' | 'vcpu',
 ): Result.Result<number | undefined, ConfigError> =>
   Result.gen(function* () {
     if (layer === undefined || !(key in layer.values)) return undefined
@@ -1057,7 +1065,7 @@ export const compose = (layers: Layers): Result.Result<Composed, ConfigError> =>
     // A project's size replaces the user layer's. Both are read whichever one
     // decides, so a bad user default is reported in every project, not only in
     // the ones that leave it in place.
-    const sized = (key: 'brokerMem' | 'mem' | 'vcpu') =>
+    const sized = (key: 'brokerMem' | 'disk' | 'mem' | 'vcpu') =>
       Result.gen(function* () {
         const fallback = yield* readSize(user, key)
         return (yield* readSize(project, key)) ?? fallback
@@ -1065,6 +1073,7 @@ export const compose = (layers: Layers): Result.Result<Composed, ConfigError> =>
     const vcpu = (yield* sized('vcpu')) ?? coreDefaults.vcpu
     const mem = (yield* sized('mem')) ?? coreDefaults.mem
     const brokerMem = (yield* sized('brokerMem')) ?? coreDefaults.brokerMem
+    const disk = (yield* sized('disk')) ?? coreDefaults.disk
 
     const ceiling =
       'networkCeiling' in userValues
@@ -1212,6 +1221,7 @@ export const compose = (layers: Layers): Result.Result<Composed, ConfigError> =>
       notes: [...quiet, ...unused],
       policy: {
         brokerMem,
+        disk,
         mem,
         modelServers,
         network,

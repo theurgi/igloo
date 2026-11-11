@@ -7,6 +7,7 @@ import * as Spec from './Spec.ts'
 const facts: Spec.Facts = {
   iglooFlakePath: '/store/igloo',
   cid: 1234,
+  diskImage: '/home/you/api/.igloo/disk.img',
   homeDir: '/home/you/api/.igloo/home',
   label: 'api',
   publicKey: 'ssh-ed25519 AAAA igloo',
@@ -19,6 +20,7 @@ const facts: Spec.Facts = {
 
 const policy: Config.Policy = {
   brokerMem: undefined,
+  disk: undefined,
   mem: 4096,
   modelServers: [],
   network: 'internet',
@@ -32,6 +34,21 @@ const file = (path: string) => ({ _tag: 'File', path }) as const
 
 const planFor = (overrides: Partial<Config.Policy>, at: Spec.Facts = facts): Spec.Plan =>
   Spec.fromConfig({ content: [], policy: { ...policy, ...overrides } }, at)
+
+describe('Spec.fromConfig, on the disk', () => {
+  it('gives the runner no disk without one in policy', () => {
+    assert.isUndefined(planFor({}).runner.disk)
+  })
+
+  it("gives the runner the project's file, and not its size", () => {
+    const small = planFor({ disk: 20480 })
+    assert.deepStrictEqual(small.runner.disk, { image: facts.diskImage })
+    // A disk that grows is the same runner, and a launch that says so.
+    const large = planFor({ disk: 40960 })
+    assert.deepStrictEqual(large.runner, small.runner)
+    assert.notStrictEqual(large.hostSide, small.hostSide)
+  })
+})
 
 describe('Spec.fromConfig, on where each credential goes', () => {
   const plan = planFor({
@@ -202,9 +219,10 @@ describe('Spec.fromConfig, on what the drift report hashes', () => {
     assert.strictEqual(one.hostSide, other.hostSide)
   })
 
-  it('renders different text for a different grant, destination, port or memory bound', () => {
+  it('renders different text for a different grant, destination, port, memory bound or disk size', () => {
     const base = planFor({ secrets: [grant(['you/api'], 'ONE')], tunnel: ['pypi.org'] })
     for (const changed of [
+      planFor({ disk: 20480, secrets: [grant(['you/api'], 'ONE')], tunnel: ['pypi.org'] }),
       planFor({ brokerMem: 512, secrets: [grant(['you/api'], 'ONE')], tunnel: ['pypi.org'] }),
       planFor({ secrets: [grant(['you/web'], 'ONE')], tunnel: ['pypi.org'] }),
       planFor({ secrets: [grant(['you/api'], 'ONE')], tunnel: 'any' }),

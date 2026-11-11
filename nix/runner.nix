@@ -81,6 +81,18 @@ let
       # there, which can copy it anywhere, including into a share that
       # persists.
       credentials ? [ ],
+      # A disk of the guest's own that outlives a stop, as
+      # { image = "/absolute/host/path"; }, or null for a VM with none.
+      #
+      # `image` is a host file QEMU opens read-write and hands to the guest
+      # whole, so whatever it holds afterwards is the guest's. The caller
+      # creates it, at the size it should have, before the VM starts:
+      # nothing here creates, sizes or formats it. The guest formats it on
+      # first use and mounts it at /persist.
+      #
+      # A size is not an argument, so a VM whose disk grows is the same
+      # runner.
+      disk ? null,
       # Git through the host's credential broker, as
       # { hosts = [ "github.com" ]; } — or null for a VM with no git grant,
       # which is the default.
@@ -131,6 +143,9 @@ let
       lib.assertMsg (builtins.match "[A-Za-z0-9_][A-Za-z0-9_.-]*" credential.name != null)
         "credential name ${credential.name} must be letters, digits, _, . or -, starting with a letter, digit or underscore"
     ) credentials;
+    assert lib.assertMsg (
+      disk == null || lib.hasPrefix "/" disk.image
+    ) "disk.image must be an absolute path";
     let
       # Send the guest's git to the broker for the hosts it holds a grant
       # for. An HTTPS URL reaches it as written; `git@host:` and
@@ -215,6 +230,50 @@ let
                 fi
               ''
             ) brokerFiles;
+          };
+        };
+
+      # The serial QEMU gives the disk, which is how the guest finds it:
+      # udev names a virtio disk by its serial, so the mount does not depend
+      # on the order devices were attached in.
+      diskSerial = "igloo-disk";
+
+      # One volume, or none. `autoCreate` off keeps the runner's script from
+      # creating or formatting anything on the host, and `mountPoint` null
+      # keeps microvm.nix from mounting it, since `diskModule` does.
+      #
+      # QEMU splits a drive's parameters on commas, so a comma in the path
+      # is doubled, as in `credentialArgs`.
+      volumes = lib.optional (disk != null) {
+        autoCreate = false;
+        direct = false;
+        image = lib.replaceStrings [ "," ] [ ",," ] disk.image;
+        imageType = "raw";
+        mountPoint = null;
+        readOnly = false;
+        serial = diskSerial;
+      };
+
+      # Content, not policy: what is held is which host file the guest gets.
+      # A module that mounts it elsewhere, or not at all, changes only what
+      # the guest does with its own disk.
+      diskModule =
+        { ... }:
+        {
+          fileSystems."/persist" = {
+            device = "/dev/disk/by-id/virtio-${diskSerial}";
+            fsType = "ext4";
+            # Formatted by the guest when it holds no filesystem, and grown
+            # to the device when the host file has been enlarged.
+            autoFormat = true;
+            autoResize = true;
+            # Mounted before the system starts, so that a store overlay or
+            # a service's state can live on it.
+            neededForBoot = true;
+            # Blocks the guest frees are freed in the host's file as well,
+            # which then holds what the guest uses rather than the most it
+            # ever used.
+            options = [ "discard" ];
           };
         };
 
@@ -332,7 +391,8 @@ let
         # the user who launched the VM, and each of these is interpolated
         # into one of them or into QEMU's command line: shell before launch,
         # shell whose stdout becomes QEMU arguments, host files created and
-        # formatted, and a host file handed to the guest. Nothing else here
+        # formatted or opened as the guest's disks, and a host file handed
+        # to the guest. Nothing else here
         # defines them, so without these a content module's definition would
         # be the only one — and `preStart` is `types.lines`, which
         # concatenates rather than conflicts, so it would not even need a
@@ -340,7 +400,13 @@ let
         "microvm.credentialFiles".value = { };
         "microvm.extraArgsScript".value = null;
         "microvm.preStart".value = "";
-        "microvm.volumes".value = [ ];
+        # Compared on the fields that reach the host: the file, whether the
+        # runner's script creates it, and how QEMU opens it. The option's
+        # type adds fields to each entry, some with no default.
+        "microvm.volumes" = {
+          value = volumes;
+          same = held: volumeFields held == volumeFields volumes;
+        };
 
         # The hypervisor the host runs, and the package set the runner's
         # scripts are built from. `pkgs` here is igloo's own, resolved
@@ -392,6 +458,7 @@ let
           microvm.nixosModules.microvm
           coreModule
         ]
+        ++ lib.optional (disk != null) diskModule
         ++ lib.optional (gitBroker != null) gitBrokerModule
         ++ lib.optional (brokerAuthority != null) brokerAuthorityModule
         ++ lib.optional (brokerEnv != { }) brokerEnvModule
@@ -511,6 +578,17 @@ let
           socket
           source
           tag
+          ;
+      });
+      volumeFields = map (volume: {
+        inherit (volume)
+          autoCreate
+          direct
+          image
+          imageType
+          mountPoint
+          readOnly
+          serial
           ;
       });
       overridden = lib.attrNames (

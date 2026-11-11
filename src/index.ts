@@ -180,6 +180,7 @@ const specFor = Effect.fnUntraced(function* (input: { readonly cid: Option.Optio
   const plan = Spec.fromConfig(config, {
     iglooFlakePath,
     cid: project.cid,
+    diskImage: project.diskImage,
     homeDir: project.homeDir,
     label: project.label,
     publicKey: key.publicKey,
@@ -225,9 +226,8 @@ const specFor = Effect.fnUntraced(function* (input: { readonly cid: Option.Optio
           ),
         }
       : {}),
-    'the broker grants and memory, tunnel destinations and published ports': LaunchInputs.digest(
-      plan.hostSide,
-    ),
+    'the broker grants and memory, disk size, tunnel destinations and published ports':
+      LaunchInputs.digest(plan.hostSide),
   }
 
   return {
@@ -239,6 +239,10 @@ const specFor = Effect.fnUntraced(function* (input: { readonly cid: Option.Optio
     tunnel: config.policy.tunnel,
     cid: project.cid,
     credentials: plan.credentials,
+    disk:
+      plan.runner.disk === undefined || config.policy.disk === undefined
+        ? undefined
+        : { image: plan.runner.disk.image, size: config.policy.disk },
     evaluation: yield* Evaluation.forRunner({
       iglooFlakePath,
       runnerDir: project.runnerDir,

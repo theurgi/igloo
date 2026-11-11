@@ -83,6 +83,11 @@ export interface RunnerSpec {
    */
   readonly contentModules: readonly string[]
   /**
+   * The host file QEMU opens as the guest's disk, or `undefined` for a VM with
+   * none. Its size is not here: the runner is the same whatever the file holds.
+   */
+  readonly disk: { readonly image: string } | undefined
+  /**
    * The hosts the broker answers git for, whose SSH remotes the guest rewrites
    * to HTTPS, or `undefined` for a VM with no git grant.
    */
@@ -220,6 +225,7 @@ export const render = (spec: RunnerSpec): string =>
         brokerPackages = ${renderBrokerPackages(spec.brokerPackages)}
         contentModules = ${renderContent(spec.contentModules)}
         credentials = ${renderCredentials(spec.credentials)}
+        disk = ${spec.disk === undefined ? 'null' : `{ image = "${nixString(spec.disk.image)}"; }`};
         gitBroker = ${renderGitBroker(spec.gitBroker)}
         hostName = "${nixString(spec.hostName)}";
         mem = ${String(spec.mem)};

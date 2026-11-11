@@ -17,6 +17,7 @@ const spec: Flake.RunnerSpec = {
   brokerPackages: [],
   contentModules: [],
   credentials: [],
+  disk: undefined,
   gitBroker: undefined,
   hostName: 'api',
   mem: 4096,
@@ -57,6 +58,14 @@ describe('Flake.render', () => {
     assert.include(text, 'tag = "workspace"')
     assert.include(text, 'mountPoint = "/root"')
     assert.include(text, 'tag = "home"')
+  })
+
+  it('names the disk by its file, or says there is none', () => {
+    assert.include(Flake.render(spec), 'disk = null;')
+    assert.include(
+      Flake.render({ ...spec, disk: { image: '/home/you/projects/a"${b}/.igloo/disk.img' } }),
+      'disk = { image = "/home/you/projects/a\\"\\${b}/.igloo/disk.img"; };',
+    )
   })
 
   it('does not emit the store share, which mkRunner adds itself', () => {

@@ -36,6 +36,12 @@ export interface Project {
   readonly iglooDir: string
   /** Guest CID, a pure function of `root`. */
   readonly cid: number
+  /**
+   * The file that is the guest's disk, for a project whose policy gives it one.
+   * Outside both shares, so the guest reaches it as a block device and never as
+   * a file.
+   */
+  readonly diskImage: string
   /** Backs the guest's `/root`. */
   readonly homeDir: string
   /** `<label>-<cid in hex>`. Names the slice and both units. */
@@ -77,6 +83,7 @@ export const forRoot = (root: string, cid?: number): Project => {
   return {
     iglooDir,
     cid: vsockCid,
+    diskImage: path.join(iglooDir, 'disk.img'),
     homeDir: path.join(iglooDir, 'home'),
     id: `${label}-${vsockCid.toString(16)}`,
     label,

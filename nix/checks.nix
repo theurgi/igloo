@@ -370,4 +370,56 @@ lib.mapAttrs refusedOnEvaluation {
     builtins.seq (mkRunner args).drvPath (
       pkgs.runCommandLocal "igloo-check-core-disabled" { } "touch $out"
     );
+
+  # A VM with a disk. The runner holds the one image it was given, opened
+  # the one way, and its script creates nothing; a content module that
+  # names another image, or has the runner create and format this one, is
+  # refused for `microvm.volumes` as it is in a VM with none.
+  disk =
+    let
+      withDisk = testVm // {
+        disk.image = "/var/empty/igloo-check.img";
+      };
+      refused =
+        module:
+        overridden (withDisk // { contentModules = withDisk.contentModules ++ [ module ]; }) == [
+          "microvm.volumes"
+        ];
+      runner = mkRunner withDisk;
+    in
+    assert lib.assertMsg (
+      overridden withDisk == [ ]
+    ) "disk: mkRunner refuses its own disk: ${lib.concatStringsSep ", " (overridden withDisk)}";
+    assert lib.assertMsg (runner.drvPath != reference) "disk: a disk left the runner unchanged";
+    assert lib.assertMsg (refused (
+      { lib, ... }:
+      {
+        microvm.volumes = lib.mkOverride 9 [
+          {
+            autoCreate = false;
+            image = "/etc/hostname";
+            mountPoint = null;
+            serial = "igloo-disk";
+          }
+        ];
+      }
+    )) "disk: mkRunner accepts another image for the disk";
+    assert lib.assertMsg (refused (
+      { lib, ... }:
+      {
+        microvm.volumes = lib.mkOverride 9 [
+          {
+            image = "/var/empty/igloo-check.img";
+            mountPoint = null;
+            serial = "igloo-disk";
+            size = 16;
+          }
+        ];
+      }
+    )) "disk: mkRunner accepts a disk its script would create and format";
+    pkgs.runCommandLocal "igloo-check-disk" { } ''
+      grep -q -- 'file=/var/empty/igloo-check.img,' ${runner}/bin/microvm-run
+      ! grep -q mkfs ${runner}/bin/microvm-run
+      touch $out
+    '';
 }

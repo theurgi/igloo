@@ -166,6 +166,7 @@ generated file.
 | `mem`            | user and project | `4096`              | Guest memory, in MiB.                                    |
 | `vcpu`           | user and project | `4`                 | Guest CPUs.                                              |
 | `brokerMem`      | user and project | unset: no bound     | The most memory the VM's broker may use, in MiB.         |
+| `disk`           | user and project | unset: no disk      | The size of the VM's own disk, in MiB.                   |
 | `network`        | user and project | `"internet"`        | What the VM can reach: `none`, `restricted`, `internet`. |
 | `networkCeiling` | user             | unset: no ceiling   | The most any project may ask for.                        |
 | `tunnel`         | project          | `[ ]`               | Destinations under `restricted`.                         |
@@ -194,6 +195,27 @@ many requests and tunnels the guest has open at once, not with how much they car
 too low fails the requests that reach it. Either way, if memory runs out the kernel kills the broker
 before anything else, and its unit starts it again. See
 [Troubleshooting](troubleshooting.md#when-the-broker-is-killed).
+
+**`disk`** gives the VM a disk of its own, mounted in the guest at `/persist`, as a positive whole
+number of MiB: `disk = 20 * 1024;` is 20 GiB. Like `mem`, a project's value replaces the user
+layer's. Unset in both, the VM has none, and `/workspace` and `/root` are the only places where what
+the guest writes outlives a stop. Those two are directories of yours that the guest reaches through
+the host, which is slow for many small files and keeps every file owned by you. The disk is an
+ordinary filesystem that belongs to the guest, so it suits what the shares do not: a package store,
+a database's files, container images.
+
+The disk is one file, `.igloo/disk.img` in the project, which igloo creates at the next `igloo up`.
+The guest formats it the first time it boots with it.
+
+- **It takes the space the guest uses, not its size.** The file is sparse, and space the guest frees
+  goes back to the host. `ls -l` shows its size, and `du -h .igloo/disk.img` what it takes.
+- **A larger `disk` grows it** at the next `igloo up`, keeping what it holds. A smaller one is
+  refused, since a disk cannot be cut short without losing what was at the end.
+- **To start again with an empty disk**, run `igloo down` and delete `.igloo/disk.img`. Removing
+  `disk` from the policy leaves the file where it is, unused, until you delete it.
+- **What is on it is the guest's.** Like `/root`, it is written by whatever runs in the guest and is
+  still there after `igloo down`. If you want a VM with nothing left over from the last one, delete
+  the file as well.
 
 **`network`** set in the user layer is the default for every project. Set in a project, it is that
 project's request, which may narrow `networkCeiling` and not widen it. The default is `"internet"`

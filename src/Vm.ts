@@ -1,7 +1,7 @@
 import type { Binaries } from './Binaries.ts'
 import type { Grant, TunnelScope } from './broker.ts'
 
-import { Clock, Duration, Effect, FileSystem, Result, Schema, Stream } from 'effect'
+import { ByteSize, Clock, Duration, Effect, FileSystem, Result, Schema, Stream } from 'effect'
 import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
 import { dirname } from 'node:path'
 
@@ -132,6 +132,11 @@ export interface VmSpec extends VmTarget {
    * second `attach` to a running VM never re-prompts for a passphrase.
    */
   readonly credentials: readonly Secrets.Delivery[]
+  /**
+   * The guest's disk: the host file QEMU opens for it, and the size policy
+   * gives it, in MiB. `undefined` for a VM with none.
+   */
+  readonly disk: { readonly image: string; readonly size: number } | undefined
   /**
    * What evaluating the runner may read and fetch. The evaluation runs the
    * content layers, which is Nix someone other than igloo wrote, so it is
@@ -707,6 +712,65 @@ const brokerCredentialsDir = (target: VmTarget): string => `${target.runtimeDir}
  * removal that fails is tried again once the user has every permission on each
  * directory left, and a directory that survives that is not reused.
  */
+/**
+ * What a launch does to the disk's file, from the size it has, if it exists,
+ * and the size policy gives it, both in bytes.
+ *
+ * A file is only ever made longer. The guest's filesystem fills the device, so
+ * cutting the file short would cut the filesystem short, and whatever it held
+ * past that point.
+ */
+export const diskStep = (
+  held: bigint | undefined,
+  wanted: bigint,
+): 'create' | 'grow' | 'keep' | 'refuse' =>
+  held === undefined ? 'create' : held < wanted ? 'grow' : held === wanted ? 'keep' : 'refuse'
+
+/**
+ * Make the disk's file the size policy gives it, creating it if it is not
+ * there.
+ *
+ * Sparse: the file is given a length and no content, so it takes the space the
+ * guest has written to and no more. Nothing is written into it here, and
+ * nothing here reads it: the guest finds an empty device and formats it, or a
+ * longer one and grows into it.
+ */
+export const ensureDisk = Effect.fnUntraced(function* (disk: {
+  readonly image: string
+  readonly size: number
+}) {
+  const fs = yield* FileSystem.FileSystem
+  const wanted = BigInt(disk.size) * 1024n * 1024n
+  const failed = (doing: string) => () => new VmError({ message: `cannot ${doing} ${disk.image}` })
+  const info = yield* Effect.result(fs.stat(disk.image))
+  if (Result.isSuccess(info) && info.success.type !== 'File') {
+    return yield* new VmError({
+      message: `${disk.image} is where this project's disk goes, and it is not a file. Move it away and run \`igloo up\` again.`,
+    })
+  }
+  const held = Result.isSuccess(info) ? ByteSize.toBigInt(info.success.size) : undefined
+  switch (diskStep(held, wanted)) {
+    case 'create':
+      // `wx`, so a file that appeared since is an error rather than a file
+      // this truncates, and private to the user from the start: it will hold
+      // whatever the guest keeps.
+      yield* fs
+        .writeFile(disk.image, new Uint8Array(), { flag: 'wx', mode: 0o600 })
+        .pipe(Effect.mapError(failed('create')))
+      yield* fs.truncate(disk.image, Number(wanted)).pipe(Effect.mapError(failed('size')))
+      return
+    case 'grow':
+      yield* fs.truncate(disk.image, Number(wanted)).pipe(Effect.mapError(failed('grow')))
+      return
+    case 'keep':
+      return
+    case 'refuse':
+      return yield* new VmError({
+        message: `${disk.image} is ${String((held ?? 0n) / (1024n * 1024n))} MiB and \`disk\` is ${String(disk.size)}. A disk does not shrink: set \`disk\` to its size or more, or delete the file to start with an empty one.`,
+      })
+  }
+})
+
 const removeAll = Effect.fnUntraced(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem
   const removal = fs.remove(dir, { force: true, recursive: true })
@@ -1322,6 +1386,10 @@ const launch = Effect.fnUntraced(function* (bins: Binaries, spec: VmSpec, boot: 
       .pipe(Effect.mapError(() => new VmError({ message: `cannot create ${dir}` })))
   }
 
+  // Before the build, so that a disk this launch would refuse stops it before
+  // the wait.
+  if (spec.disk !== undefined) yield* ensureDisk(spec.disk)
+
   if (spec.broker) {
     for (const dir of [brokerDir(spec), brokerCredentialsDir(spec)]) {
       yield* fs
@@ -1475,7 +1543,8 @@ const launch = Effect.fnUntraced(function* (bins: Binaries, spec: VmSpec, boot: 
         argv: [`${outPath}/bin/microvm-run`],
         // Content chose the kernel and the initrd it loads into the guest, and
         // much of the rest of its command line, so it sees the store, this VM's
-        // runtime directory and its two devices, and nothing else of the host.
+        // runtime directory, its disk and its two devices, and nothing else of
+        // the host.
         confine: {
           kind: 'hypervisor',
           devices: ['/dev/kvm', '/dev/vhost-vsock'],
@@ -1483,8 +1552,9 @@ const launch = Effect.fnUntraced(function* (bins: Binaries, spec: VmSpec, boot: 
           // directory only so that systemd can hand them to the broker.
           hidden: [brokerCredentialsDir(spec)],
           // The QMP socket it creates, the vhost-user sockets it connects to,
-          // and the delivered credentials it passes in through `fw_cfg`.
-          writable: [spec.runtimeDir],
+          // and the delivered credentials it passes in through `fw_cfg`; and
+          // the one file that is this VM's disk, for a VM that has one.
+          writable: [spec.runtimeDir, ...(spec.disk === undefined ? [] : [spec.disk.image])],
         },
         // Carries the project root for `list` to read back. The QEMU unit rather
         // than virtiofsd's because this one exists for exactly as long as the guest.
