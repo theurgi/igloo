@@ -85,13 +85,13 @@ It checks on a real host what the tests cannot reach:
   sockets, and only the TCP ports it is allowed, and can make none of the sockets Landlock does not
   govern.
 - **Launches.** A scratch project is launched about a dozen times: in the fallback sandbox, with
-  layers that try to read past what evaluation may, with a networked derivation, a published port,
-  delivered and brokered credentials, and under `restricted` and `internet`. Each launch is checked
-  from the host and from inside the guest: the virtio-fs daemons' sandboxes, the guest's store, and
-  the confinement of QEMU, the broker, the tether and the port forward, read off their running
-  processes, with what QEMU and the broker hold of the user manager's environment. The first launch
-  also checks that memory the guest frees goes back to the host. One launch starts from a runtime
-  directory left unwritable, with links planted in it.
+  layers that try to read past what evaluation may, with a networked derivation, a published port, a
+  disk, a store the guest adds to, delivered and brokered credentials, and under `restricted` and
+  `internet`. Each launch is checked from the host and from inside the guest: the virtio-fs daemons'
+  sandboxes, the guest's store, and the confinement of QEMU, the broker, the tether and the port
+  forward, read off their running processes, with what QEMU and the broker hold of the user
+  manager's environment. The first launch also checks that memory the guest frees goes back to the
+  host. One launch starts from a runtime directory left unwritable, with links planted in it.
 - **The broker against real upstreams.** Its grants and refusals for github.com, api.anthropic.com
   and a stand-in model server; the tunnel, and its refusal of names that resolve inside the host;
   and a broker killed outright, or for memory, started again.
