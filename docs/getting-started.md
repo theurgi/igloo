@@ -43,6 +43,7 @@ demo/
 │   ├── project.json       the marker
 │   ├── .gitignore         `*`, so none of this is committed
 │   ├── home/              the guest's /root
+│   ├── disk.img           the guest's disk, if the policy gives it one
 │   ├── ssh/               the key the host connects to the guest with
 │   ├── runner/            the generated flake that builds this VM
 │   ├── runners/current    a garbage-collector root for the VM's closure
@@ -71,15 +72,19 @@ To remove a project, `igloo down` it and delete the directory.
 
 ## What the guest sees
 
-| Guest path   | Host source      | Notes                                          |
-| ------------ | ---------------- | ---------------------------------------------- |
-| `/workspace` | `workspace/`     | Read-write. Where a login shell starts.        |
-| `/root`      | `.igloo/home/`   | Read-write, and kept across boots.             |
-| `/nix/store` | the host's store | Read-only, and holding only this VM's closure. |
+| Guest path   | Host source       | Notes                                            |
+| ------------ | ----------------- | ------------------------------------------------ |
+| `/workspace` | `workspace/`      | Read-write. Where a login shell starts.          |
+| `/root`      | `.igloo/home/`    | Read-write, and kept across boots.               |
+| `/nix/store` | the host's store  | Read-only, and holding only this VM's closure.   |
+| `/persist`   | `.igloo/disk.img` | Only with `disk` set. A disk of the guest's own. |
 
 Everything else is a tmpfs, built fresh on every boot. A file written outside `/workspace` and
 `/root` is gone after `igloo down`, and so is anything installed imperatively. Packages come from
 the layers instead.
+
+A project whose policy sets [`disk`](configuration.md#policy-settings) has one more place that is
+kept: `/persist`, a filesystem of the guest's own, for what the two shares hold badly.
 
 `/root` is where state that should outlive a boot lives: shell configuration in `~/.bash_profile`,
 each agent's configuration and history, and the guest's SSH host keys. It is also written by

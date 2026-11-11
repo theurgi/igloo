@@ -2,7 +2,7 @@ import type { VmSpec } from './Vm.ts'
 
 import { BunServices } from '@effect/platform-bun'
 import { afterAll, assert, beforeAll, describe, it, vi } from '@effect/vitest'
-import { Clock, Effect, FileSystem, PlatformError, Result, Schema } from 'effect'
+import { Clock, Effect, FileSystem, Option, PlatformError, Result, Schema } from 'effect'
 import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
 import { homedir } from 'node:os'
 import { basename, dirname } from 'node:path'
@@ -520,6 +520,7 @@ const specIn = (dir: string, label: string, cid = 42): VmSpec => ({
   broker: false,
   brokered: [],
   brokerMem: undefined,
+  disk: undefined,
   brokerTls: undefined,
   tunnel: [],
   cid,
@@ -542,6 +543,69 @@ const specIn = (dir: string, label: string, cid = 42): VmSpec => ({
   unitEnv: { PATH },
   owner: { gid: 100, uid: 1000 },
   virtiofsdThreads: 2,
+})
+
+describe('Vm.ensureDisk', () => {
+  const MiB = 1024 * 1024
+  const sizeOf = Effect.fnUntraced(function* (file: string) {
+    const fs = yield* FileSystem.FileSystem
+    return Number((yield* fs.stat(file)).size)
+  })
+
+  it.effect('creates a file of the size asked for, private and holding nothing', () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const image = `${yield* fs.makeTempDirectoryScoped()}/disk.img`
+
+      yield* Vm.ensureDisk({ image, size: 64 })
+
+      assert.strictEqual(yield* sizeOf(image), 64 * MiB)
+      const info = yield* fs.stat(image)
+      assert.strictEqual(info.mode & 0o777, 0o600)
+      // Sparse: a length, and next to nothing allocated for it.
+      assert.isBelow(Option.getOrThrow(info.blocks) * 512, MiB)
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+  )
+
+  it.effect('grows a smaller file and keeps what it held, and leaves one of the right size', () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const image = `${yield* fs.makeTempDirectoryScoped()}/disk.img`
+      yield* fs.writeFileString(image, 'the guest wrote this')
+
+      yield* Vm.ensureDisk({ image, size: 8 })
+      yield* Vm.ensureDisk({ image, size: 8 })
+
+      assert.strictEqual(yield* sizeOf(image), 8 * MiB)
+      const head = (yield* fs.readFile(image)).subarray(0, 20)
+      assert.strictEqual(new TextDecoder().decode(head), 'the guest wrote this')
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+  )
+
+  it.effect('refuses to shrink a file, and leaves it as it was', () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const image = `${yield* fs.makeTempDirectoryScoped()}/disk.img`
+      yield* Vm.ensureDisk({ image, size: 16 })
+
+      const error = yield* Effect.flip(Vm.ensureDisk({ image, size: 8 }))
+
+      assert.include(error.message, 'is 16 MiB and `disk` is 8')
+      assert.include(error.message, 'does not shrink')
+      assert.strictEqual(yield* sizeOf(image), 16 * MiB)
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+  )
+
+  it.effect('refuses a directory where the file goes', () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const image = yield* fs.makeTempDirectoryScoped()
+
+      const error = yield* Effect.flip(Vm.ensureDisk({ image, size: 8 }))
+
+      assert.include(error.message, 'is not a file')
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+  )
 })
 
 describe('Vm.sshArgs', () => {
@@ -1130,6 +1194,35 @@ describe('Vm.up', () => {
         yield* Vm.down(fakes.binaries, spec)
       }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
     30_000,
+  )
+
+  it.live(
+    'makes the disk before QEMU starts, and stops before the build at one it would have to shrink',
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* fs.makeTempDirectoryScoped()
+        const fakes = yield* writeFakes(dir)
+        const image = `${dir}/project/.igloo/disk.img`
+        const spec = { ...specIn(dir, 'selftest-disk'), disk: { image, size: 16 } }
+        yield* Effect.addFinalizer(() => Systemd.stopSlice('systemctl', sliceOf(spec)))
+
+        yield* Vm.up(fakes.binaries, spec)
+
+        // QEMU's unit binds the file, so it starting at all says the file was
+        // there first.
+        assert.isTrue(yield* Systemd.isActive('systemctl', `igloo-${spec.id}-qemu.service`))
+        assert.strictEqual(Number((yield* fs.stat(image)).size), 16 * 1024 * 1024)
+        yield* Vm.down(fakes.binaries, spec)
+        assert.isTrue(yield* fs.exists(image), 'down removed the disk')
+
+        const error = yield* Effect.flip(
+          Vm.up(fakes.binaries, { ...spec, disk: { image, size: 8 } }),
+        )
+        assert.include(error.message, 'does not shrink')
+        assert.isFalse(yield* Systemd.isActive('systemctl', `igloo-${spec.id}-qemu.service`))
+      }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+    60_000,
   )
 
   it.live(

@@ -117,6 +117,7 @@ describe('Config.compose', () => {
   it('gives a VM with no configuration the settled defaults', () => {
     assert.deepStrictEqual(composed({}), {
       brokerMem: undefined,
+      disk: undefined,
       mem: 4096,
       modelServers: [],
       network: 'internet',
@@ -128,16 +129,20 @@ describe('Config.compose', () => {
   })
 
   it('lets the user layer set the sizes', () => {
-    assert.deepStrictEqual(composed({ user: { brokerMem: 512, mem: 8192, vcpu: 8 } }), {
-      brokerMem: 512,
-      mem: 8192,
-      modelServers: [],
-      network: 'internet',
-      ports: [],
-      secrets: [],
-      tunnel: 'any',
-      vcpu: 8,
-    })
+    assert.deepStrictEqual(
+      composed({ user: { brokerMem: 512, disk: 20480, mem: 8192, vcpu: 8 } }),
+      {
+        brokerMem: 512,
+        disk: 20480,
+        mem: 8192,
+        modelServers: [],
+        network: 'internet',
+        ports: [],
+        secrets: [],
+        tunnel: 'any',
+        vcpu: 8,
+      },
+    )
   })
 
   it("lets a project replace the user's network default", () => {
@@ -226,6 +231,8 @@ describe('Config.compose', () => {
       mem: 8192,
       vcpu: 8,
     })
+    assert.strictEqual(composed({ project: { disk: 40960 }, user: { disk: 20480 } }).disk, 40960)
+    assert.strictEqual(composed({ user: { disk: 20480 } }).disk, 20480)
     // Larger than the user layer's, too: nothing bounds a project's size.
     assert.strictEqual(composed({ project: { mem: 65536 } }).mem, 65536)
   })
@@ -277,6 +284,8 @@ describe('Config.compose', () => {
       { vcpu: '4' },
       { brokerMem: 0 },
       { brokerMem: '512M' },
+      { disk: 0 },
+      { disk: '20G' },
     ]) {
       assert.isString(refused({ user: values }))
       assert.include(refused({ project: values }), projectPolicyPath)
@@ -354,6 +363,7 @@ describe('Config.resolve', () => {
 
         assert.deepStrictEqual(config.policy, {
           brokerMem: undefined,
+          disk: undefined,
           mem: 2047,
           modelServers: [],
           network: 'none',

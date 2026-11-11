@@ -745,8 +745,12 @@ print "done\n";`
       yield* fs.makeDirectory(hidden, { recursive: true })
       yield* fs.makeDirectory(sibling)
       yield* fs.writeFileString(`${writable}/own`, 'its own')
+      // A file by itself, as a VM's disk is: bound alone, with nothing beside
+      // it in its directory coming along.
+      const alone = `${sibling}/alone`
       yield* fs.writeFileString(`${hidden}/secret`, 'not for the unit')
       yield* fs.writeFileString(`${sibling}/secret`, 'not for the unit')
+      yield* fs.writeFileString(alone, 'its own too')
       // A file of the user's, so the home directory has something to hide. The
       // directory itself may be there, when `dir` is under it: systemd makes
       // the path down to a bind in the unit's empty root, and nothing beside it.
@@ -755,6 +759,7 @@ print "done\n";`
       yield* fs.writeFileString(inHome, 'not for the unit')
       const probes = [
         `${writable}/own`,
+        alone,
         `${hidden}/secret`,
         `${sibling}/secret`,
         inHome,
@@ -766,7 +771,7 @@ print "done\n";`
         argv: [
           bash,
           '-c',
-          `for p in ${probes.map(p => `'${p}'`).join(' ')}; do [ -r "$p" ] && echo "$p"; done > sight; exec ${sleep} 30`,
+          `for p in ${probes.map(p => `'${p}'`).join(' ')}; do [ -r "$p" ] && echo "$p"; done > sight; echo more >> '${alone}'; exec ${sleep} 30`,
         ],
         confine: {
           kind: 'hypervisor',
@@ -775,7 +780,7 @@ print "done\n";`
           // unit cannot start.
           devices: ['/dev/kvm', '/dev/igloo-selftest-absent'],
           hidden: [hidden, `${writable}/absent`],
-          writable: [writable],
+          writable: [writable, alone],
         },
         name,
         slice,
@@ -790,8 +795,9 @@ print "done\n";`
       const kvm = yield* fs.exists('/dev/kvm')
       assert.deepStrictEqual(
         (yield* fs.readFileString(`${writable}/sight`)).trim().split('\n'),
-        kvm ? [`${writable}/own`, '/dev/kvm'] : [`${writable}/own`],
+        kvm ? [`${writable}/own`, alone, '/dev/kvm'] : [`${writable}/own`, alone],
       )
+      assert.strictEqual(yield* fs.readFileString(alone), 'its own toomore\n')
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
   )
 

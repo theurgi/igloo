@@ -11,6 +11,7 @@ import * as Vm from './Vm.ts'
 export interface Facts {
   readonly iglooFlakePath: string
   readonly cid: number
+  readonly diskImage: string
   readonly homeDir: string
   readonly label: string
   /** The public half of the key the host connects with, authorized in the guest. */
@@ -34,8 +35,8 @@ export interface Plan {
   readonly credentials: readonly Secrets.Delivery[]
   readonly grants: readonly Broker.Grant[]
   /**
-   * The broker's grants and memory bound, where the tunnel may go and the
-   * published ports, as the text the drift report hashes.
+   * The broker's grants and memory bound, the disk's size, where the tunnel
+   * may go and the published ports, as the text the drift report hashes.
    */
   readonly hostSide: string
   readonly runner: Flake.RunnerSpec
@@ -160,6 +161,7 @@ export const fromConfig = (
     brokerPackages: Broker.guestPackages(grants),
     contentModules: config.content.map(({ file }) => file),
     credentials: credentials.map(({ hostPath, name }) => ({ hostPath, name })),
+    disk: config.policy.disk === undefined ? undefined : { image: facts.diskImage },
     gitBroker: gitHosts.length === 0 ? undefined : { hosts: gitHosts },
     hostName: Flake.hostNameFrom(facts.label),
     mem: config.policy.mem,
@@ -190,6 +192,9 @@ export const fromConfig = (
       )
       .toSorted(),
     `brokerMem=${config.policy.brokerMem === undefined ? 'unbounded' : String(config.policy.brokerMem)}`,
+    // The size is the host file's and no part of the runner, so it is here that
+    // a change to it shows.
+    `disk=${config.policy.disk === undefined ? 'none' : String(config.policy.disk)}`,
     `tunnel=${tunnel === 'any' ? 'any' : tunnel.toSorted().join(',')}`,
     `ports=${config.policy.ports
       .map(port => `${String(port.host)}:${String(port.guest)}`)
