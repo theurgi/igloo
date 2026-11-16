@@ -382,10 +382,11 @@ is read the way a credential's [source](#sources) is, under the same rules.
   setting can send a request anywhere else, and a `host`, `url` or any other field is refused. The
   server has to listen on `127.0.0.1`: one listening only on `::1` is not reached.
 - **Endpoints:** `POST v1/chat/completions`, `POST v1/responses` and `GET v1/models`, which
-  OpenAI-compatible servers share, and nothing else. A server's other endpoints are not model calls:
-  llama-swap's other endpoints read other clients' recorded requests and its logs, unload models,
-  and pass any request through to the server behind it; llama-server's own save its state to files
-  and restore it, load and unload models, and change its settings.
+  OpenAI-compatible servers share, and `POST v1/systemone`, llama.cpp's call of a decision model,
+  which llama-swap passes on from v262. Nothing else. A server's other endpoints are not model
+  calls: llama-swap's other endpoints read other clients' recorded requests and its logs, unload
+  models, and pass any request through to the server behind it; llama-server's own save its state to
+  files and restore it, load and unload models, and change its settings.
 - **Key:** with `key`, the broker sends it as a bearer token; without, it sends no credential. The
   guest's own `Authorization` is dropped either way. A server answering `401` comes back as a `403`
   saying it wants a key.

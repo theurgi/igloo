@@ -289,10 +289,11 @@ export type InferenceOperation =
   | 'list-models'
   | 'messages'
   | 'responses'
+  | 'systemone'
 
 export type ModelServerOperation = Extract<
   InferenceOperation,
-  'chat-completions' | 'list-models' | 'responses'
+  'chat-completions' | 'list-models' | 'responses' | 'systemone'
 >
 
 /**
@@ -788,7 +789,9 @@ const inferenceEndpoints: Readonly<
 /**
  * The endpoints a model server serves, and the operation each one is: the
  * ones every OpenAI-compatible server shares, a model call in either shape and
- * the listing a client finds models by.
+ * the listing a client finds models by; and llama.cpp's call of a decision
+ * model, which answers typed questions about a state with probabilities rather
+ * than text, and finds its model as a chat completion does.
  *
  * A server's other endpoints are left out, because what they reach is not a
  * model call: some read other clients' requests, some save to files on the
@@ -799,6 +802,7 @@ const modelServerEndpoints: Readonly<Record<string, ModelServerOperation>> = {
   'v1/chat/completions': 'chat-completions',
   'v1/models': 'list-models',
   'v1/responses': 'responses',
+  'v1/systemone': 'systemone',
 }
 
 /**

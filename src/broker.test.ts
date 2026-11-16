@@ -1924,6 +1924,11 @@ describe('Broker.decide, for a model server', () => {
       server: 'llama-swap',
       upstream: 'http://127.0.0.1:8080/v1/responses',
     })
+    assert.deepStrictEqual(routed(local('/local/llama-swap/v1/systemone')), {
+      operation: 'systemone',
+      server: 'llama-swap',
+      upstream: 'http://127.0.0.1:8080/v1/systemone',
+    })
     assert.deepStrictEqual(routed(local('/local/ollama/v1/models', 'GET')), {
       operation: 'list-models',
       server: 'ollama',
@@ -1975,6 +1980,7 @@ describe('Broker.decide, for a model server', () => {
     assert.strictEqual(outcome(local('/local')), 403)
     assert.strictEqual(outcome(local('/local/LLAMA-SWAP/v1/chat/completions')), 403)
     assert.strictEqual(outcome(local('/local/llama-swap/v1/chat/completions', 'GET')), 405)
+    assert.strictEqual(outcome(local('/local/llama-swap/v1/systemone', 'GET')), 405)
     assert.strictEqual(outcome(local('/local/llama-swap/v1/models')), 405)
   })
 
@@ -2063,6 +2069,13 @@ describe('Broker.upstreamHeaders, for a model server', () => {
       'content-type': 'application/json',
     })
     assert.isNull(headers.get('content-type'))
+  })
+
+  it('describes the body of a decision model’s call, which sends one', () => {
+    const headers = headersFor(local('/local/llama-swap/v1/systemone'), undefined, {
+      'content-type': 'application/json',
+    })
+    assert.strictEqual(headers.get('content-type'), 'application/json')
   })
 })
 
