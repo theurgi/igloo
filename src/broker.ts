@@ -856,6 +856,20 @@ const apiWrites: Readonly<Record<string, readonly string[]>> = {
 }
 
 /**
+ * What `apiWrites` admits and is refused all the same, in its form.
+ *
+ * A Codespace made from a pull request: a machine of its own, billed to the
+ * token's account and open to the internet, that runs the code on the pull
+ * request's branch with whatever Codespaces secrets that account gives the
+ * repository. It reaches past the repository, as a runner's registration does.
+ * GitHub matches a path's fixed segments by case, so these are compared as
+ * they are written.
+ */
+const apiWritesRefused: Readonly<Record<string, readonly string[]>> = {
+  'pulls/*/codespaces': [...writeMethods],
+}
+
+/**
  * Whether `table`, paths in `apiWrites`' form, lets `method` write at `path`,
  * a sequence of segments.
  */
@@ -875,9 +889,12 @@ const listedIn = (
     )
   })
 
-/** Whether `apiWrites` lets `method` write at `tail`, the path past a repository. */
+/**
+ * Whether `method` may write at `tail`, the path past a repository: one
+ * `apiWrites` lists and `apiWritesRefused` does not.
+ */
 const writesTo = (method: string, tail: readonly string[]): boolean =>
-  listedIn(apiWrites, method, tail)
+  listedIn(apiWrites, method, tail) && !listedIn(apiWritesRefused, method, tail)
 
 /**
  * What a cloud profile may write, by the name it is answered at, and with

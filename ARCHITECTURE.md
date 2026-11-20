@@ -245,22 +245,24 @@ the rest is `decide`'s (`decideAddressed`). The upstream URL is built from the p
 and the grant's own copy of what it allows: a git request for the repository as the grant spells it,
 a push only for one in its `write` (`routeGit`), a read through a git grant's API under `repos/` and
 that repository or of the API's root, a write there for one in its `write` at a path `apiWrites`
-lists, or a `POST` to the API's fixed `graphql` path (`routeApi`), an upload of a release's asset
-for one in its `write` at the fixed path its API takes one at (`routeUploads`), a model provider's
-request for an endpoint its profile lists in `inferenceEndpoints` (`routeInference`), a cloud
-account's read under its REST API's version, a write there at a path `cloudWrites` lists, a `POST`
-to its fixed `graphql` path, and a call of one of its serverless endpoints under `v2/<endpoint>/`
-(`routeCloud`), and a model server's on loopback, at the port its grant names (`routeModelServer`).
-Nothing the guest sends reaches the upstream URL but an OpenRouter model listing's query, an API
-request's path past its repository and its query, and a cloud account's request's path past its
-version or endpoint and its query: each query rebuilt so that each name and value is encoded, and
-the path's segments as the URL parser left them, with every `.` and `..` resolved, so that none
-leaves the repository, the version or the endpoint. A path holding a percent-escape or an empty
-segment is refused, but for the one ending a host's root, and so is a push or a REST write for a
-repository no grant's `write` lists, a push at its ref advertisement as well as at the push, a REST
-write `apiWrites` does not list, and a cloud account's write `cloudWrites` does not list: for
-Runpod, what reaches past what the account runs to who may use it, its organization's members,
-invitations, groups and roles, the account's SSH keys, cost centres and ECR delegations.
+lists and `apiWritesRefused` does not, or a `POST` to the API's fixed `graphql` path (`routeApi`),
+an upload of a release's asset for one in its `write` at the fixed path its API takes one at
+(`routeUploads`), a model provider's request for an endpoint its profile lists in
+`inferenceEndpoints` (`routeInference`), a cloud account's read under its REST API's version, a
+write there at a path `cloudWrites` lists, a `POST` to its fixed `graphql` path, and a call of one
+of its serverless endpoints under `v2/<endpoint>/` (`routeCloud`), and a model server's on loopback,
+at the port its grant names (`routeModelServer`). Nothing the guest sends reaches the upstream URL
+but an OpenRouter model listing's query, an API request's path past its repository and its query,
+and a cloud account's request's path past its version or endpoint and its query: each query rebuilt
+so that each name and value is encoded, and the path's segments as the URL parser left them, with
+every `.` and `..` resolved, so that none leaves the repository, the version or the endpoint. A path
+holding a percent-escape or an empty segment is refused, but for the one ending a host's root, and
+so is a push or a REST write for a repository no grant's `write` lists, a push at its ref
+advertisement as well as at the push, a REST write `apiWrites` does not list or `apiWritesRefused`
+does, a Codespace made from a pull request among them, and a cloud account's write `cloudWrites`
+does not list: for Runpod, what reaches past what the account runs to who may use it, its
+organization's members, invitations, groups and roles, the account's SSH keys, cost centres and ECR
+delegations.
 
 A cloud account's GraphQL request is the one body the broker reads, since a query and a mutation
 share its path, and a mutation can mint the account a key the guest would then hold. It is read

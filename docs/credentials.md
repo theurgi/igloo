@@ -193,10 +193,11 @@ reachable there, never where "there" is. The one upstream policy places is a
     scopes.
   - Writing through the REST API, under `repos/<owner>/<repo>/` for a repository in `repos.write`,
     what `gh` writes: issues and pull requests, with their comments, labels, reviews and merges,
-    anywhere under `issues/` and `pulls/`; releases, anywhere under `releases/`; a run's rerun and
-    cancel and a workflow's dispatch, at `actions/runs/<id>/rerun`, `rerun-failed-jobs`, `cancel`
-    and `force-cancel`, `actions/jobs/<id>/rerun` and `actions/workflows/<id>/dispatches`; and a
-    commit's statuses and checks, at `statuses/<sha>`, `check-runs` and `check-suites`.
+    anywhere under `issues/` and `pulls/` but a pull request's `codespaces`; releases, anywhere
+    under `releases/`; a run's rerun and cancel and a workflow's dispatch, at
+    `actions/runs/<id>/rerun`, `rerun-failed-jobs`, `cancel` and `force-cancel`,
+    `actions/jobs/<id>/rerun` and `actions/workflows/<id>/dispatches`; and a commit's statuses and
+    checks, at `statuses/<sha>`, `check-runs` and `check-suites`.
   - Uploading a release's asset, `POST repos/<owner>/<repo>/releases/<id>/assets` at
     `uploads.github.com`, for a repository in `repos.write`, with its query, which names the asset.
     GitHub takes an asset only with its `Content-Length`, as `gh` sends it, and refuses one sent in
@@ -205,9 +206,10 @@ reachable there, never where "there" is. The one upstream policy places is a
     [what a grant does not bound](#what-a-grant-does-not-bound).
   - Through the API, everything else is refused: a write to a repository only in `repos.read`; any
     other write to one in `repos.write`, its settings, collaborators, webhooks, deploy keys, Actions
-    secrets, variables and runners, its contents and refs and its labels among them, even where the
-    token could make it; another repository; and everything outside `repos/` but the root and
-    `graphql`, `gists`, `user/repos` and `search` among it.
+    secrets, variables and runners, its contents and refs and its labels, and a Codespace made from
+    a pull request, which is a machine of its own, among them, even where the token could make it;
+    another repository; and everything outside `repos/` but the root and `graphql`, `gists`,
+    `user/repos` and `search` among it.
 - **Grant:** `repos.read`, the repositories to fetch and read, and `repos.write`, those to push to
   and write through the API as well, which are fetched and read without being listed twice. Either
   may be left out, but not both, and a repository in both is refused. Each is `owner/repo`, with or

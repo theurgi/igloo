@@ -649,6 +649,7 @@ describe('Broker.decide, on a write through GitHub’s API', () => {
       ['PUT', '/actions/runs/8/rerun'],
       ['POST', '/statuses'],
       ['POST', '/statuses/0123abcd/x'],
+      ['POST', '/pulls/3/codespaces'],
     ] as const) {
       assert.deepStrictEqual(
         api(`/repos/you/web${path}`, method),
