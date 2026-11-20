@@ -585,7 +585,8 @@ const instantiate = Effect.fnUntraced(
 
 /**
  * Build the derivation `instantiate` returned and the check passed, leaving
- * `--out-link` on the project's gc-root.
+ * `--out-link` on `link`: the project's gc-root, or for `restart` the one beside
+ * it, which keeps the new runner while the old one still runs from the first.
  *
  * The root has to outlive both the build and this process: while the VM runs, a
  * concurrent `nix-collect-garbage` would otherwise be free to delete the store
@@ -603,8 +604,8 @@ const instantiate = Effect.fnUntraced(
  */
 const build = Effect.fnUntraced(function* (
   bins: Binaries,
-  spec: VmSpec,
   drvPath: string,
+  link: string,
   log: readonly string[],
 ) {
   const fs = yield* FileSystem.FileSystem
@@ -614,16 +615,7 @@ const build = Effect.fnUntraced(function* (
     .exitCode(
       ChildProcess.make(
         bins.nix,
-        [
-          'build',
-          `${drvPath}^*`,
-          '--option',
-          'fallback',
-          'false',
-          '--out-link',
-          spec.runnerRootLink,
-          ...log,
-        ],
+        ['build', `${drvPath}^*`, '--option', 'fallback', 'false', '--out-link', link, ...log],
         {
           extendEnv: true,
           stderr: 'inherit',
@@ -637,8 +629,27 @@ const build = Effect.fnUntraced(function* (
     return yield* new VmError({ message: `nix build exited ${code}` })
   }
   return yield* fs
-    .realPath(spec.runnerRootLink)
-    .pipe(Effect.mapError(() => new VmError({ message: `no runner at ${spec.runnerRootLink}` })))
+    .realPath(link)
+    .pipe(Effect.mapError(() => new VmError({ message: `no runner at ${link}` })))
+})
+
+/**
+ * Make `link` a gc-root on `path`, a store path that is already there, and say
+ * whether it is one. With substitution off and offline, nix adds the root and
+ * fetches nothing, so a path that has gone is a failure rather than a download.
+ */
+const pin = Effect.fnUntraced(function* (bins: Binaries, path: string, link: string) {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+  const code = yield* spawner
+    .exitCode(
+      ChildProcess.make(
+        bins.nix,
+        ['build', path, '--out-link', link, '--offline', '--option', 'substitute', 'false'],
+        { extendEnv: true, stderr: 'ignore', stdin: 'ignore', stdout: 'ignore' },
+      ),
+    )
+    .pipe(Effect.orElseSucceed(() => 127))
+  return code === 0
 })
 
 /**
@@ -648,9 +659,8 @@ const build = Effect.fnUntraced(function* (
  * Run once the evaluation has succeeded, so every input it needed is in the
  * store; one it never needed is not, and has nothing to keep. A root on any
  * other path goes: one an earlier lock named, and one whose source is gone.
- * The `nix build` of a store path that is there only adds the root, and with
- * substitution off and offline it cannot fetch one that is not, so nothing
- * here reaches the network outside the evaluation's confinement.
+ * Each root is made by `pin`, which fetches nothing, so nothing here reaches
+ * the network outside the evaluation's confinement.
  *
  * Returns the inputs it could not root though their sources were there. A
  * launch goes ahead without those roots: they save a download, and the VM does
@@ -658,7 +668,6 @@ const build = Effect.fnUntraced(function* (
  */
 const rootInputs = Effect.fnUntraced(function* (bins: Binaries, spec: VmSpec) {
   const fs = yield* FileSystem.FileSystem
-  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
   const { dir, sources } = spec.inputRoots
   yield* fs.makeDirectory(dir, { recursive: true })
   const named = new Set(sources.map(source => source.name))
@@ -672,25 +681,7 @@ const rootInputs = Effect.fnUntraced(function* (bins: Binaries, spec: VmSpec) {
       yield* fs.remove(link).pipe(Effect.ignore)
       continue
     }
-    const code = yield* spawner
-      .exitCode(
-        ChildProcess.make(
-          bins.nix,
-          [
-            'build',
-            source.path,
-            '--out-link',
-            link,
-            '--offline',
-            '--option',
-            'substitute',
-            'false',
-          ],
-          { extendEnv: true, stderr: 'ignore', stdin: 'ignore', stdout: 'ignore' },
-        ),
-      )
-      .pipe(Effect.orElseSucceed(() => 127))
-    if (code !== 0) {
+    if (!(yield* pin(bins, source.path, link))) {
       yield* fs.remove(link).pipe(Effect.ignore)
       unrooted.push(source.name)
     }
@@ -794,6 +785,33 @@ export const diskStep = (
 ): 'create' | 'grow' | 'keep' | 'refuse' =>
   held === undefined ? 'create' : held < wanted ? 'grow' : held === wanted ? 'keep' : 'refuse'
 
+type Disk = NonNullable<VmSpec['disk']>
+
+/**
+ * What `ensureDisk` would do to the disk's file, failing where it would refuse
+ * the file: one that is not a file, and one it would have to shorten. Reads
+ * the file and changes nothing, so `restart` can refuse before it stops the VM
+ * whose disk this is.
+ */
+const diskStepFor = Effect.fnUntraced(function* (disk: Disk) {
+  const fs = yield* FileSystem.FileSystem
+  const wanted = BigInt(disk.size) * 1024n * 1024n
+  const info = yield* Effect.result(fs.stat(disk.image))
+  if (Result.isSuccess(info) && info.success.type !== 'File') {
+    return yield* new VmError({
+      message: `${disk.image} is where this project's disk goes, and it is not a file. Move it away and run \`igloo up\` again.`,
+    })
+  }
+  const held = Result.isSuccess(info) ? ByteSize.toBigInt(info.success.size) : undefined
+  const step = diskStep(held, wanted)
+  if (step === 'refuse') {
+    return yield* new VmError({
+      message: `${disk.image} is ${String((held ?? 0n) / (1024n * 1024n))} MiB and \`disk\` is ${String(disk.size)}. A disk does not shrink: set \`disk\` to its size or more, or delete the file to start with an empty one.`,
+    })
+  }
+  return { step, wanted }
+})
+
 /**
  * Make the disk's file the size policy gives it, creating it if it is not
  * there.
@@ -803,21 +821,11 @@ export const diskStep = (
  * nothing here reads it: the guest finds an empty device and formats it, or a
  * longer one and grows into it.
  */
-export const ensureDisk = Effect.fnUntraced(function* (disk: {
-  readonly image: string
-  readonly size: number
-}) {
+export const ensureDisk = Effect.fnUntraced(function* (disk: Disk) {
   const fs = yield* FileSystem.FileSystem
-  const wanted = BigInt(disk.size) * 1024n * 1024n
   const failed = (doing: string) => () => new VmError({ message: `cannot ${doing} ${disk.image}` })
-  const info = yield* Effect.result(fs.stat(disk.image))
-  if (Result.isSuccess(info) && info.success.type !== 'File') {
-    return yield* new VmError({
-      message: `${disk.image} is where this project's disk goes, and it is not a file. Move it away and run \`igloo up\` again.`,
-    })
-  }
-  const held = Result.isSuccess(info) ? ByteSize.toBigInt(info.success.size) : undefined
-  switch (diskStep(held, wanted)) {
+  const { step, wanted } = yield* diskStepFor(disk)
+  switch (step) {
     case 'create':
       // `wx`, so a file that appeared since is an error rather than a file
       // this truncates, and private to the user from the start: it will hold
@@ -832,10 +840,6 @@ export const ensureDisk = Effect.fnUntraced(function* (disk: {
       return
     case 'keep':
       return
-    case 'refuse':
-      return yield* new VmError({
-        message: `${disk.image} is ${String((held ?? 0n) / (1024n * 1024n))} MiB and \`disk\` is ${String(disk.size)}. A disk does not shrink: set \`disk\` to its size or more, or delete the file to start with an empty one.`,
-      })
   }
 })
 
@@ -1390,7 +1394,7 @@ const reportDrift = Effect.fnUntraced(function* (spec: VmSpec, boot: BootLog.Boo
     boot,
     `it was launched before these changed:\n\n${drifted
       .map(name => `  ${name}`)
-      .join('\n')}\n\n\`igloo down\` then \`igloo up\` to apply them.`,
+      .join('\n')}\n\n\`igloo restart\` to apply them.`,
   )
   return true
 })
@@ -1402,14 +1406,112 @@ const reportDrift = Effect.fnUntraced(function* (spec: VmSpec, boot: BootLog.Boo
  */
 type Launched = 'booted' | 'idle' | 'reused'
 
+/** A runner built for one spec and checked against it: what a boot takes from the build. */
+interface Runner {
+  /** The runner's closure, which the store's daemon serves and nothing more. */
+  readonly closure: readonly string[]
+  readonly outPath: string
+  /** The shares the runner declares, matched to the ones the spec asked for. */
+  readonly shares: readonly Virtiofs.Served[]
+}
+
 /**
- * The launch itself, one named step at a time.
+ * Evaluate, check and build the runner, and hold what was built to the spec:
+ * every step of a launch that a layer can fail. The runner is left on `link`,
+ * a gc-root, and nothing else a running VM of this project uses is touched.
+ * `restart` runs them while the old VM is still up, with `link` the root
+ * beside the one keeping that VM's runner, so a layer that fails leaves the VM
+ * running and its runner rooted.
+ */
+const realise = Effect.fnUntraced(function* (
+  bins: Binaries,
+  spec: VmSpec,
+  boot: BootLog.Boot,
+  link: string,
+) {
+  const fs = yield* FileSystem.FileSystem
+  // The gc-root's parent is in the project and may not exist yet.
+  const roots = dirname(link)
+  yield* fs
+    .makeDirectory(roots, { recursive: true })
+    .pipe(Effect.mapError(() => new VmError({ message: `cannot create ${roots}` })))
+
+  yield* noted(boot, `building ${spec.flakeRef}`)
+  const nixLog = yield* NixLog.make(bins.nix, boot.file('nix.log'))
+  const drvPath = yield* boot.phase(
+    'evaluate',
+    nixLog(log => instantiate(bins, spec, log)),
+  )
+  const refusals = yield* boot.phase(
+    'plan',
+    BuildPlan.check(bins.nix, drvPath).pipe(
+      Effect.mapError(error => new VmError({ message: error.message })),
+    ),
+  )
+  if (refusals.length > 0) {
+    return yield* new VmError({ message: BuildPlan.describe(refusals) })
+  }
+  const outPath = yield* boot.phase(
+    'build',
+    nixLog(log => build(bins, drvPath, link, log)),
+  )
+  const unrooted = yield* boot.phase(
+    'inputs',
+    rootInputs(bins, spec).pipe(
+      Effect.orElseSucceed(() => spec.inputRoots.sources.map(source => source.name)),
+    ),
+  )
+  if (unrooted.length > 0) {
+    yield* noted(
+      boot,
+      `could not keep the source of ${unrooted.join(', ')} from a garbage collection, so a launch after one may download it again`,
+    )
+  }
+
+  // The shares are policy, so the runner's have to be the ones this launch
+  // asked for, and a runner that names others is refused before anything
+  // serves them. What the host takes from it is each socket's name, which is
+  // derived from the guest's hostname.
+  const matched = Virtiofs.match(yield* Virtiofs.shares(outPath), spec.shares)
+  if (Result.isFailure(matched)) {
+    return yield* new VmError({ message: `${outPath} ${matched.failure}` })
+  }
+
+  const closure = yield* boot.phase('closure', StoreView.closure(bins.nix, outPath))
+  if (closure.length === 0) {
+    return yield* new VmError({ message: `empty closure for ${outPath}` })
+  }
+  // The daemon serving the store runs in a namespace where `/nix/store` holds
+  // this closure and nothing else, so its own binary has to be a member. It is
+  // whenever this and the runner's pinned `virtiofsd` are the same derivation.
+  // A store path from anywhere else would fail to exec in there, and the only
+  // symptom would be a socket that never appears.
+  if (
+    bins.virtiofsd.startsWith(`${StoreView.storeDir}/`) &&
+    !StoreView.covers(closure, bins.virtiofsd)
+  ) {
+    return yield* new VmError({
+      message: `IGLOO_VIRTIOFSD (${bins.virtiofsd}) is not in this runner's closure; point it at the virtiofsd of the igloo flake being built`,
+    })
+  }
+  const runner: Runner = { closure, outPath, shares: matched.success }
+  return runner
+})
+
+/**
+ * The launch itself, one named step at a time, booting `built` where the
+ * runner is already built and checked, and building it otherwise.
  *
  * Split from `up` so that `up` owns the boot record on every path out of here —
  * a failure and an interrupt included, which is where the record earns its
  * place.
  */
-const launch = Effect.fnUntraced(function* (bins: Binaries, spec: VmSpec, boot: BootLog.Boot) {
+const launch = Effect.fnUntraced(function* (
+  bins: Binaries,
+  spec: VmSpec,
+  boot: BootLog.Boot,
+  built?: Runner,
+) {
   const fs = yield* FileSystem.FileSystem
 
   if (yield* Systemd.isActive(bins.systemctl, qemuUnit(spec.id))) {
@@ -1445,14 +1547,11 @@ const launch = Effect.fnUntraced(function* (bins: Binaries, spec: VmSpec, boot: 
   // broker cannot bind over, and the symptom is a broker that fails to start on
   // a VM whose tether came up fine — which reads as the tether's fault.
   yield* removeAll(brokerDir(spec))
-  // The gc-root's parent is in the project and may not exist yet; the runtime
-  // directory is on a tmpfs and was just removed. The log directory needs no
-  // entry: the boot record made its own directory inside it before this ran.
-  for (const dir of [spec.runtimeDir, dirname(spec.runnerRootLink)]) {
-    yield* fs
-      .makeDirectory(dir, { recursive: true })
-      .pipe(Effect.mapError(() => new VmError({ message: `cannot create ${dir}` })))
-  }
+  // On a tmpfs, and just removed. The log directory needs no entry: the boot
+  // record made its own directory inside it before this ran.
+  yield* fs
+    .makeDirectory(spec.runtimeDir, { recursive: true })
+    .pipe(Effect.mapError(() => new VmError({ message: `cannot create ${spec.runtimeDir}` })))
 
   // Before the build, so that a disk this launch would refuse stops it before
   // the wait.
@@ -1507,37 +1606,8 @@ const launch = Effect.fnUntraced(function* (bins: Binaries, spec: VmSpec, boot: 
     )
   }
 
-  yield* noted(boot, `building ${spec.flakeRef}`)
-  const nixLog = yield* NixLog.make(bins.nix, boot.file('nix.log'))
-  const drvPath = yield* boot.phase(
-    'evaluate',
-    nixLog(log => instantiate(bins, spec, log)),
-  )
-  const refusals = yield* boot.phase(
-    'plan',
-    BuildPlan.check(bins.nix, drvPath).pipe(
-      Effect.mapError(error => new VmError({ message: error.message })),
-    ),
-  )
-  if (refusals.length > 0) {
-    return yield* new VmError({ message: BuildPlan.describe(refusals) })
-  }
-  const outPath = yield* boot.phase(
-    'build',
-    nixLog(log => build(bins, spec, drvPath, log)),
-  )
-  const unrooted = yield* boot.phase(
-    'inputs',
-    rootInputs(bins, spec).pipe(
-      Effect.orElseSucceed(() => spec.inputRoots.sources.map(source => source.name)),
-    ),
-  )
-  if (unrooted.length > 0) {
-    yield* noted(
-      boot,
-      `could not keep the source of ${unrooted.join(', ')} from a garbage collection, so a launch after one may download it again`,
-    )
-  }
+  const { closure, outPath, shares } =
+    built ?? (yield* realise(bins, spec, boot, spec.runnerRootLink))
   // Which runner this VM was booted from. The gc-root answers that for the
   // current one only, so an older boot has no other record of it.
   yield* boot.record({ event: 'runner', path: outPath })
@@ -1548,37 +1618,10 @@ const launch = Effect.fnUntraced(function* (bins: Binaries, spec: VmSpec, boot: 
   // started — which nothing reads, because the check is on the other branch.
   yield* LaunchInputs.write(spec.launchInputsFile, spec.launchInputs)
 
-  // The shares are policy, so the runner's have to be the ones this launch
-  // asked for, and a runner that names others is refused before anything
-  // serves them. What the host takes from it is each socket's name, which is
-  // derived from the guest's hostname.
-  const matched = Virtiofs.match(yield* Virtiofs.shares(outPath), spec.shares)
-  if (Result.isFailure(matched)) {
-    return yield* new VmError({ message: `${outPath} ${matched.failure}` })
-  }
-  const shares = matched.success
-
-  const closurePaths = yield* boot.phase('closure', StoreView.closure(bins.nix, outPath))
-  if (closurePaths.length === 0) {
-    return yield* new VmError({ message: `empty closure for ${outPath}` })
-  }
-  // The daemon serving the store runs in a namespace where `/nix/store` holds
-  // this closure and nothing else, so its own binary has to be a member. It is
-  // whenever this and the runner's pinned `virtiofsd` are the same derivation.
-  // A store path from anywhere else would fail to exec in there, and the only
-  // symptom would be a socket that never appears.
-  if (
-    bins.virtiofsd.startsWith(`${StoreView.storeDir}/`) &&
-    !StoreView.covers(closurePaths, bins.virtiofsd)
-  ) {
-    return yield* new VmError({
-      message: `IGLOO_VIRTIOFSD (${bins.virtiofsd}) is not in this runner's closure; point it at the virtiofsd of the igloo flake being built`,
-    })
-  }
   // Rewritten on every launch, since the closure is this runner's.
   const storePaths = `${spec.runtimeDir}/store-paths`
   yield* fs
-    .writeFileString(storePaths, StoreView.pathsFile(closurePaths))
+    .writeFileString(storePaths, StoreView.pathsFile(closure))
     .pipe(Effect.mapError(() => new VmError({ message: `cannot write ${storePaths}` })))
 
   yield* noted(boot, `booting ${spec.label} (cid ${spec.cid})`)
@@ -1661,6 +1704,34 @@ const launch = Effect.fnUntraced(function* (bins: Binaries, spec: VmSpec, boot: 
 })
 
 /**
+ * Run a launch under a boot record of its own, finished on every way out of
+ * it, a failure and an interrupt included.
+ */
+const recorded = <E extends { readonly message: string }, R>(
+  spec: VmSpec,
+  run: (boot: BootLog.Boot) => Effect.Effect<Launched, E, R>,
+) =>
+  Effect.gen(function* () {
+    const boot = yield* BootLog.open(spec.logDir).pipe(
+      Effect.mapError(error => new VmError({ message: error.message })),
+    )
+    const launched = yield* run(boot).pipe(
+      Effect.onExit(exit => boot.finish(exit)),
+      // The record holds what one line cannot: the steps that ran, the units'
+      // logs and the whole failure. A message that already points into it has
+      // said where it is.
+      Effect.mapError(error =>
+        error.message.includes(boot.dir)
+          ? error
+          : new VmError({ bootRecord: boot.dir, message: error.message }),
+      ),
+    )
+    // Kept, it would move `latest` off the boot a reader is after and count
+    // against the records the prune keeps, for one `guest` step and nothing else.
+    if (launched === 'idle') yield* boot.discard
+  })
+
+/**
  * Start the VM if it is not already running, and return once its management
  * channel answers. Idempotent: a second `up` against a live VM builds nothing
  * and starts nothing.
@@ -1676,23 +1747,51 @@ const launch = Effect.fnUntraced(function* (bins: Binaries, spec: VmSpec, boot: 
  * `latest` back; one that fails, hangs or is interrupted keeps it.
  */
 export const up = Effect.fn('Vm.up')(function* (bins: Binaries, spec: VmSpec) {
-  const boot = yield* BootLog.open(spec.logDir).pipe(
-    Effect.mapError(error => new VmError({ message: error.message })),
+  yield* recorded(spec, boot => launch(bins, spec, boot))
+})
+
+/**
+ * Stop the VM and launch it again, with the runner built from the layers as
+ * they are now. The new runner is built, and the disk checked, before the old
+ * VM is stopped, so a layer that fails to evaluate or build, or a disk that
+ * would have to shrink, leaves it running and fails here. Stopping it is the
+ * `down` a user would run, timed in the same boot record as the launch.
+ *
+ * A VM that is not running is launched as `up` launches it.
+ *
+ * The new runner is built onto a root of its own beside the gc-root, which
+ * keeps the running VM's runner until that VM has stopped: its store share is
+ * the runner's closure, and a collection in between would delete files the
+ * guest is reading. Once the VM is down, the gc-root moves to the new runner
+ * and the second root goes. A restart that fails between the two, or cannot
+ * move the gc-root, leaves the second root, which the next one replaces.
+ *
+ * The brokered and delivered credentials are fetched after the build, not
+ * before it as `up` fetches them: they are written into the runtime directory
+ * the running VM still holds until it stops.
+ */
+export const restart = Effect.fn('Vm.restart')(function* (bins: Binaries, spec: VmSpec) {
+  if (!(yield* isRunning(bins, spec.id))) return yield* up(bins, spec)
+  const next = join(dirname(spec.runnerRootLink), 'next')
+  yield* recorded(spec, boot =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      if (spec.disk !== undefined) yield* diskStepFor(spec.disk)
+      const runner = yield* realise(bins, spec, boot, next)
+      yield* boot.phase('stop', down(bins, spec))
+      // The VM is down by now, so a root that will not move is no reason to
+      // leave it down: the second root still keeps what it boots from.
+      if (yield* pin(bins, runner.outPath, spec.runnerRootLink)) {
+        yield* fs.remove(next).pipe(Effect.ignore)
+      } else {
+        yield* noted(
+          boot,
+          `could not move ${spec.runnerRootLink} to the new runner, which ${next} keeps instead`,
+        )
+      }
+      return yield* launch(bins, spec, boot, runner)
+    }),
   )
-  const launched = yield* launch(bins, spec, boot).pipe(
-    Effect.onExit(exit => boot.finish(exit)),
-    // The record holds what one line cannot: the steps that ran, the units'
-    // logs and the whole failure. A message that already points into it has
-    // said where it is.
-    Effect.mapError(error =>
-      error.message.includes(boot.dir)
-        ? error
-        : new VmError({ bootRecord: boot.dir, message: error.message }),
-    ),
-  )
-  // Kept, it would move `latest` off the boot a reader is after and count
-  // against the records the prune keeps, for one `guest` step and nothing else.
-  if (launched === 'idle') yield* boot.discard
 })
 
 /**

@@ -94,7 +94,7 @@ igloo: it was launched before these changed:
   /…/demo/igloo.nix
   the broker grants and memory, tunnel destinations and published ports
 
-`igloo down` then `igloo up` to apply them.
+`igloo restart` to apply them.
 ```
 
 What it compares:

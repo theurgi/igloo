@@ -1420,6 +1420,31 @@ EOF
 		fi
 	fi
 
+	# `restart` boots the guest again rather than reattaching: its boot id
+	# changes, and the launch has a boot record of its own, the stop among its
+	# steps. The shell it opens reads from a pipe here, so it prints the new
+	# boot id and exits. The teardown below then covers what it left.
+	if [ -n "$vm_up" ] && [ -n "$cid" ]; then
+		boot_id_before=$(guest 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null)
+		record_before=$(readlink "$project/.igloo/logs/latest")
+		step restart -- bash -c "echo 'cat /proc/sys/kernel/random/boot_id' | '$repo/bin/igloo' restart"
+		restart_code=$?
+		keep_boot restart
+		boot_id_after=$(guest 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null)
+		record_after=$(readlink "$project/.igloo/logs/latest")
+		if [ "$restart_code" = 0 ] &&
+			[ -n "$boot_id_before" ] && [ -n "$boot_id_after" ] &&
+			[ "$boot_id_before" != "$boot_id_after" ] &&
+			grep -qxF "$boot_id_after" "$out/steps/restart.txt" &&
+			[ "$record_before" != "$record_after" ] &&
+			[ -n "$(phase_ms "$out/artifacts/logs/restart" stop)" ] &&
+			[ -n "$(phase_ms "$out/artifacts/logs/restart" build)" ]; then
+			verdict PASS restart "restart built, stopped the VM and booted it again under one new boot record, and its shell ran in the new boot"
+		else
+			verdict FAIL restart "the shell exited $restart_code, or the boot id or the boot record did not change — read steps/restart.txt and artifacts/logs/restart/"
+		fi
+	fi
+
 	# This project's row only: `ls` lists every VM on the host, and another
 	# project's name and path are not this run's to record.
 	own_ls() { "$repo/bin/igloo" ls --verbose | awk -v label="$(basename "$project")" 'NR == 1 || index($0, label)'; }

@@ -99,7 +99,7 @@ Some things do not work inside the guest:
 
 - **Nix builds.** The store is read-only, so `nix build`, `nix profile install` and `nix-env` fail,
   unless the project has [a store the guest adds to](configuration.md#a-store-the-guest-adds-to).
-  Add packages to a layer and restart the VM.
+  Add packages to a layer and run `igloo restart`.
 - **An agent's own self-update.** It installs a second copy into `/root`, which then shadows the one
   the layer provides and no longer changes when the layer does. Update agents through the layer.
 
@@ -154,6 +154,18 @@ its own, so closing the terminal or killing `igloo` does not touch it.
 Open a shell in the VM, running `up` first if the VM is not running. Each `attach` is a new session,
 so several terminals can attach to one VM. Exiting the shell ends the session and leaves the VM
 running. The exit status is the shell's.
+
+### `igloo restart`
+
+Build the VM from the layers as they are now, then stop it, start it again and open a shell, as
+`attach` does. The exit status is the shell's. This is how a changed layer reaches a running VM.
+
+The new VM is built, and its disk checked, before the old one stops. A layer that fails to evaluate
+or build, or a `disk` smaller than the disk already is, fails `restart` and leaves the running VM as
+it was. A VM that is not running is started, as `attach` starts it.
+
+The credentials are fetched after the build rather than before it, since the running VM holds the
+previous values until it stops. A source that asks for a passphrase asks once the build is done.
 
 ### `igloo down [--all]`
 

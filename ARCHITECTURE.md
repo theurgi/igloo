@@ -115,6 +115,15 @@ In `$XDG_RUNTIME_DIR/igloo/`, a tmpfs:
 Each step is timed into the launch's boot record (`BootLog`), which keeps the units' logs beside it.
 `down` powers the guest off over QMP and stops the slice.
 
+`igloo restart`, against a running VM, takes the steps of 6 and 7 that a layer can fail first
+(`Vm.ts`'s `realise`: the evaluation, the plan, the build, the input roots, the shares and the
+closure), with the disk's refusal from 4, while the VM still runs. The new runner is rooted at
+`.igloo/runners/next`, so `current` keeps the running VM's runner, whose closure its store share
+serves, until that VM stops. Only then does it run `down`, as a step of the same boot record, move
+`current` to the new runner, and take 4 to 8 with it, so a layer that fails leaves the old VM up.
+The credentials of 5 come after the build here, since the running VM's runtime directory holds the
+old values until it stops.
+
 ## The modules
 
 Every module but `index.ts` has its tests beside it, in `src/<Module>.test.ts`.
@@ -131,7 +140,7 @@ Every module but `index.ts` has its tests beside it, in `src/<Module>.test.ts`.
 | `Spec.ts`                      | What a composed configuration means for a VM: credentials, grants, the runner's arguments.    |
 | `Flake.ts`                     | The runner flake.                                                                             |
 | `BuildPlan.ts`                 | What building a runner would run, and which of it igloo refuses.                              |
-| `Vm.ts`                        | The launch, `attach`, `down` and `ls`, and the command lines of the broker and the forwards.  |
+| `Vm.ts`                        | The launch, `restart`, `attach`, `down`, `ls`, and the broker's and forwards' command lines.  |
 | `Systemd.ts`                   | The transient user units a VM runs as, and their three confinements.                          |
 | `Virtiofs.ts`                  | One virtio-fs daemon per share: the runner's shares, checked, and each daemon's command line. |
 | `StoreView.ts`, `store-view.c` | The guest's closure-only `/nix/store`, through `igloo-store-view`.                            |

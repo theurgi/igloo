@@ -147,7 +147,12 @@ const writeFakes = Effect.fnUntraced(function* (
 ) {
   const fs = yield* FileSystem.FileSystem
   const runtimeDir = options?.runtimeDir ?? `${dir}/run`
+  // The runner is built into the runtime directory, because QEMU's confined
+  // unit sees that and the store and nothing else, and no test may write the
+  // store. A real runner outlives the runtime directory a launch clears, so
+  // the build keeps a copy, and `systemd-run` below puts it back.
   const store = `${runtimeDir}/runner`
+  const builtRunner = `${dir}/built-runner`
   const bash = yield* fromStore('bash')
   const perl = yield* fromStore('perl')
   const shutdownHelperRan = `${dir}/shutdown-helper-ran`
@@ -162,6 +167,7 @@ const writeFakes = Effect.fnUntraced(function* (
   const buildArgs = `${dir}/nix-build-args`
   const rootArgs = `${dir}/nix-root-args`
   const evalArgs = `${dir}/nix-eval-args`
+  const evalFails = `${dir}/nix-eval-fails`
   const evalRules = `${dir}/nix-eval-rules`
   const showArgs = `${dir}/nix-show-args`
   const plan = `${dir}/nix-plan`
@@ -188,6 +194,7 @@ const writeFakes = Effect.fnUntraced(function* (
     'fake-nix',
     `#!/usr/bin/env bash
 if [ "$1" = "path-info" ] && [ "$2" = "--derivation" ]; then
+  [ -e '${evalFails}' ] && exit 1
   printf '%s\\n' "$@" > '${evalArgs}'
   echo '${runnerDrv}'
   exit 0
@@ -238,6 +245,7 @@ EOS
 touch '${shutdownHelperRan}'
 EOS
   chmod +x '${store}/bin/microvm-run' '${store}/bin/microvm-shutdown'
+  rm -rf '${builtRunner}' && cp -a '${store}' '${builtRunner}'
   ln -sfn '${store}' "$outlink"
 fi
 if [ "$1" = "path-info" ]; then
@@ -251,6 +259,14 @@ exit 0
   // Binds the socket named on its own command line, in whatever directory it
   // was started in — the two things the launch has to get right for QEMU to
   // find it.
+  const systemdRun = yield* write(
+    'fake-systemd-run',
+    `#!/usr/bin/env bash
+[ -e '${store}' ] || [ ! -e '${builtRunner}' ] || cp -a '${builtRunner}' '${store}'
+exec systemd-run "$@"
+`,
+  )
+
   const virtiofsd = yield* write(
     'fake-virtiofsd',
     options?.virtiofsdFails === true
@@ -428,11 +444,12 @@ exec "$@"
       sshProxy,
       storeView,
       systemctl: 'systemctl',
-      systemdRun: 'systemd-run',
+      systemdRun,
       virtiofsd,
     } satisfies Binaries.Binaries,
     buildArgs,
     rootArgs,
+    evalFails,
     buildCount,
     evalArgs,
     evalRules,
@@ -1292,6 +1309,136 @@ describe('Vm.up', () => {
     60_000,
   )
 
+  describe('restart', () => {
+    const qemuInvocation = (spec: VmSpec) =>
+      Systemd.show('systemctl', `igloo-${spec.id}-qemu.service`, ['InvocationID']).pipe(
+        Effect.map(properties => properties.get('InvocationID') ?? ''),
+      )
+    const latestSummary = Effect.fnUntraced(function* (spec: VmSpec) {
+      const fs = yield* FileSystem.FileSystem
+      return yield* Schema.decodeEffect(BootLog.SummaryJson)(
+        yield* fs.readFileString(`${spec.logDir}/${BootLog.LATEST}/boot.json`),
+      )
+    })
+
+    it.live(
+      'builds, then stops the VM and boots it again, in one boot record',
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const dir = yield* fs.makeTempDirectoryScoped()
+          const fakes = yield* writeFakes(dir)
+          const spec = specIn(dir, 'selftest-restart')
+          yield* Effect.addFinalizer(() => Systemd.stopSlice('systemctl', sliceOf(spec)))
+
+          yield* Vm.up(fakes.binaries, spec)
+          const before = yield* qemuInvocation(spec)
+          const firstBoot = yield* fs.realPath(`${spec.logDir}/${BootLog.LATEST}`)
+
+          yield* Vm.restart(fakes.binaries, spec)
+
+          assert.isTrue(yield* Systemd.isActive('systemctl', `igloo-${spec.id}-qemu.service`))
+          assert.notStrictEqual(yield* qemuInvocation(spec), before, 'QEMU was not started again')
+          assert.notStrictEqual(yield* fs.realPath(`${spec.logDir}/${BootLog.LATEST}`), firstBoot)
+          const summary = yield* latestSummary(spec)
+          assert.strictEqual(summary.outcome, 'success')
+          // The build comes before the stop, and the boot after it.
+          assert.deepStrictEqual(
+            summary.phases.map(entry => entry.name),
+            ['evaluate', 'plan', 'build', 'inputs', 'closure', 'stop', 'virtiofsd', 'guest'],
+          )
+          // Built beside the gc-root, which kept the old VM's runner while it
+          // ran, and moved to the new one only once that VM was down.
+          const next = `${dirname(spec.runnerRootLink)}/next`
+          assert.include((yield* fs.readFileString(fakes.buildArgs)).split('\n'), next)
+          assert.deepStrictEqual((yield* fs.readFileString(fakes.rootArgs)).trim().split('\n'), [
+            `build ${fakes.store} --out-link ${spec.runnerRootLink} --offline --option substitute false`,
+          ])
+          assert.strictEqual(yield* fs.realPath(spec.runnerRootLink), fakes.store)
+          assert.isFalse(yield* fs.exists(next))
+          yield* Vm.down(fakes.binaries, spec)
+        }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+      60_000,
+    )
+
+    it.live(
+      'leaves the running VM up when a layer fails to evaluate',
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const dir = yield* fs.makeTempDirectoryScoped()
+          const fakes = yield* writeFakes(dir)
+          const spec = specIn(dir, 'selftest-restart-broken')
+          yield* Effect.addFinalizer(() => Systemd.stopSlice('systemctl', sliceOf(spec)))
+
+          yield* Vm.up(fakes.binaries, spec)
+          const before = yield* qemuInvocation(spec)
+          yield* fs.writeFileString(fakes.evalFails, '')
+
+          const error = yield* Effect.flip(Vm.restart(fakes.binaries, spec))
+          assert.include(error.message, 'evaluating the layers failed')
+          assert.isTrue(yield* Systemd.isActive('systemctl', `igloo-${spec.id}-qemu.service`))
+          assert.strictEqual(yield* qemuInvocation(spec), before, 'the running VM was restarted')
+          const summary = yield* latestSummary(spec)
+          assert.strictEqual(summary.outcome, 'failure')
+          assert.notInclude(
+            summary.phases.map(entry => entry.name),
+            'stop',
+          )
+          yield* Vm.down(fakes.binaries, spec)
+        }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+      60_000,
+    )
+
+    it.live(
+      'leaves the running VM up when its disk would have to shrink',
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const dir = yield* fs.makeTempDirectoryScoped()
+          const fakes = yield* writeFakes(dir)
+          const image = `${dir}/project/.igloo/disk.img`
+          const spec = { ...specIn(dir, 'selftest-restart-disk'), disk: { image, size: 16 } }
+          yield* Effect.addFinalizer(() => Systemd.stopSlice('systemctl', sliceOf(spec)))
+
+          yield* Vm.up(fakes.binaries, spec)
+          const before = yield* qemuInvocation(spec)
+
+          const error = yield* Effect.flip(
+            Vm.restart(fakes.binaries, { ...spec, disk: { image, size: 8 } }),
+          )
+          assert.include(error.message, 'does not shrink')
+          assert.strictEqual(yield* qemuInvocation(spec), before, 'the running VM was restarted')
+          // Refused before the build, which ran once, for the first launch.
+          assert.strictEqual(yield* fs.readFileString(fakes.buildCount), 'x')
+          yield* Vm.down(fakes.binaries, spec)
+        }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+      60_000,
+    )
+
+    it.live(
+      'launches a VM that is not running, as up does',
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const dir = yield* fs.makeTempDirectoryScoped()
+          const fakes = yield* writeFakes(dir)
+          const spec = specIn(dir, 'selftest-restart-cold')
+          yield* Effect.addFinalizer(() => Systemd.stopSlice('systemctl', sliceOf(spec)))
+
+          yield* Vm.restart(fakes.binaries, spec)
+
+          assert.isTrue(yield* Systemd.isActive('systemctl', `igloo-${spec.id}-qemu.service`))
+          assert.notInclude(
+            (yield* latestSummary(spec)).phases.map(entry => entry.name),
+            'stop',
+          )
+          yield* Vm.down(fakes.binaries, spec)
+        }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+      60_000,
+    )
+  })
+
   it.live(
     'refuses a runtime directory it cannot remove, before writing a credential into it',
     () =>
@@ -1708,6 +1855,8 @@ describe('Vm.up', () => {
         // Naming the file is the whole point: "something changed" leaves the
         // reader with every layer to check.
         assert.include(trail, layer)
+        // And how to apply it.
+        assert.include(trail, 'igloo restart')
 
         yield* Vm.down(fakes.binaries, spec)
       }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),

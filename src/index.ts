@@ -435,6 +435,23 @@ const attach = Command.make(
   }),
 ).pipe(Command.withDescription('Open a shell in the VM, starting it if it is not running'))
 
+const restart = Command.make(
+  'restart',
+  {},
+  Effect.fn(function* () {
+    const spec = yield* specFor(yield* igloo)
+    yield* Vm.restart(bins, spec)
+    const code = yield* Vm.attach(bins, spec)
+    yield* Effect.sync(() => {
+      process.exitCode = code
+    })
+  }),
+).pipe(
+  Command.withDescription(
+    'Rebuild the VM, stop it, start it again and open a shell; a layer that fails leaves it running',
+  ),
+)
+
 /**
  * Succeeds with 129, a shell's status for a hangup, when this process receives
  * SIGHUP. Closing the terminal window sends one, and its default action ends
@@ -599,7 +616,7 @@ const ls = Command.make(
 // not have. The exit status is still the runtime's: 1 on a failure, 130 on an
 // interrupt.
 igloo.pipe(
-  Command.withSubcommands([init, up, attach, fallback, down, ls, doctor, report]),
+  Command.withSubcommands([init, up, attach, restart, fallback, down, ls, doctor, report]),
   Command.run({ version: packageJson.version }),
   // oxlint-disable-next-line effecttsgo/strict-effect-provide -- the entry point
   Effect.provide(BunServices.layer),
