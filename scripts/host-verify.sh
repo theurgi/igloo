@@ -3323,6 +3323,11 @@ EOF
 					echo
 					echo "=== and one the ceiling never had"
 					guest "$(connect_via_tunnel example.com:443)" 2>&1 | head -5
+					echo
+					echo "=== a listed name carrying a TLS session for one this project did not list"
+					# The same CDN serves both, and picks the site by the name in
+					# the hello, which curl's --connect-to makes the unlisted one.
+					guest 'timeout 30 curl -sS -x http://127.0.0.1:3129 --connect-to files.pythonhosted.org:443:pypi.org:443 -o /dev/null -w "fronted %{http_code}\n" https://files.pythonhosted.org/simple/six/ 2>&1'
 				} >"$out/artifacts/restricted.txt" 2>&1
 
 				# The audit trail for the requests just made. It is this launch's
@@ -3385,6 +3390,16 @@ EOF
 					verdict PASS tunnel-scopes-destinations "a host the project did not list is refused, even though the ceiling allows it"
 				else
 					verdict FAIL tunnel-scopes-destinations "an unlisted destination was not refused — read artifacts/restricted.txt"
+				fi
+
+				# Closed by the broker for the name in the hello, which its log
+				# says, rather than by the CDN or a timeout.
+				if grep -qx 'fronted 000' "$out/artifacts/restricted.txt" &&
+					grep -F '"event":"tunnel-deny"' "$out/artifacts/logs/up-restricted/broker.log" 2>/dev/null |
+					grep -qF 'names another server than pypi.org'; then
+					verdict PASS tunnel-holds-server-name "a tunnel to a listed name whose TLS hello names an unlisted one on the same CDN is closed before it reaches either"
+				else
+					verdict FAIL tunnel-holds-server-name "a hello naming an unlisted host was carried, or not closed for its name — read artifacts/restricted.txt, then logs/up-restricted/broker.log"
 				fi
 			else
 				verdict FAIL up-restricted "a restricted VM did not come up — read steps/up-restricted.txt"

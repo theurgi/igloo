@@ -96,6 +96,16 @@ sent on to the host with no credential where the tunnel would have reached that 
   `dig` and `git` over SSH do not work. A [`github` grant](credentials.md#github) rewrites GitHub's
   SSH remotes to HTTPS, which the broker answers.
 - **Hostnames only.** A `CONNECT` to an IP address is refused.
+- **Under `restricted`, the TLS session is for the name listed.** A CDN serves many sites from the
+  same addresses and picks one by the server name in the TLS handshake, so a listed name on a CDN
+  could otherwise carry a site that is not listed. The tunnel reads that name before anything is
+  sent on, and closes a session whose name is another host, or that names none. Two things it does
+  not stop: a site named only in the HTTP `Host` header inside the encryption, which many CDNs
+  refuse anyway, and a connection that is not TLS at all, such as `ssh` to `ssh.github.com:443`,
+  which is let through to the listed name. A connection using Encrypted Client Hello is held to its
+  visible name, so listing a CDN's ECH front, such as `cloudflare-ech.com`, reaches every site
+  behind it. Under `internet`, which reaches any public name anyway, the tunnel reads no server
+  name.
 - **Public addresses only, under every mode.** The tunnel resolves the name on the host and checks
   every address it gets back. It refuses loopback, the private ranges, link-local addresses —
   including the cloud metadata address — carrier-grade NAT, the benchmarking range, multicast and

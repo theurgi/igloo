@@ -2195,6 +2195,129 @@ export const splitHead = (
 }
 
 /**
+ * The most a ClientHello may take, its handshake header included. A client's
+ * is a few kilobytes, a post-quantum key share and a handful of tickets
+ * included; past this, it is held for nothing.
+ */
+export const maxClientHelloBytes = 32 * 1024
+
+/** What a tunnel's first bytes say about the TLS session they begin. */
+export type ClientHello =
+  /** Not a whole ClientHello yet. */
+  | { readonly _tag: 'More' }
+  /** The first byte begins no TLS handshake record. */
+  | { readonly _tag: 'NotTls' }
+  | { readonly _tag: 'Malformed'; readonly reason: string }
+  /** The `host_name` of its `server_name` extension, if it has one. */
+  | { readonly _tag: 'Hello'; readonly serverName: string | undefined }
+
+/**
+ * Read the server name a TLS session asks for from the bytes a client sends
+ * first, as a server would read it.
+ *
+ * The ClientHello is a handshake message carried in records of type 22, and
+ * may span several of them, and several TCP segments; it is whole once its
+ * handshake length has arrived. Each record is held to TLS's limit of 2^14
+ * bytes, and the hello to `maxClientHelloBytes`. Every length is checked
+ * against what holds it, and the extensions must fill theirs exactly. A type
+ * of extension sent twice is malformed, as TLS has it, and so is a
+ * `server_name` naming more than one host: a client sends neither, and a
+ * server and this reading could take different ones.
+ *
+ * Only the first byte decides `NotTls`. What follows a whole hello, the next
+ * records of the session, is not read.
+ */
+export const readClientHello = (bytes: Uint8Array): ClientHello => {
+  if (bytes.byteLength === 0) return { _tag: 'More' }
+  if (bytes[0] !== 22) return { _tag: 'NotTls' }
+
+  // The handshake message, gathered from as many records as it spans.
+  const message: number[] = []
+  let wanted: number | undefined
+  let at = 0
+  while (wanted === undefined || message.length < wanted) {
+    if (at + 5 > bytes.byteLength) return { _tag: 'More' }
+    if (bytes[at] !== 22) {
+      return { _tag: 'Malformed', reason: 'a record that is not a handshake came inside the hello' }
+    }
+    if (bytes[at + 1] !== 3) return { _tag: 'Malformed', reason: 'the record is not TLS' }
+    const length = ((bytes[at + 3] ?? 0) << 8) | (bytes[at + 4] ?? 0)
+    if (length === 0 || length > 16384) {
+      return { _tag: 'Malformed', reason: 'a handshake record of a length TLS does not allow' }
+    }
+    if (at + 5 + length > bytes.byteLength) return { _tag: 'More' }
+    for (const byte of bytes.subarray(at + 5, at + 5 + length)) message.push(byte)
+    at += 5 + length
+    if (wanted === undefined && message.length >= 4) {
+      if (message[0] !== 1)
+        return { _tag: 'Malformed', reason: 'the first handshake is not a ClientHello' }
+      wanted = 4 + (((message[1] ?? 0) << 16) | ((message[2] ?? 0) << 8) | (message[3] ?? 0))
+      if (wanted > maxClientHelloBytes) {
+        return { _tag: 'Malformed', reason: 'the ClientHello is larger than any client sends' }
+      }
+    }
+  }
+
+  // The hello's body, each field skipped by its own length, none past the end.
+  const end = wanted
+  const u8 = (i: number): number => message[i] ?? 0
+  const u16 = (i: number): number => (u8(i) << 8) | u8(i + 1)
+  const truncated: ClientHello = { _tag: 'Malformed', reason: 'the ClientHello is truncated' }
+  let p = 4 + 2 + 32
+  if (p + 1 > end) return truncated
+  p += 1 + u8(p)
+  if (p + 2 > end) return truncated
+  p += 2 + u16(p)
+  if (p + 1 > end) return truncated
+  p += 1 + u8(p)
+  if (p === end) return { _tag: 'Hello', serverName: undefined }
+  if (p + 2 > end) return truncated
+  const extensionsEnd = p + 2 + u16(p)
+  if (extensionsEnd !== end) {
+    return { _tag: 'Malformed', reason: 'the extensions do not fill the ClientHello' }
+  }
+  p += 2
+
+  const seen = new Set<number>()
+  let serverName: string | undefined
+  while (p < extensionsEnd) {
+    if (p + 4 > extensionsEnd) return truncated
+    const type = u16(p)
+    const dataEnd = p + 4 + u16(p + 2)
+    if (dataEnd > extensionsEnd) return truncated
+    if (seen.has(type)) return { _tag: 'Malformed', reason: 'an extension is sent twice' }
+    seen.add(type)
+    if (type === 0) {
+      // server_name: a list of (type, name), of which host_name is type 0.
+      let q = p + 4
+      if (q + 2 > dataEnd || q + 2 + u16(q) !== dataEnd) return truncated
+      q += 2
+      while (q < dataEnd) {
+        if (q + 3 > dataEnd) return truncated
+        const nameEnd = q + 3 + u16(q + 1)
+        if (nameEnd > dataEnd) return truncated
+        if (u8(q) === 0) {
+          if (serverName !== undefined) {
+            return { _tag: 'Malformed', reason: 'the server_name extension names two hosts' }
+          }
+          serverName = Buffer.from(message.slice(q + 3, nameEnd)).toString('latin1')
+        }
+        q = nameEnd
+      }
+    }
+    p = dataEnd
+  }
+  return { _tag: 'Hello', serverName }
+}
+
+/**
+ * Whether the server name a hello asks for is the host a `CONNECT` named: the
+ * same name, whatever its case, a trailing dot aside.
+ */
+export const sameServerName = (serverName: string, host: string): boolean =>
+  serverName.replace(/\.$/, '').toLowerCase() === host.replace(/\.$/, '').toLowerCase()
+
+/**
  * Where the tunnel may go: exactly these names, or `'any'` public name.
  *
  * `'any'` widens the names and nothing else. Every address a name resolves to
@@ -2452,6 +2575,9 @@ export const parseTunnelHosts = (
  * no answer at all, where this gives it a 504 naming the destination.
  */
 const tunnelConnectTimeoutMs = 10_000
+
+/** How long a ClientHello that has begun may take to arrive whole. */
+const tunnelHelloTimeoutMs = 10_000
 
 /**
  * Where a tunnel to an allowed name may connect: the addresses to try in turn,
@@ -2928,8 +3054,20 @@ interface TunnelState {
   id: number
   /** Bytes the client sent before the destination was connected. */
   early: Uint8Array[]
+  /**
+   * The host the session's ClientHello has to name, for a tunnel whose hello
+   * is checked, and the guest's bytes held while it is read.
+   */
+  hello:
+    | { readonly host: string; held: Uint8Array; timer: ReturnType<typeof setTimeout> | undefined }
+    | undefined
   opened: number
-  phase: 'head' | 'opening' | 'piping' | 'done'
+  /**
+   * `hello` is a connected tunnel whose guest's bytes are held until the
+   * ClientHello they begin is read; the destination's reach the guest
+   * meanwhile.
+   */
+  phase: 'head' | 'opening' | 'hello' | 'piping' | 'done'
   /** `host:port`, once a CONNECT line has named one, and `-` until then. */
   target: string
   upstream: Side
@@ -3008,12 +3146,17 @@ const endWhenWritten = (socket: import('bun').Socket<unknown>, side: Side): void
  * TLS listener that does: a CONNECT to one of them is joined to that listener
  * rather than to the host, whatever `hosts` says, so that what reaches the
  * host is a request the broker constructed.
+ *
+ * Under a list of names, the ClientHello of each session has to name the host
+ * its `CONNECT` did (`readHello`), and one that has begun has `helloDeadlineMs`
+ * to arrive whole, a parameter for the same reason as `destinations`.
  */
 export const serveTunnel = (
   socketPath: string,
   hosts: TunnelScope,
   destinations: Destinations = publicDestinations,
   answered?: { readonly names: readonly string[]; readonly socket: string },
+  helloDeadlineMs = tunnelHelloTimeoutMs,
 ): import('bun').UnixSocketListener<TunnelState> => {
   let opened = 0
   // Learned rather than configured: which families a host can actually use
@@ -3052,6 +3195,71 @@ export const serveTunnel = (
     )
     client.data.phase = 'done'
     client.end()
+  }
+
+  /**
+   * Close a tunnel that is open, for a session it will not carry: both ends,
+   * with nothing of the guest's sent on. Past the 200 there is no response to
+   * write, since the guest is speaking TLS by then.
+   */
+  const closeHello = (client: import('bun').Socket<TunnelState>, reason: string): void => {
+    if (client.data.hello?.timer !== undefined) clearTimeout(client.data.hello.timer)
+    audit({ event: 'tunnel-deny', id: client.data.id, reason, target: client.data.target })
+    client.data.phase = 'done'
+    client.data.upstreamSocket?.end()
+    client.end()
+  }
+
+  /**
+   * Add the guest's next bytes to the ClientHello being held, and decide once
+   * it is whole: splice a session whose hello names the `CONNECT` host, or
+   * that is not TLS, and close any other.
+   *
+   * A session that is not TLS is spliced because ssh is carried over port 443
+   * (`ssh.github.com`), and refusing it would break that. It reaches only the
+   * listed name's addresses, with whatever `Host` it sends, which is no more
+   * than a TLS session can say inside the encryption, where nothing here
+   * reads. Only a hello that has begun has a deadline: until the guest sends
+   * a byte, a protocol whose server speaks first is waiting on the
+   * destination, whose bytes reach the guest meanwhile.
+   */
+  const readHello = (client: import('bun').Socket<TunnelState>, chunk: Uint8Array): void => {
+    const state = client.data
+    const hello = state.hello
+    const upstream = state.upstreamSocket
+    if (state.phase !== 'hello' || hello === undefined || upstream === undefined) return
+    const held = new Uint8Array(hello.held.byteLength + chunk.byteLength)
+    held.set(hello.held)
+    held.set(chunk, hello.held.byteLength)
+    hello.held = held
+    const read = readClientHello(held)
+    if (read._tag === 'More') {
+      if (held.byteLength > maxClientHelloBytes + 1024) {
+        closeHello(client, 'the TLS ClientHello is larger than any client sends')
+        return
+      }
+      hello.timer ??= setTimeout(() => {
+        if (state.phase === 'hello') closeHello(client, 'no whole TLS ClientHello arrived')
+      }, helloDeadlineMs)
+      return
+    }
+    if (read._tag === 'Malformed') {
+      closeHello(client, `the TLS ClientHello is malformed: ${read.reason}`)
+      return
+    }
+    if (read._tag === 'Hello' && read.serverName === undefined) {
+      closeHello(client, `the TLS ClientHello names no server, so it is not one for ${hello.host}`)
+      return
+    }
+    if (read._tag === 'Hello' && !sameServerName(read.serverName ?? '', hello.host)) {
+      closeHello(client, `the TLS ClientHello names another server than ${hello.host}`)
+      return
+    }
+    if (hello.timer !== undefined) clearTimeout(hello.timer)
+    hello.held = new Uint8Array()
+    state.phase = 'piping'
+    state.bytesOut += held.byteLength
+    push(upstream, state.upstream, held, client)
   }
 
   const connectUpstream = async (
@@ -3121,7 +3329,7 @@ export const serveTunnel = (
         }
         if (typeof candidate === 'string') preferredFamily = addressFamily(candidate)
         client.data.upstreamSocket = upstream
-        client.data.phase = 'piping'
+        client.data.phase = client.data.hello === undefined ? 'piping' : 'hello'
         client.write('HTTP/1.1 200 Connection Established\r\n\r\n')
         audit({
           ...(typeof candidate === 'string' ? { address: candidate } : { answered: true }),
@@ -3131,11 +3339,17 @@ export const serveTunnel = (
         })
         // Whatever arrived after the head — a TLS hello sent without waiting
         // for the 200, with the head or while connecting — goes first, in order.
-        for (const early of client.data.early) {
-          client.data.bytesOut += early.byteLength
-          push(upstream, client.data.upstream, early, client)
-        }
+        const early = client.data.early
         client.data.early = []
+        if (client.data.phase === 'hello') {
+          for (const chunk of early) readHello(client, chunk)
+          if (client.data.phase === 'hello') client.resume()
+          return
+        }
+        for (const chunk of early) {
+          client.data.bytesOut += chunk.byteLength
+          push(upstream, client.data.upstream, chunk, client)
+        }
         if (client.data.upstream.pending.length === 0) client.resume()
         return
       } catch {
@@ -3159,6 +3373,7 @@ export const serveTunnel = (
   return Bun.listen<TunnelState>({
     socket: {
       close(client) {
+        if (client.data.hello?.timer !== undefined) clearTimeout(client.data.hello.timer)
         finish(client.data, 'the guest closed')
         const { upstream, upstreamSocket } = client.data
         if (upstreamSocket !== undefined) endWhenWritten(upstreamSocket, upstream)
@@ -3170,6 +3385,10 @@ export const serveTunnel = (
           if (state.upstreamSocket !== undefined) {
             push(state.upstreamSocket, state.upstream, chunk, client)
           }
+          return
+        }
+        if (state.phase === 'hello') {
+          readHello(client, chunk)
           return
         }
         if (state.phase === 'opening') {
@@ -3194,13 +3413,20 @@ export const serveTunnel = (
         if (asked._tag === 'Open') state.target = `${asked.host}:${String(asked.port)}`
         // A name the broker answers goes to its own listener whatever the
         // destinations are: what reaches that host is what a grant allows.
-        const decided =
-          asked._tag === 'Open' && answered?.names.includes(asked.host) === true
-            ? asked
-            : allowTunnel(hosts, asked)
+        const ownName = asked._tag === 'Open' && answered?.names.includes(asked.host) === true
+        const decided = ownName ? asked : allowTunnel(hosts, asked)
         if (decided._tag === 'Refuse') {
           refuseClient(client, decided.status, decided.reason)
           return
+        }
+        // Under a list of names, the session has to be for the name listed:
+        // a CDN serving many sites from the same addresses picks the site by
+        // the hello's server name, so a listed name could otherwise carry
+        // one that is not. With any public name allowed, a guest could as
+        // well have named the other site here, so nothing is held for it; nor
+        // for a name the broker answers, whose listener reads the name itself.
+        if (hosts !== 'any' && !ownName) {
+          state.hello = { held: new Uint8Array(), host: decided.host, timer: undefined }
         }
         state.phase = 'opening'
         // Nothing more is read until there is somewhere to send it.
@@ -3223,6 +3449,7 @@ export const serveTunnel = (
           client: { ending: false, pending: [] },
           early: [],
           head: new Uint8Array(),
+          hello: undefined,
           id: opened,
           opened: Date.now(),
           phase: 'head',

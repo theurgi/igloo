@@ -350,6 +350,20 @@ host's own (`isHostAddress`). The connection is made to an address that was chec
 name again (`publicDestinations`). What the tunnel carries is TLS the broker cannot read, and
 nothing is injected.
 
+Under `restricted`, the session is also held to the listed name. A CDN serves many sites from the
+same addresses and picks one by the server name in the TLS ClientHello, so the guest's bytes are
+held until a whole hello has arrived, across records and segments, and sent on only if its
+`server_name` is the `CONNECT` host, whatever its case, a trailing dot aside (`readClientHello`,
+`readHello`). A hello naming another host, or none, a malformed one, one past `maxClientHelloBytes`,
+and one that does not arrive whole in time are closed, both ends, with nothing of the guest's sent
+on. The destination's bytes reach the guest meanwhile. Two things stay open, by choice. A session
+whose first byte begins no TLS record is spliced, which is how ssh reaches port 443; it can name a
+site only inside plain HTTP, to the listed name's addresses. And a TLS session can name another site
+in its HTTP `Host` inside the encryption, which nothing here can read; many CDNs refuse a `Host`
+that differs from the server name. ECH is not refused as such: its visible name is the one compared,
+so it passes only where the listed name is the CDN's ECH front, which then reaches every site behind
+it. Under `internet` no hello is read, since any public name could be the `CONNECT` host itself.
+
 A listed name that resolves to a routable address private to a VPN this host is on passes every
 check here, and is reached.
 

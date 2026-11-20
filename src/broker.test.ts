@@ -3248,6 +3248,377 @@ const auditing = async <A>(use: (audited: ReadonlyArray<unknown>) => Promise<A>)
   }
 }
 
+// A ClientHello, built field by field, so that each test can break one.
+const u16 = (n: number): number[] => [(n >> 8) & 0xff, n & 0xff]
+const extension = (type: number, data: readonly number[] = []): number[] => [
+  ...u16(type),
+  ...u16(data.length),
+  ...data,
+]
+const serverNameExtension = (...names: readonly string[]): number[] => {
+  const entries = names.flatMap(name => {
+    const bytes = [...Buffer.from(name, 'latin1')]
+    return [0, ...u16(bytes.length), ...bytes]
+  })
+  return extension(0, [...u16(entries.length), ...entries])
+}
+/** The handshake message: a ClientHello with these extensions, or none at all. */
+const clientHello = (extensions?: ReadonlyArray<readonly number[]>): number[] => {
+  const flat = extensions?.flat() ?? []
+  // Version, random, session id, two cipher suites, no compression.
+  const body = [
+    3,
+    3,
+    ...Array.from({ length: 32 }, () => 7),
+    32,
+    ...Array.from({ length: 32 }, () => 9),
+    ...u16(4),
+    0x13,
+    0x01,
+    0x13,
+    0x02,
+    1,
+    0,
+    ...(extensions === undefined ? [] : [...u16(flat.length), ...flat]),
+  ]
+  return [1, (body.length >> 16) & 0xff, ...u16(body.length & 0xffff), ...body]
+}
+/** A handshake message in records of at most `size` bytes each. */
+const records = (handshake: readonly number[], size = 16384): Uint8Array => {
+  const out: number[] = []
+  for (let at = 0; at < handshake.length; at += size) {
+    const part = handshake.slice(at, at + size)
+    out.push(22, 3, 1, ...u16(part.length), ...part)
+  }
+  return Uint8Array.from(out)
+}
+/** As Chromium sends it: GREASE, an ECH extension, and the name. */
+const helloFor = (name: string): Uint8Array =>
+  records(
+    clientHello([
+      extension(0x8a8a),
+      extension(0xfe0d, [0, 0, 1, 0, 1, 7, 0, 0]),
+      serverNameExtension(name),
+      extension(0x002b, [2, 3, 4]),
+    ]),
+  )
+
+describe('Broker.readClientHello', () => {
+  it('reads the host_name of the server_name extension', () => {
+    assert.deepStrictEqual(Broker.readClientHello(helloFor('pypi.org')), {
+      _tag: 'Hello',
+      serverName: 'pypi.org',
+    })
+  })
+
+  it('waits for the whole hello, however it is split into segments and records', () => {
+    const hello = clientHello([serverNameExtension('pypi.org')])
+    for (const size of [1, 7, 100, hello.length]) {
+      const bytes = records(hello, size)
+      for (let cut = 0; cut < bytes.byteLength; cut++) {
+        assert.deepStrictEqual(Broker.readClientHello(bytes.subarray(0, cut)), { _tag: 'More' })
+      }
+      assert.deepStrictEqual(Broker.readClientHello(bytes), {
+        _tag: 'Hello',
+        serverName: 'pypi.org',
+      })
+    }
+  })
+
+  it('reads the hello alone, whatever follows it', () => {
+    const bytes = Uint8Array.from([...helloFor('pypi.org'), 23, 3, 3, 0, 2, 1, 2])
+    assert.deepStrictEqual(Broker.readClientHello(bytes), {
+      _tag: 'Hello',
+      serverName: 'pypi.org',
+    })
+  })
+
+  it('finds no name in a hello without the extension, or without extensions', () => {
+    for (const hello of [clientHello([extension(0x002b, [2, 3, 4])]), clientHello()]) {
+      assert.deepStrictEqual(Broker.readClientHello(records(hello)), {
+        _tag: 'Hello',
+        serverName: undefined,
+      })
+    }
+  })
+
+  it('says a session that does not begin with a handshake record is not TLS', () => {
+    assert.deepStrictEqual(Broker.readClientHello(Buffer.from('SSH-2.0-OpenSSH_9.9\r\n')), {
+      _tag: 'NotTls',
+    })
+    assert.deepStrictEqual(Broker.readClientHello(Buffer.from('GET / HTTP/1.1\r\n')), {
+      _tag: 'NotTls',
+    })
+  })
+
+  it('refuses a hello two readers could take differently, or one no client sends', () => {
+    const hello = clientHello([serverNameExtension('pypi.org')])
+    const malformed: ReadonlyArray<readonly [string, Uint8Array]> = [
+      [
+        'a name extension twice',
+        records(
+          clientHello([serverNameExtension('pypi.org'), serverNameExtension('evil.example')]),
+        ),
+      ],
+      ['two host names', records(clientHello([serverNameExtension('pypi.org', 'evil.example')]))],
+      ['another extension twice', records(clientHello([extension(0x2b), extension(0x2b)]))],
+      [
+        'an alert inside the hello',
+        Uint8Array.from([...records(hello.slice(0, 10)), 21, 3, 3, 0, 2, 2, 40]),
+      ],
+      ['an empty record', Uint8Array.from([22, 3, 1, 0, 0])],
+      ['a record past 2^14', Uint8Array.from([22, 3, 1, ...u16(16385)])],
+      ['a record that is not TLS', Uint8Array.from([22, 9, 1, 0, 4, 1, 0, 0, 0])],
+      ['a ServerHello', records([2, ...hello.slice(1)])],
+      ['a hello past the limit', records([1, 0, 0x80, 0, ...hello.slice(4)])],
+      [
+        'extensions short of the hello',
+        records([...hello.slice(0, 1), 0, ...u16(hello.length - 4 + 1), ...hello.slice(4), 0]),
+      ],
+      ['a truncated hello', records([1, 0, 0, 10, ...hello.slice(4, 14)])],
+    ]
+    for (const [what, bytes] of malformed) {
+      assert.strictEqual(Broker.readClientHello(bytes)._tag, 'Malformed', what)
+    }
+  })
+
+  it('holds a name to the host whatever its case, a trailing dot aside', () => {
+    assert.isTrue(Broker.sameServerName('PyPI.org.', 'pypi.org'))
+    assert.isFalse(Broker.sameServerName('files.pypi.org', 'pypi.org'))
+    assert.isFalse(Broker.sameServerName('pypi.org\u0000', 'pypi.org'))
+  })
+})
+
+/**
+ * A destination for a tunnel that records every byte that reaches it and says
+ * a greeting to whoever connects, and the tunnel in front of it: under `hosts`,
+ * with every name resolving to it.
+ */
+const fronted = async (
+  dir: string,
+  hosts: Broker.TunnelScope,
+  helloDeadlineMs?: number,
+): Promise<{
+  readonly reached: () => number
+  readonly stop: () => void
+  readonly socketPath: string
+}> => {
+  let reached = 0
+  const destination = Bun.listen({
+    hostname: '127.0.0.1',
+    port: 0,
+    socket: {
+      data(_socket, bytes) {
+        reached += bytes.byteLength
+      },
+      open(socket) {
+        socket.write('greeting')
+      },
+    },
+  })
+  const socketPath = join(dir, 'proxy.sock')
+  const tunnel = Broker.serveTunnel(
+    socketPath,
+    hosts,
+    () => Promise.resolve({ addresses: ['127.0.0.1'], port: destination.port }),
+    undefined,
+    helloDeadlineMs,
+  )
+  return {
+    reached: () => reached,
+    socketPath,
+    stop: () => {
+      tunnel.stop(true)
+      destination.stop(true)
+    },
+  }
+}
+
+/**
+ * Open a tunnel to `host` and send `bytes` through it in `chunks` pieces,
+ * then wait for the session to settle: what reached the destination, whether
+ * the tunnel closed, and what came back.
+ */
+const session = async (
+  socketPath: string,
+  host: string,
+  bytes: Uint8Array,
+  chunks = 1,
+  settleMs = 300,
+): Promise<{ readonly closed: boolean; readonly received: string }> => {
+  let received = ''
+  let closed = false
+  const socket = await Bun.connect({
+    socket: {
+      close() {
+        closed = true
+      },
+      data(_socket, chunk) {
+        received += new TextDecoder().decode(chunk)
+      },
+    },
+    unix: socketPath,
+  })
+  socket.write(`CONNECT ${host}:443 HTTP/1.1\r\n\r\n`)
+  for (let attempt = 0; attempt < 40 && !received.includes('\r\n\r\n'); attempt++) {
+    await Bun.sleep(25)
+  }
+  const size = Math.ceil(bytes.byteLength / chunks)
+  for (let at = 0; at < bytes.byteLength; at += size) {
+    socket.write(bytes.subarray(at, at + size))
+    await Bun.sleep(20)
+  }
+  await Bun.sleep(settleMs)
+  // Read before ending it, since ending it closes it.
+  const ended = closed
+  if (!ended) socket.end()
+  return { closed: ended, received }
+}
+
+const denials = (audited: ReadonlyArray<unknown>): Array<Record<string, unknown>> =>
+  audited.filter(
+    (event): event is Record<string, unknown> =>
+      typeof event === 'object' &&
+      event !== null &&
+      'event' in event &&
+      event.event === 'tunnel-deny',
+  )
+
+describe('the tunnel holds a TLS session to its CONNECT host', () => {
+  it('splices a hello naming the host, sending the guest bytes on unchanged', () =>
+    withSocketDir(async dir => {
+      const tunnel = await fronted(dir, ['pypi.org'])
+      try {
+        const bytes = Uint8Array.from([...helloFor('PyPI.org.'), 23, 3, 3, 0, 1, 0])
+        const { closed, received } = await session(tunnel.socketPath, 'pypi.org', bytes)
+        assert.isFalse(closed)
+        assert.include(received, 'greeting')
+        assert.strictEqual(tunnel.reached(), bytes.byteLength)
+      } finally {
+        tunnel.stop()
+      }
+    }))
+
+  it('closes a hello naming another host, before any of it reaches the destination', () =>
+    auditing(audited =>
+      withSocketDir(async dir => {
+        const tunnel = await fronted(dir, ['pypi.org'])
+        try {
+          const { closed } = await session(tunnel.socketPath, 'pypi.org', helloFor('evil.example'))
+          assert.isTrue(closed)
+          assert.strictEqual(tunnel.reached(), 0)
+          assert.deepStrictEqual(
+            denials(audited).map(event => [event['target'], event['reason']]),
+            [['pypi.org:443', 'the TLS ClientHello names another server than pypi.org']],
+          )
+        } finally {
+          tunnel.stop()
+        }
+      }),
+    ))
+
+  it('reads a hello split across segments and records whole', () =>
+    withSocketDir(async dir => {
+      const tunnel = await fronted(dir, ['pypi.org'])
+      try {
+        const bytes = records(clientHello([serverNameExtension('pypi.org')]), 40)
+        const { closed } = await session(tunnel.socketPath, 'pypi.org', bytes, 9)
+        assert.isFalse(closed)
+        assert.strictEqual(tunnel.reached(), bytes.byteLength)
+      } finally {
+        tunnel.stop()
+      }
+    }))
+
+  it('closes a hello with no name, a malformed one, and one too large', () =>
+    auditing(audited =>
+      withSocketDir(async dir => {
+        const tunnel = await fronted(dir, ['pypi.org'])
+        try {
+          const big = clientHello([
+            serverNameExtension('pypi.org'),
+            extension(
+              0x15,
+              Array.from({ length: 40_000 }, () => 0),
+            ),
+          ])
+          for (const bytes of [
+            records(clientHello([extension(0x2b, [2, 3, 4])])),
+            records(clientHello([serverNameExtension('pypi.org', 'evil.example')])),
+            records(big),
+          ]) {
+            const { closed } = await session(tunnel.socketPath, 'pypi.org', bytes)
+            assert.isTrue(closed)
+          }
+          assert.strictEqual(tunnel.reached(), 0)
+          assert.lengthOf(denials(audited), 3)
+        } finally {
+          tunnel.stop()
+        }
+      }),
+    ))
+
+  it('closes a hello that never completes, once its deadline passes', () =>
+    auditing(audited =>
+      withSocketDir(async dir => {
+        const tunnel = await fronted(dir, ['pypi.org'], 200)
+        try {
+          const partial = helloFor('pypi.org').subarray(0, 20)
+          const { closed } = await session(tunnel.socketPath, 'pypi.org', partial, 1, 600)
+          assert.isTrue(closed)
+          assert.strictEqual(tunnel.reached(), 0)
+          assert.deepStrictEqual(
+            denials(audited).map(event => event['reason']),
+            ['no whole TLS ClientHello arrived'],
+          )
+        } finally {
+          tunnel.stop()
+        }
+      }),
+    ))
+
+  it('splices a session that is not TLS, such as ssh over port 443', () =>
+    withSocketDir(async dir => {
+      const tunnel = await fronted(dir, ['ssh.github.com'])
+      try {
+        const bytes = Buffer.from('SSH-2.0-OpenSSH_9.9\r\n')
+        const { closed, received } = await session(tunnel.socketPath, 'ssh.github.com', bytes)
+        assert.isFalse(closed)
+        assert.include(received, 'greeting')
+        assert.strictEqual(tunnel.reached(), bytes.byteLength)
+      } finally {
+        tunnel.stop()
+      }
+    }))
+
+  it('holds a hello carrying the ECH extension to its outer name, as any other', () =>
+    withSocketDir(async dir => {
+      const tunnel = await fronted(dir, ['pypi.org'])
+      try {
+        const matching = await session(tunnel.socketPath, 'pypi.org', helloFor('pypi.org'))
+        assert.isFalse(matching.closed)
+        const other = await session(tunnel.socketPath, 'pypi.org', helloFor('cloudflare-ech.com'))
+        assert.isTrue(other.closed)
+        assert.strictEqual(tunnel.reached(), helloFor('pypi.org').byteLength)
+      } finally {
+        tunnel.stop()
+      }
+    }))
+
+  it('reads no hello where any public name is allowed', () =>
+    withSocketDir(async dir => {
+      const tunnel = await fronted(dir, 'any')
+      try {
+        const bytes = helloFor('evil.example')
+        const { closed } = await session(tunnel.socketPath, 'pypi.org', bytes)
+        assert.isFalse(closed)
+        assert.strictEqual(tunnel.reached(), bytes.byteLength)
+      } finally {
+        tunnel.stop()
+      }
+    }))
+})
+
 const held: ReadonlyMap<string, string> = new Map([['GITHUB_TOKEN', 'ghp-test']])
 
 /** A guest's request for a repository's refs, as it reaches the broker. */
