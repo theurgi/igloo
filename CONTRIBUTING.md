@@ -136,7 +136,9 @@ which copies all of it into the store, ignored files included.
 
 No existing project. Its VM is a scratch project in a temporary directory, launched with scratch
 user layers for the credential checks, and stopped on the way out even when a check fails. VMs that
-were already running are counted, never named, and left running.
+were already running are counted, never named, and left running. Its checks pick out the scratch
+project's units by its id, so another project's VM, up before the run or brought up during it,
+enters none of them.
 
 While it runs, it stages stand-ins for other VMs under `$XDG_RUNTIME_DIR/igloo`, puts a probe file
 in your home directory, listens on the host's loopback, and publishes a guest port there. It removes

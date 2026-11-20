@@ -578,24 +578,32 @@ project="$scratch/igloo-verify"
 vm_up=""
 own_dashed=""
 
-# Units belonging to VMs the host already had up. A check that counts or picks
-# `igloo-*` units counts only what this script's own launches added, since
-# another project's VM runs in the same namespace and would otherwise read as
-# this one's daemons, or as units a `down` left behind.
-foreign_units="$scratch/foreign-units"
-systemctl --user list-units --all --plain --no-legend 'igloo-*' | awk '{print $1}' >"$foreign_units"
+# The scratch project's id, `<label>-<cid in hex>`, which every unit its VM
+# runs is named for. Set once `init` reports the CID; until then, or if it never
+# does, every `igloo-*` unit is taken for the scratch project's, so a check
+# counts too many rather than passing on none.
+own_id=""
 
-own_units() { # own_units <glob>
-	systemctl --user list-units --all --plain --no-legend "$1" | awk '{print $1}' |
-		grep -vxFf "$foreign_units"
-}
+# VMs the host already had up, for the note that the timings shared the host.
+others=$(systemctl --user list-units --all --plain --no-legend 'igloo-*.slice' | grep -c .)
 
-# The same, as `list-units` prints them, states included.
+# The units matching a glob that are the scratch project's, as `list-units`
+# prints them, states included. Another project's VM runs in the same user
+# manager, whether it was up before this run or comes up during it, and would
+# otherwise read as this one's daemons, or as units a `down` left behind. Every
+# launch here is of the scratch project with its derived CID, so its services
+# are `igloo-<id>-*` and its slice `igloo-<id>.slice`, with the id's dashes
+# escaped in the slice's name as `Vm.ts` escapes them. Through the
+# environment, since awk's `-v` would read `\x2d` as an escape.
 own_unit_lines() { # own_unit_lines <glob>
 	systemctl --user list-units --all --plain --no-legend "$1" |
-		awk -v foreign="$(paste -sd " " "$foreign_units")" '
-			BEGIN { n = split(foreign, f, " "); for (i = 1; i <= n; i++) skip[f[i]] }
-			!($1 in skip)'
+		OWN_SERVICES="igloo-${own_id:+$own_id-}" OWN_SLICE="igloo-${own_id//-/\\x2d}.slice" \
+			awk 'index($1, ENVIRON["OWN_SERVICES"]) == 1 || $1 == ENVIRON["OWN_SLICE"]'
+}
+
+# The same, names alone.
+own_units() { # own_units <glob>
+	own_unit_lines "$1" | awk '{print $1}'
 }
 
 # What a unit's process is confined to, read off the process itself: its PID
@@ -663,8 +671,7 @@ stage_other_vm() { # stage_other_vm <runtime directory>
 	: >"$1-broker/http.sock"
 }
 
-if [ -s "$foreign_units" ]; then
-	others=$(grep -c '\.slice$' "$foreign_units")
+if [ "$others" -gt 0 ]; then
 	verdict NOTE other-vms "$others other VMs already up, counted here but never named, and left out of every unit count — the timings shared the host with them"
 fi
 
@@ -739,6 +746,13 @@ step init -- "$repo/bin/igloo" init "$project"
 
 if [ -d "$project/.igloo" ]; then
 	cd "$project" || exit 1
+
+	own_cid=$(sed -n 's/^igloo: .* (cid \([0-9][0-9]*\))$/\1/p' "$out/steps/init.txt" | head -1)
+	if [ -n "$own_cid" ]; then
+		own_id="${project##*/}-$(printf '%x' "$own_cid")"
+	else
+		verdict FAIL own-units "init reported no CID, so every VM's units are counted as the scratch project's — read steps/init.txt"
+	fi
 
 	# ---- a share that is a link is refused --
 	#
