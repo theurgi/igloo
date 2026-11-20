@@ -2,8 +2,10 @@ import type { Binaries } from './Binaries.ts'
 
 import { Effect, FileSystem, Option, Schema } from 'effect'
 import { ChildProcess } from 'effect/unstable/process'
+import * as crypto from 'node:crypto'
 import * as path from 'node:path'
 
+import { storeDir } from './StoreView.ts'
 import { resolverFiles } from './Systemd.ts'
 
 /**
@@ -240,6 +242,75 @@ export const lockedUris = (lock: string): Array<string> =>
     ],
   })
 
+/** Nix's base-32 alphabet, which leaves out `e`, `o`, `u` and `t`. */
+const nixBase32Alphabet = '0123456789abcdfghijklmnpqrsvwxyz'
+
+/** Bytes in nix's base 32, which reads them from the last bit backwards. */
+const nixBase32 = (bytes: Uint8Array): string => {
+  let out = ''
+  for (let n = Math.ceil((bytes.length * 8) / 5) - 1; n >= 0; n--) {
+    const bit = n * 5
+    const i = Math.floor(bit / 8)
+    const j = bit % 8
+    const low = (bytes[i] ?? 0) >> j
+    const high = i + 1 < bytes.length ? (bytes[i + 1] ?? 0) << (8 - j) : 0
+    out += nixBase32Alphabet[(low | high) & 0x1f]
+  }
+  return out
+}
+
+/**
+ * The store path a flake input's source is fetched to, from the `narHash` its
+ * lock records, or `undefined` for a hash that is not SHA-256.
+ *
+ * Every locked source lands at a content-addressed path named `source`, which
+ * is a function of that hash alone, so it is known without asking nix, and
+ * without anything that could fetch.
+ */
+export const sourcePath = (narHash: string): string | undefined => {
+  const match = /^sha256-([A-Za-z0-9+/]{43}=)$/.exec(narHash)
+  if (match?.[1] === undefined) return undefined
+  const hex = Buffer.from(match[1], 'base64').toString('hex')
+  const digest = crypto
+    .createHash('sha256')
+    .update(`source:sha256:${hex}:${storeDir}:source`)
+    .digest()
+  // Folded to 160 bits, as nix shortens every store path's hash.
+  const folded = new Uint8Array(20)
+  digest.forEach((byte, i) => {
+    folded[i % 20] = (folded[i % 20] ?? 0) ^ byte
+  })
+  return `${storeDir}/${nixBase32(folded)}-source`
+}
+
+/**
+ * Each input a lock pins, by its node's name, with the store path its source
+ * is fetched to. Of any type, since a source is rooted only once it is in the
+ * store, and an input the evaluation never needed is not. A name that could
+ * not be a file name is left out, and so is an unreadable lock.
+ */
+export const lockedSources = (
+  lock: string,
+): Array<{ readonly name: string; readonly path: string }> =>
+  Option.match(Schema.decodeOption(Lock)(lock), {
+    onNone: () => [],
+    onSome: ({ nodes }) =>
+      Object.entries(nodes).flatMap(([name, { locked }]) => {
+        const source = locked?.narHash === undefined ? undefined : sourcePath(locked.narHash)
+        return source !== undefined && /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(name)
+          ? [{ name, path: source }]
+          : []
+      }),
+  })
+
+/** igloo's flake's lock file, or nothing where it cannot be read. */
+export const readLock = Effect.fnUntraced(function* (iglooFlakePath: string) {
+  const fs = yield* FileSystem.FileSystem
+  return yield* fs
+    .readFileString(path.join(iglooFlakePath, 'flake.lock'))
+    .pipe(Effect.orElseSucceed(() => ''))
+})
+
 /**
  * What evaluating one project's runner may read and fetch: its content layers,
  * its workspace, the runner's flake and igloo's, and the inputs igloo's own
@@ -257,10 +328,7 @@ export const forRunner = Effect.fnUntraced(function* (input: {
   readonly contentModules: readonly string[]
   readonly workspaceDir: string
 }) {
-  const fs = yield* FileSystem.FileSystem
-  const lock = yield* fs
-    .readFileString(path.join(input.iglooFlakePath, 'flake.lock'))
-    .pipe(Effect.orElseSucceed(() => ''))
+  const lock = yield* readLock(input.iglooFlakePath)
   return {
     paths: yield* readable([...input.contentModules, input.workspaceDir]),
     flakes: [input.runnerDir, input.iglooFlakePath],

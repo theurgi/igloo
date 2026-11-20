@@ -70,7 +70,10 @@ In the project, which is on disk:
   the broker answers with, and `authority.pem`, the authority that issued them, which the guest
   trusts. The authority's own key is deleted once it has signed.
 - `.igloo/runner/flake.nix`, the runner flake, and `.igloo/runners/current`, the gc-root that keeps
-  the built runner.
+  the built runner. `.igloo/runners/inputs/<input>` keeps the source of each input igloo's
+  `flake.lock` pins that the evaluation read, so a collection between launches leaves the next one
+  nothing to download. Its store path is computed from the lock's hash (`Evaluation.lockedSources`).
+  Neither name matches a pattern `nh clean` deletes roots by.
 - `.igloo/logs/<boot id>/` and `.igloo/logs/latest`, a record per launch, and
   `.igloo/launched-from.json`, what the running VM was launched from.
 
@@ -102,7 +105,8 @@ In `$XDG_RUNTIME_DIR/igloo/`, a tmpfs:
 5. The credentials are fetched (`Secrets.write`), first, since a source may prompt for a passphrase.
 6. The runner is evaluated once, confined, to a `.drv` (`Vm.ts`'s `instantiate`). The build plan is
    checked (`BuildPlan.check`) and that same `.drv` built (`Vm.ts`'s `build`), pinned by the
-   gc-root.
+   gc-root. Then each input's source is rooted in place (`Vm.ts`'s `rootInputs`), offline, and a
+   root the lock no longer names is removed.
 7. The shares are read off the runner (`Virtiofs.shares`) and held to the ones the launch asked for
    (`Virtiofs.match`), and its closure listed (`StoreView.closure`). A virtio-fs daemon starts for
    each share, and once every socket exists, QEMU. The launch waits until `ssh` over vsock answers.
@@ -123,7 +127,7 @@ Every module but `index.ts` has its tests beside it, in `src/<Module>.test.ts`.
 | `Templates.ts`                 | A new project's starting files: the user layer's templates, filled in and written by `init`.  |
 | `Cid.ts`                       | The vsock CID, a hash of the project's canonical root.                                        |
 | `Config.ts`                    | Finding, evaluating and composing the layers: the policy, and the content modules.            |
-| `Evaluation.ts`                | The confinement for every nix evaluation of a layer or policy file.                           |
+| `Evaluation.ts`                | The confinement for every nix evaluation of a layer or policy file, and locked inputs' paths. |
 | `Spec.ts`                      | What a composed configuration means for a VM: credentials, grants, the runner's arguments.    |
 | `Flake.ts`                     | The runner flake.                                                                             |
 | `BuildPlan.ts`                 | What building a runner would run, and which of it igloo refuses.                              |

@@ -35,8 +35,9 @@ restart, removes its record again, so `latest` stays on the launch worth reading
 | `ports.log`           | The SSH forward that publishes the project's `ports`.                                                                                                                          |
 
 The steps of a launch, as `boot.json` names them: `brokered-credentials`, `delivered-credentials`,
-`evaluate`, `plan`, `build`, `closure`, `virtiofsd`, `guest`, `broker`, `tether` and `ports`. A step
-the VM does not need is not run.
+`evaluate`, `plan`, `build`, `inputs`, `closure`, `virtiofsd`, `guest`, `broker`, `tether` and
+`ports`. A step the VM does not need is not run. `inputs` keeps the sources of igloo's flake inputs
+from a garbage collection; if it cannot, the launch notes which and goes ahead.
 
 ## Reporting a bug with `igloo report`
 

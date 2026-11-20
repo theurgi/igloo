@@ -3,7 +3,7 @@ import type { Grant, TunnelScope } from './broker.ts'
 
 import { ByteSize, Clock, Duration, Effect, FileSystem, Result, Schema, Stream } from 'effect'
 import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
-import { dirname } from 'node:path'
+import { dirname, join } from 'node:path'
 
 import * as BootLog from './BootLog.ts'
 import {
@@ -78,6 +78,17 @@ export interface VmSpec extends VmTarget {
    * `--out-link`, in the project.
    */
   readonly runnerRootLink: string
+  /**
+   * The sources igloo's flake inputs are locked to, each with the gc-root that
+   * keeps it once a launch has evaluated with it. The runner's closure does not
+   * hold them, so without these a collection between launches deletes them and
+   * the next evaluation downloads them again.
+   */
+  readonly inputRoots: {
+    /** One link per input in here, named for it, and nothing else. */
+    readonly dir: string
+    readonly sources: ReadonlyArray<{ readonly name: string; readonly path: string }>
+  }
   /**
    * Whether this VM gets a broker, and with it the tether that is the only way
    * to reach one.
@@ -628,6 +639,63 @@ const build = Effect.fnUntraced(function* (
   return yield* fs
     .realPath(spec.runnerRootLink)
     .pipe(Effect.mapError(() => new VmError({ message: `no runner at ${spec.runnerRootLink}` })))
+})
+
+/**
+ * Root each source the evaluation read, in place, so the next launch finds it
+ * after a collection rather than fetching it again.
+ *
+ * Run once the evaluation has succeeded, so every input it needed is in the
+ * store; one it never needed is not, and has nothing to keep. A root on any
+ * other path goes: one an earlier lock named, and one whose source is gone.
+ * The `nix build` of a store path that is there only adds the root, and with
+ * substitution off and offline it cannot fetch one that is not, so nothing
+ * here reaches the network outside the evaluation's confinement.
+ *
+ * Returns the inputs it could not root though their sources were there. A
+ * launch goes ahead without those roots: they save a download, and the VM does
+ * not need them.
+ */
+const rootInputs = Effect.fnUntraced(function* (bins: Binaries, spec: VmSpec) {
+  const fs = yield* FileSystem.FileSystem
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+  const { dir, sources } = spec.inputRoots
+  yield* fs.makeDirectory(dir, { recursive: true })
+  const named = new Set(sources.map(source => source.name))
+  for (const entry of yield* fs.readDirectory(dir)) {
+    if (!named.has(entry)) yield* fs.remove(join(dir, entry), { recursive: true })
+  }
+  const unrooted: string[] = []
+  for (const source of sources) {
+    const link = join(dir, source.name)
+    if (!(yield* fs.exists(source.path))) {
+      yield* fs.remove(link).pipe(Effect.ignore)
+      continue
+    }
+    const code = yield* spawner
+      .exitCode(
+        ChildProcess.make(
+          bins.nix,
+          [
+            'build',
+            source.path,
+            '--out-link',
+            link,
+            '--offline',
+            '--option',
+            'substitute',
+            'false',
+          ],
+          { extendEnv: true, stderr: 'ignore', stdin: 'ignore', stdout: 'ignore' },
+        ),
+      )
+      .pipe(Effect.orElseSucceed(() => 127))
+    if (code !== 0) {
+      yield* fs.remove(link).pipe(Effect.ignore)
+      unrooted.push(source.name)
+    }
+  }
+  return unrooted
 })
 
 /** Where one share's daemon appends its output. */
@@ -1458,6 +1526,18 @@ const launch = Effect.fnUntraced(function* (bins: Binaries, spec: VmSpec, boot: 
     'build',
     nixLog(log => build(bins, spec, drvPath, log)),
   )
+  const unrooted = yield* boot.phase(
+    'inputs',
+    rootInputs(bins, spec).pipe(
+      Effect.orElseSucceed(() => spec.inputRoots.sources.map(source => source.name)),
+    ),
+  )
+  if (unrooted.length > 0) {
+    yield* noted(
+      boot,
+      `could not keep the source of ${unrooted.join(', ')} from a garbage collection, so a launch after one may download it again`,
+    )
+  }
   // Which runner this VM was booted from. The gc-root answers that for the
   // current one only, so an older boot has no other record of it.
   yield* boot.record({ event: 'runner', path: outPath })

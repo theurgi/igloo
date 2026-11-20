@@ -1,9 +1,11 @@
 import { BunServices } from '@effect/platform-bun'
 import { assert, describe, it } from '@effect/vitest'
 import { Effect, FileSystem, Result, Scope } from 'effect'
+import { readFileSync } from 'node:fs'
 import * as path from 'node:path'
 
 import * as Cid from './Cid.ts'
+import * as Evaluation from './Evaluation.ts'
 import * as Project from './Project.ts'
 
 const provided = <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem | Scope.Scope>) =>
@@ -26,6 +28,17 @@ describe('Project.forRoot', () => {
     const link = Project.forRoot('/home/you/projects/api').runnerRootLink
     assert.isFalse(/result|\.direnv/.test(link))
     assert.strictEqual(link, '/home/you/projects/api/.igloo/runners/current')
+  })
+
+  it("names each input's gc-root so `nh clean` will not reap it", () => {
+    // Named for the nodes of igloo's own lock, so an input added under a name
+    // one of the patterns matches fails here.
+    const lock = readFileSync(new URL('../flake.lock', import.meta.url), 'utf8')
+    const sources = Evaluation.lockedSources(lock)
+    assert.isNotEmpty(sources)
+    const dir = Project.forRoot('/home/you/projects/api').inputRootsDir
+    assert.strictEqual(dir, '/home/you/projects/api/.igloo/runners/inputs')
+    for (const { name } of sources) assert.isFalse(/result|\.direnv/.test(`${dir}/${name}`), name)
   })
 
   it('derives the CID from the path, not the label', () => {

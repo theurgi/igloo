@@ -46,6 +46,11 @@ export interface Project {
   readonly homeDir: string
   /** `<label>-<cid in hex>`. Names the slice and both units. */
   readonly id: string
+  /**
+   * Holds a gc-root per input igloo's flake is locked to, each named for its
+   * node in the lock and pinning the source the evaluation reads.
+   */
+  readonly inputRootsDir: string
   /** For display. Not unique; two projects may share one. */
   readonly label: string
   /**
@@ -86,6 +91,7 @@ export const forRoot = (root: string, cid?: number): Project => {
     diskImage: path.join(iglooDir, 'disk.img'),
     homeDir: path.join(iglooDir, 'home'),
     id: `${label}-${vsockCid.toString(16)}`,
+    inputRootsDir: path.join(iglooDir, 'runners', 'inputs'),
     label,
     // Not in `runner/`, which is a flake directory: this records what a VM was
     // launched from, and is not itself an input to building one.
@@ -95,7 +101,8 @@ export const forRoot = (root: string, cid?: number): Project => {
     runnerDir: path.join(iglooDir, 'runner'),
     // Not `result`: `nh clean` deletes indirect gc-roots whose path matches
     // `.*result.*` and then collects, which takes the store paths out from
-    // under a running VM. This name matches neither of its patterns.
+    // under a running VM. This name matches neither of its patterns, and nor
+    // does `inputRootsDir`'s.
     runnerRootLink: path.join(iglooDir, 'runners', 'current'),
     sshDir: path.join(iglooDir, 'ssh'),
     tlsDir: path.join(iglooDir, 'tls'),

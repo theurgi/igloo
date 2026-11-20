@@ -253,6 +253,10 @@ const specFor = Effect.fnUntraced(function* (input: { readonly cid: Option.Optio
     guestWritable,
     id: project.id,
     identityFile: key.identity,
+    inputRoots: {
+      dir: project.inputRootsDir,
+      sources: Evaluation.lockedSources(yield* Evaluation.readLock(iglooFlakePath)),
+    },
     label: project.label,
     launchInputs,
     launchInputsFile: project.launchInputsFile,

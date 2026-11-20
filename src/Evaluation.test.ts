@@ -228,6 +228,62 @@ describe('Evaluation.lockedUris', () => {
   })
 })
 
+// Each as `nix-store --print-fixed-path --recursive sha256 <narHash> source`
+// prints it, and as a flake input's `outPath` evaluates to.
+const fetched = {
+  'sha256-XK4KceonkwD8LuMAt/vNrz982mXJM5jeHAxMwsUXXAQ=':
+    '/nix/store/rhsxvv1380jmchb5p3a43d24mhlmp2ry-source',
+  'sha256-IyOsrL64VjSHJKdzvQQcgNJtrSd4/jDa7vhlFa9libM=':
+    '/nix/store/bsr0vj173klwv3ascgwv1mgzs38lj1hg-source',
+  'sha256-+Ba/kIn5BjvV7PN8bWOo7RoqgTY/Yv2M7qeMf3wS2Ag=':
+    '/nix/store/vw2dxq2qc1j1q0ak33i7znl73x65488n-source',
+}
+
+describe('Evaluation.sourcePath', () => {
+  it('is the store path nix fetches a locked source to', () => {
+    for (const [narHash, storePath] of Object.entries(fetched)) {
+      assert.strictEqual(Evaluation.sourcePath(narHash), storePath)
+    }
+  })
+
+  it('names no path for a hash that is not SHA-256', () => {
+    assert.isUndefined(Evaluation.sourcePath('sha512-AAAA'))
+    assert.isUndefined(Evaluation.sourcePath('sha256-short='))
+    assert.isUndefined(Evaluation.sourcePath(''))
+  })
+})
+
+describe('Evaluation.lockedSources', () => {
+  const locked = (narHash: string, type = 'github') => ({ locked: { narHash, type } })
+  const [nixpkgs, microvm, spectrum] = Object.keys(fetched)
+
+  it('gives each locked input its source, of any type, by its name in the lock', () => {
+    const lock = JSON.stringify({
+      nodes: {
+        microvm: locked(microvm ?? ''),
+        nixpkgs: locked(nixpkgs ?? ''),
+        root: { inputs: { microvm: 'microvm', nixpkgs: 'nixpkgs' } },
+        spectrum: locked(spectrum ?? '', 'git'),
+      },
+      root: 'root',
+      version: 7,
+    })
+    assert.deepStrictEqual(Evaluation.lockedSources(lock), [
+      { name: 'microvm', path: '/nix/store/bsr0vj173klwv3ascgwv1mgzs38lj1hg-source' },
+      { name: 'nixpkgs', path: '/nix/store/rhsxvv1380jmchb5p3a43d24mhlmp2ry-source' },
+      { name: 'spectrum', path: '/nix/store/vw2dxq2qc1j1q0ak33i7znl73x65488n-source' },
+    ])
+  })
+
+  it('leaves out a name that could not be a file name, and a lock it cannot read', () => {
+    const lock = JSON.stringify({
+      nodes: { '../escape': locked(nixpkgs ?? ''), 'a/b': locked(nixpkgs ?? '') },
+    })
+    assert.deepStrictEqual(Evaluation.lockedSources(lock), [])
+    assert.deepStrictEqual(Evaluation.lockedSources(''), [])
+  })
+})
+
 describe('Evaluation.forRunner', () => {
   it.effect('allows the layers, the workspace and what igloo is locked to', () =>
     provided(

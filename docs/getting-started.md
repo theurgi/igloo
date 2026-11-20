@@ -47,6 +47,7 @@ demo/
 │   ├── ssh/               the key the host connects to the guest with
 │   ├── runner/            the generated flake that builds this VM
 │   ├── runners/current    a garbage-collector root for the VM's closure
+│   ├── runners/inputs/    one for the source of each of igloo's flake inputs
 │   ├── launched-from.json what the running VM was launched from
 │   └── logs/              one directory per launch, and `latest`
 └── workspace/             the guest's /workspace

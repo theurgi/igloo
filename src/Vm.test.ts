@@ -160,6 +160,7 @@ const writeFakes = Effect.fnUntraced(function* (
   const unreachable = [`${dir}/project`, inHome, `${runtimeDir}/broker-credentials`]
   const buildCount = `${dir}/nix-build-count`
   const buildArgs = `${dir}/nix-build-args`
+  const rootArgs = `${dir}/nix-root-args`
   const evalArgs = `${dir}/nix-eval-args`
   const evalRules = `${dir}/nix-eval-rules`
   const showArgs = `${dir}/nix-show-args`
@@ -201,6 +202,11 @@ fi
 if [ "$1" = "derivation" ] && [ "$2" = "show" ]; then
   printf '%s\\n' "$@" > '${showArgs}'
   cat '${shown}'
+  exit 0
+fi
+if [ "$1" = "build" ] && [ "$3" = "--out-link" ]; then
+  printf '%s\\n' "$*" >> '${rootArgs}'
+  ln -sfn "$2" "$4"
   exit 0
 fi
 if [ "$1" = "build" ]; then
@@ -426,6 +432,7 @@ exec "$@"
       virtiofsd,
     } satisfies Binaries.Binaries,
     buildArgs,
+    rootArgs,
     buildCount,
     evalArgs,
     evalRules,
@@ -537,6 +544,7 @@ const specIn = (dir: string, label: string, cid = 42): VmSpec => ({
   logDir: `${dir}/project/.igloo/logs`,
   ports: [],
   projectRoot: `${dir}/project`,
+  inputRoots: { dir: `${dir}/project/.igloo/runners/inputs`, sources: [] },
   runnerRootLink: `${dir}/project/.igloo/runners/current`,
   runtimeDir: `${dir}/run`,
   shares: [{ source: `${dir}/workspace`, tag: 'workspace' }],
@@ -999,7 +1007,7 @@ describe('Vm.up', () => {
         const phases = summary.phases
         assert.deepStrictEqual(
           phases.map(entry => entry.name),
-          ['evaluate', 'plan', 'build', 'closure', 'virtiofsd', 'guest'],
+          ['evaluate', 'plan', 'build', 'inputs', 'closure', 'virtiofsd', 'guest'],
         )
         assert.isTrue(phases.every(entry => entry.ok))
 
@@ -1015,6 +1023,65 @@ describe('Vm.up', () => {
         // And by `down` itself: the runner is built from the VM's
         // configuration, and nothing in it runs outside QEMU's unit.
         assert.isFalse(yield* fs.exists(fakes.shutdownHelperRan))
+      }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+    30_000,
+  )
+
+  it.live(
+    "roots the sources the evaluation read, and only the lock's",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* fs.makeTempDirectoryScoped()
+        const fakes = yield* writeFakes(dir)
+        const base = specIn(dir, 'selftest-input-roots')
+        yield* Effect.addFinalizer(() => Systemd.stopSlice('systemctl', sliceOf(base)))
+        const sources = `${dir}/sources`
+        for (const name of ['nixpkgs-old', 'nixpkgs-new', 'microvm']) {
+          yield* fs.makeDirectory(`${sources}/${name}`, { recursive: true })
+        }
+        const roots = base.inputRoots.dir
+        const rooted = Effect.fnUntraced(function* () {
+          const entries = (yield* fs.readDirectory(roots)).toSorted()
+          return yield* Effect.forEach(entries, entry =>
+            fs.readLink(`${roots}/${entry}`).pipe(Effect.map(target => `${entry} ${target}`)),
+          )
+        })
+        // Left by an earlier lock: an input it named that this one does not,
+        // and one this lock names whose source is no longer there.
+        yield* fs.makeDirectory(roots, { recursive: true })
+        yield* fs.symlink(`${sources}/microvm`, `${roots}/dropped`)
+        yield* fs.symlink(`${sources}/microvm`, `${roots}/spectrum`)
+
+        const launch = (locked: VmSpec['inputRoots']['sources']) =>
+          Effect.andThen(
+            Vm.up(fakes.binaries, { ...base, inputRoots: { dir: roots, sources: locked } }),
+            Vm.down(fakes.binaries, base),
+          )
+        yield* launch([
+          { name: 'nixpkgs', path: `${sources}/nixpkgs-old` },
+          { name: 'microvm', path: `${sources}/microvm` },
+          // Never fetched, as an input the evaluation does not need is not.
+          { name: 'spectrum', path: `${sources}/spectrum` },
+        ])
+        assert.deepStrictEqual(yield* rooted(), [
+          `microvm ${sources}/microvm`,
+          `nixpkgs ${sources}/nixpkgs-old`,
+        ])
+        // Asked so that nothing missing could be fetched.
+        const asked = (yield* fs.readFileString(fakes.rootArgs)).trim().split('\n')
+        assert.lengthOf(asked, 2)
+        for (const line of asked) assert.match(line, / --offline --option substitute false$/)
+
+        // A new lock moves the root in place, and keeps no other.
+        yield* launch([
+          { name: 'nixpkgs', path: `${sources}/nixpkgs-new` },
+          { name: 'microvm', path: `${sources}/microvm` },
+        ])
+        assert.deepStrictEqual(yield* rooted(), [
+          `microvm ${sources}/microvm`,
+          `nixpkgs ${sources}/nixpkgs-new`,
+        ])
       }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
     30_000,
   )
