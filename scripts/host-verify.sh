@@ -2712,6 +2712,9 @@ EOF
 				echo "=== runpodctl, reading the account"
 				guest 'timeout 60 runpodctl user 2>&1 | head -5 | tr "\n" " "; echo'
 				echo
+				echo "=== runpodctl, listing pods through the REST API"
+				guest 'timeout 60 runpodctl pod list 2>&1 | head -5 | tr "\n" " "; echo'
+				echo
 				# The broker's log is live, unlike the boot record kept above.
 				echo "=== the tunnel's hand-offs to the broker for Runpod's names, from its log"
 				grep '"answered":true' "$(boot_log broker.log)" | grep 'runpod'
@@ -2765,6 +2768,15 @@ EOF
 				;;
 			*)
 				verdict FAIL runpodctl-through-broker "read artifacts/runpod.txt: an x509 error means runpodctl did not trust the broker's authority"
+				;;
+			esac
+			cli_rest_said=$(after_header "$out/artifacts/runpod.txt" "=== runpodctl, listing pods")
+			case $cli_rest_said in
+			*'api.runpod.io refused IGLOO_VERIFY_CLOUD'*)
+				verdict PASS runpodctl-rest "runpodctl lists pods through Runpod's REST API at api.runpod.io, and shows the broker's reason"
+				;;
+			*)
+				verdict FAIL runpodctl-rest "read artifacts/runpod.txt: runpodctl before 3.1.1 calls rest.runpod.io, which no longer exists"
 				;;
 			esac
 

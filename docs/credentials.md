@@ -324,12 +324,12 @@ name, as you.
   ([How the guest reaches GitHub](#how-the-guest-reaches-github)), so a client's ordinary Runpod
   URLs reach it, under every network mode and with no `tunnel` entry.
 
-`runpodctl` 2.15.0 writes some things through GraphQL, and those commands are refused: `pod create`
-for a GPU pod (a CPU pod goes through the REST API), `serverless create`, the parts of
-`serverless update` that change an endpoint's template or models, and anything that adds an SSH key
-to the account (`ssh add-key`, and that step of `doctor` and `config`). The REST API does each but
-the last: `POST v2/pods` with a template creates a GPU pod, and `POST v2/serverless` an endpoint.
-`runpodctl user` reads the balance through GraphQL, and works.
+`runpodctl` 3.1.1 uses the REST API at `api.runpod.io/v2`, but writes a few things through GraphQL,
+and those commands are refused: `serverless create`, the parts of `serverless update` that change an
+endpoint's template or models, and `model add` and `model remove`. The REST API does the first:
+`POST v2/serverless` creates an endpoint. Adding an SSH key to the account (`ssh add-key`, and that
+step of `doctor` and `config`) is `PUT v2/account/ssh-keys`, which is refused too. `runpodctl user`
+reads the balance through GraphQL, and works.
 
 A Runpod key reaches the whole account, so the bounds that matter most are Runpod's own:
 
@@ -647,7 +647,7 @@ that way, since it never enters the guest.
   `restricted` only by listing each pod's name, since `tunnel` takes no wildcards. A network
   volume's S3 API takes keys of its own, which sign each request, so the broker cannot hold them.
 - `runpod` refuses every GraphQL mutation, so a client that writes through GraphQL is refused where
-  the REST API would have done the same write: `runpodctl pod create` for a GPU pod, among others
+  the REST API would have done the same write: `runpodctl serverless create`, among others
   ([`runpod`](#runpod)).
 - A serverless endpoint of the load-balancing kind is called at a name of its own,
   `<endpoint>.api.runpod.ai`, which the broker does not answer.
