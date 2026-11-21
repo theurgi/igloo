@@ -296,7 +296,15 @@ lib.mapAttrs refusedOnEvaluation {
   qemu-package-same-outPath =
     { lib, pkgs, ... }:
     {
-      microvm.qemu.package = lib.mkOverride 9 (pkgs.qemu_kvm // { override = _: pkgs.hello; });
+      microvm.qemu.package = lib.mkOverride 9 (
+        pkgs.qemu_kvm.override {
+          minimal = true;
+          enableBlobs = true;
+        }
+        // {
+          override = _: pkgs.hello;
+        }
+      );
     };
   qemu-package-apply =
     { lib, pkgs, ... }:
