@@ -27,6 +27,15 @@ let
   # same path, disables it.
   coreModule = ./guest.nix;
 
+  # The hypervisor the host runs: for this host's CPU alone, and without the
+  # graphical frontends, which a headless guest never opens and which bring
+  # GTK's closure and a wrapper that sets its search paths in QEMU's
+  # environment. The firmware blobs stay, since the guest boots from them.
+  qemu = pkgs.qemu_kvm.override {
+    minimal = true;
+    enableBlobs = true;
+  };
+
   # `mkRunner`'s arguments, evaluated into the runner they build and the
   # pins the merged configuration does not hold.
   evaluate =
@@ -417,8 +426,8 @@ let
         # merged values are; the comparison refuses a module that names
         # another.
         "microvm.qemu.package" = {
-          value = pkgs.qemu_kvm;
-          same = held: held.outPath == pkgs.qemu_kvm.outPath;
+          value = qemu;
+          same = held: held.outPath == qemu.outPath;
         };
         # The daemons serving the shares are igloo's own binary, not the
         # runner's, whose virtiofsd reaches only `bin/virtiofsd-run`, which
@@ -545,7 +554,8 @@ let
       # values `pins` compared. The comparison reads one derivation of each
       # — QEMU's `outPath`, the package set's `writeShellScript` — and a
       # value that keeps that and changes anything else passes it, while
-      # `buildRunner` uses the rest: QEMU through its `override`, and the
+      # `buildRunner` uses the rest: QEMU through its `override` where a USB
+      # device asks for one, and the
       # package set through every script and the `runCommandLocal` that
       # makes the runner itself.
       runner =
@@ -556,7 +566,7 @@ let
             hypervisor = "qemu";
             vmHostPackages = pkgs;
             qemu = guest.config.microvm.qemu // {
-              package = pkgs.qemu_kvm;
+              package = qemu;
             };
           };
           inherit (guest.config.system.build) toplevel;
