@@ -230,16 +230,11 @@ describe('Broker.tlsNames', () => {
   })
 
   it('answers Runpod’s names for a runpod grant, beside GitHub’s for a github one', () => {
-    assert.deepStrictEqual(Broker.tlsNames(runpod), [
-      'rest.runpod.io',
-      'api.runpod.io',
-      'api.runpod.ai',
-    ])
+    assert.deepStrictEqual(Broker.tlsNames(runpod), ['api.runpod.io', 'api.runpod.ai'])
     assert.deepStrictEqual(Broker.tlsNames([...grants, ...runpod, ...inference]), [
       'github.com',
       'api.github.com',
       'uploads.github.com',
-      'rest.runpod.io',
       'api.runpod.io',
       'api.runpod.ai',
     ])
@@ -332,10 +327,9 @@ describe('Broker.decideAddressed', () => {
       profile: 'runpod',
       upstream: 'https://api.runpod.io/graphql',
     })
-    assert.strictEqual(
-      outcome(addressed('https://rest.runpod.io/v1/pods', 'POST', runpod)),
-      'allow',
-    )
+    assert.strictEqual(outcome(addressed('https://api.runpod.io/v2/pods', 'POST', runpod)), 'allow')
+    // A name of Runpod's that the profile does not hold is not answered.
+    assert.strictEqual(outcome(addressed('https://rest.runpod.io/v1/pods', 'GET', runpod)), 421)
     assert.strictEqual(
       outcome(addressed('https://api.runpod.ai/v2/ep1/run', 'POST', runpod)),
       'allow',
@@ -790,14 +784,6 @@ describe('Broker.decide, on Runpod’s API', () => {
         upstream: 'https://api.runpod.io/v2/catalog/gpus?include=AVAILABILITY&product=pod',
       },
     )
-    assert.deepStrictEqual(at('rest.runpod.io', '/v1/pods'), {
-      _tag: 'Cloud',
-      credential: 'RUNPOD_API_KEY',
-      host: 'rest.runpod.io',
-      operation: 'read',
-      profile: 'runpod',
-      upstream: 'https://rest.runpod.io/v1/pods',
-    })
     for (const path of ['/v2/pods/abc/logs', '/v2/billing/pods', '/v2/organization/invites']) {
       assert.strictEqual(outcome(at('api.runpod.io', path)), 'allow', path)
     }
@@ -831,13 +817,6 @@ describe('Broker.decide, on Runpod’s API', () => {
       ['POST', 'api.runpod.io', '/v2/registries'],
       ['DELETE', 'api.runpod.io', '/v2/registries/r1'],
       ['POST', 'api.runpod.io', '/v2/account/secrets'],
-      ['POST', 'rest.runpod.io', '/v1/pods'],
-      ['POST', 'rest.runpod.io', '/v1/pods/abc/stop'],
-      ['POST', 'rest.runpod.io', '/v1/pods/abc/start'],
-      ['DELETE', 'rest.runpod.io', '/v1/pods/abc'],
-      ['POST', 'rest.runpod.io', '/v1/templates/t1/update'],
-      ['POST', 'rest.runpod.io', '/v1/endpoints'],
-      ['POST', 'rest.runpod.io', '/v1/containerregistryauth'],
     ]
     for (const [method, host, path] of writes) {
       const decided = at(host, path, method)
@@ -882,11 +861,9 @@ describe('Broker.decide, on Runpod’s API', () => {
     }
   })
 
-  it('refuses anything outside each REST API’s version, and a method that neither reads nor writes', () => {
+  it('refuses anything outside the REST API’s version, and a method that neither reads nor writes', () => {
     assert.strictEqual(outcome(at('api.runpod.io', '/v1/pods')), 403)
     assert.strictEqual(outcome(at('api.runpod.io', '/')), 403)
-    assert.strictEqual(outcome(at('rest.runpod.io', '/v2/pods')), 403)
-    assert.strictEqual(outcome(at('rest.runpod.io', '/v1/pods', 'POST')), 'allow')
     assert.strictEqual(outcome(at('api.runpod.io', '/v2/pods', 'OPTIONS')), 405)
     assert.strictEqual(outcome(at('api.runpod.io', '/v2/pods', 'TRACE')), 405)
   })
@@ -904,7 +881,6 @@ describe('Broker.decide, on Runpod’s API', () => {
     // here reads, and a subscription's upgrade begins as a GET too.
     assert.strictEqual(outcome(at('api.runpod.io', '/graphql?query={myself{id}}')), 405)
     assert.strictEqual(outcome(at('api.runpod.io', '/graphql', 'PUT')), 405)
-    assert.strictEqual(outcome(at('rest.runpod.io', '/graphql', 'POST')), 403)
   })
 
   it('calls a serverless endpoint, reading with GET and calling with POST', () => {

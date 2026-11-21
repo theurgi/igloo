@@ -61,7 +61,7 @@ const usage =
  * `api`, for them, and pushes to and writes through the API for those in its
  * `write`, uploading a release's assets at `uploads`; an `inference` profile
  * calls the endpoints `inferenceEndpoints` lists; a `cloud` profile reads an
- * account's API at `rest` and `host`, writes there what `cloudWrites` lists,
+ * account's API at `host`, writes there what `cloudWrites` lists,
  * queries its GraphQL at `host` without writing through it, and calls the
  * account's own serverless endpoints at `invoke`.
  *
@@ -78,9 +78,9 @@ export const profiles = {
   'anthropic-messages': { host: 'api.anthropic.com', kind: 'inference' },
   github: { api: 'api.github.com', host: 'github.com', kind: 'git', uploads: 'uploads.github.com' },
   openrouter: { host: 'openrouter.ai', kind: 'inference' },
-  // Runpod's REST API's first version at `rest`, its second and its GraphQL
-  // at `host`, and the API a serverless endpoint is called through at `invoke`.
-  runpod: { host: 'api.runpod.io', invoke: 'api.runpod.ai', kind: 'cloud', rest: 'rest.runpod.io' },
+  // Runpod's REST API and its GraphQL at `host`, and the API a serverless
+  // endpoint is called through at `invoke`.
+  runpod: { host: 'api.runpod.io', invoke: 'api.runpod.ai', kind: 'cloud' },
 } as const
 
 export type ProfileName = keyof typeof profiles
@@ -136,7 +136,7 @@ const answeredAt = (name: AnsweredProfile): readonly string[] => {
   const profile = profiles[name]
   return profile.kind === 'git'
     ? [profile.host, profile.api, profile.uploads]
-    : [profile.rest, profile.host, profile.invoke]
+    : [profile.host, profile.invoke]
 }
 
 /**
@@ -932,32 +932,12 @@ const cloudWrites: Readonly<
       templates: ['POST'],
       'templates/*': ['DELETE', 'PATCH'],
     },
-    [profiles.runpod.rest]: {
-      containerregistryauth: ['POST'],
-      'containerregistryauth/*': ['DELETE'],
-      endpoints: ['POST'],
-      'endpoints/*': ['DELETE', 'PATCH'],
-      'endpoints/*/update': ['POST'],
-      networkvolumes: ['POST'],
-      'networkvolumes/*': ['DELETE', 'PATCH'],
-      'networkvolumes/*/update': ['POST'],
-      pods: ['POST'],
-      'pods/*': ['DELETE', 'PATCH'],
-      'pods/*/reset': ['POST'],
-      'pods/*/restart': ['POST'],
-      'pods/*/start': ['POST'],
-      'pods/*/stop': ['POST'],
-      'pods/*/update': ['POST'],
-      templates: ['POST'],
-      'templates/*': ['DELETE', 'PATCH'],
-      'templates/*/update': ['POST'],
-    },
   },
 }
 
 /** The version each of a cloud profile's REST names takes its paths under. */
 const cloudVersions: Readonly<Record<CloudProfile, Readonly<Record<string, string>>>> = {
-  runpod: { [profiles.runpod.host]: 'v2', [profiles.runpod.rest]: 'v1' },
+  runpod: { [profiles.runpod.host]: 'v2' },
 }
 
 /**

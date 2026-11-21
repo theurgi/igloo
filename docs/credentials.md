@@ -268,10 +268,10 @@ answers for any profile. It keeps both in `.igloo/tls/`, with the certificate's 
 by you. The guest is built trusting that authority beside the system's own, and
 `NODE_EXTRA_CA_CERTS` points Node and Bun at the same list.
 
-- The authority can sign for `github.com`, `rest.runpod.io`, `api.runpod.io` and `api.runpod.ai`,
-  and their subdomains, and nothing else: its name constraints say so, and its own key is deleted
-  once it has signed the one certificate. What `.igloo/tls/` holds can answer those names to this
-  project's guest, and sign nothing. The broker answers only the names its own grants are for.
+- The authority can sign for `github.com`, `api.runpod.io` and `api.runpod.ai`, and their
+  subdomains, and nothing else: its name constraints say so, and its own key is deleted once it has
+  signed the one certificate. What `.igloo/tls/` holds can answer those names to this project's
+  guest, and sign nothing. The broker answers only the names its own grants are for.
 - Every request the guest makes to any of them over HTTPS reaches the broker. What the grant covers
   is served with the token. A read no grant covers, a release download, a clone of a public
   repository the grant does not list or an install script's read through the API, is sent to GitHub
@@ -293,17 +293,16 @@ name, as you.
 ### `runpod`
 
 - **Upstream:** Runpod's API, with a Runpod API key sent as a bearer token: its REST API at
-  `https://rest.runpod.io/v1` and `https://api.runpod.io/v2`, its GraphQL API at
-  `https://api.runpod.io/graphql`, and the API a serverless endpoint is called through, at
-  `https://api.runpod.ai/v2`.
+  `https://api.runpod.io/v2`, its GraphQL API at `https://api.runpod.io/graphql`, and the API a
+  serverless endpoint is called through, at `https://api.runpod.ai/v2`.
 - **Operations:**
-  - Reading, with `GET` or `HEAD`, anything under `v1/` at `rest.runpod.io` and under `v2/` at
-    `api.runpod.io`, with its query: the GPU catalog with prices and availability, pods and their
-    logs, templates, volumes, serverless endpoints, billing.
+  - Reading, with `GET` or `HEAD`, anything under `v2/` at `api.runpod.io`, with its query: the GPU
+    catalog with prices and availability, pods and their logs, templates, volumes, serverless
+    endpoints, billing.
   - Writing through the REST API what the account runs and what it is made from: creating, changing
     and deleting pods, templates, serverless endpoints, network and global volumes, clusters,
     registry logins and secrets, and starting, stopping, restarting and resetting a pod
-    (`v1/pods/<id>/start` and the like, `v2/pods/<id>/action`).
+    (`v2/pods/<id>/action`).
   - A GraphQL query, `POST graphql`, that only reads. The broker reads the request and sends it only
     if every operation in it is a query. A mutation is refused, since one can create an API key that
     the guest would then hold, and so is a query naming `registryAuth`, which holds a registry's
@@ -315,13 +314,13 @@ name, as you.
     `purge-queue`, and a vLLM worker's OpenAI-compatible API under `openai/v1/`.
   - Everything else is refused: a write that reaches past what the account runs to who may use it,
     an organization's invitations, members, groups and roles, the account's SSH keys, cost centres
-    and ECR delegations; any write the list above does not name; and any path outside `v1/`, `v2/`
-    and `graphql`.
+    and ECR delegations; any write the list above does not name; and any path outside `v2/` and
+    `graphql`.
 - **Grant:** the profile alone. Creating pods takes a key with **All** permissions: a **Read only**
   key reads, and **Restricted** sets access per serverless endpoint and nothing else.
 - **In the guest:** `runpodctl`, and `RUNPOD_API_KEY=igloo-broker-holds-the-real-key`, the variable
-  `runpodctl` and Runpod's other clients read their key from. The broker answers `rest.runpod.io`,
-  `api.runpod.io` and `api.runpod.ai` itself, as it answers GitHub's names
+  `runpodctl` and Runpod's other clients read their key from. The broker answers `api.runpod.io` and
+  `api.runpod.ai` itself, as it answers GitHub's names
   ([How the guest reaches GitHub](#how-the-guest-reaches-github)), so a client's ordinary Runpod
   URLs reach it, under every network mode and with no `tunnel` entry.
 
