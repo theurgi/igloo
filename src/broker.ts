@@ -903,10 +903,13 @@ const writesTo = (method: string, tail: readonly string[]): boolean =>
  * Runpod's: what an account runs, pods, serverless endpoints and clusters,
  * and what they are made from and keep, templates, volumes, the logins
  * for the registries their images come from, and secrets. Each is created,
- * changed and removed, and a pod started, stopped and reset. Left out is what
- * reaches past what the account runs, to who may use it and how: an
- * organization's members, invitations, groups and roles; the SSH keys every
- * pod the account starts lets in; cost centres; and ECR delegations, each
+ * changed and removed, a pod started, stopped and reset and a command run in
+ * it, and a queued pod cancelled. A command in a pod reaches what the pod does,
+ * which its start command reaches already. Left out is what reaches past what
+ * the account runs, to who may use it and how: an organization's members,
+ * invitations, groups and roles; the SSH keys every pod the account starts
+ * lets in; sign-in attempts, each ending in a new API key; tags, among which
+ * cost centres are kept; cost centres themselves; and ECR delegations, each
  * registering a repository in an AWS account for Runpod to pull images from.
  */
 const cloudWrites: Readonly<
@@ -925,8 +928,10 @@ const cloudWrites: Readonly<
       pods: ['POST'],
       'pods/*': ['DELETE', 'PATCH'],
       'pods/*/action': ['POST'],
+      'pods/*/exec': ['POST'],
+      'queued-pods/*': ['DELETE'],
       registries: ['POST'],
-      'registries/*': ['DELETE'],
+      'registries/*': ['DELETE', 'PATCH'],
       serverless: ['POST'],
       'serverless/*': ['DELETE', 'PATCH'],
       templates: ['POST'],

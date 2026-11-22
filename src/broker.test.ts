@@ -809,6 +809,8 @@ describe('Broker.decide, on Runpod’s API', () => {
       ['PATCH', 'api.runpod.io', '/v2/pods/abc'],
       ['DELETE', 'api.runpod.io', '/v2/pods/abc'],
       ['POST', 'api.runpod.io', '/v2/pods/abc/action'],
+      ['POST', 'api.runpod.io', '/v2/pods/abc/exec'],
+      ['DELETE', 'api.runpod.io', '/v2/queued-pods/q1'],
       ['POST', 'api.runpod.io', '/v2/templates'],
       ['PATCH', 'api.runpod.io', '/v2/serverless/ep1'],
       ['POST', 'api.runpod.io', '/v2/network-volumes'],
@@ -816,6 +818,7 @@ describe('Broker.decide, on Runpod’s API', () => {
       ['POST', 'api.runpod.io', '/v2/clusters'],
       ['POST', 'api.runpod.io', '/v2/registries'],
       ['DELETE', 'api.runpod.io', '/v2/registries/r1'],
+      ['PATCH', 'api.runpod.io', '/v2/registries/r1'],
       ['POST', 'api.runpod.io', '/v2/account/secrets'],
     ]
     for (const [method, host, path] of writes) {
@@ -843,7 +846,12 @@ describe('Broker.decide, on Runpod’s API', () => {
       ['PUT', '/v2/cost-centers/c1/pod/p1'],
       ['POST', '/v2/registries/delegations'],
       ['DELETE', '/v2/registries/delegations/d1'],
-      ['POST', '/v2/pods/abc/exec'],
+      ['POST', '/v2/signup/authentication-attempts'],
+      ['POST', '/v2/signup/authentication-attempts/a1/verify'],
+      ['POST', '/v2/tags'],
+      ['PATCH', '/v2/tags/t1'],
+      ['PUT', '/v2/tags/t1/resources/pod/p1'],
+      ['POST', '/v2/queued-pods'],
       ['PUT', '/v2/pods/abc'],
     ]
     for (const [method, path] of refused) {

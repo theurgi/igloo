@@ -301,8 +301,9 @@ name, as you.
     endpoints, billing.
   - Writing through the REST API what the account runs and what it is made from: creating, changing
     and deleting pods, templates, serverless endpoints, network and global volumes, clusters,
-    registry logins and secrets, and starting, stopping, restarting and resetting a pod
-    (`v2/pods/<id>/action`).
+    registry logins and secrets; starting, stopping, restarting and resetting a pod
+    (`v2/pods/<id>/action`); running a command in a running pod, `POST v2/pods/<id>/exec`, which
+    answers with its output and exit code after at most 25 seconds; and cancelling a queued pod.
   - A GraphQL query, `POST graphql`, that only reads. The broker reads the request and sends it only
     if every operation in it is a query. A mutation is refused, since one can create an API key that
     the guest would then hold, and so is a query naming `registryAuth`, which holds a registry's
@@ -313,9 +314,9 @@ name, as you.
     `api.runpod.ai`, so `run`, `runsync`, `status`, `stream`, `cancel`, `retry`, `health`,
     `purge-queue`, and a vLLM worker's OpenAI-compatible API under `openai/v1/`.
   - Everything else is refused: a write that reaches past what the account runs to who may use it,
-    an organization's invitations, members, groups and roles, the account's SSH keys, cost centres
-    and ECR delegations; any write the list above does not name; and any path outside `v2/` and
-    `graphql`.
+    an organization's invitations, members, groups and roles, the account's SSH keys, sign-in
+    attempts (each ends in a new API key), tags (cost centres are tags), cost centres and ECR
+    delegations; any write the list above does not name; and any path outside `v2/` and `graphql`.
 - **Grant:** the profile alone. Creating pods takes a key with **All** permissions: a **Read only**
   key reads, and **Restricted** sets access per serverless endpoint and nothing else.
 - **In the guest:** `runpodctl`, and `RUNPOD_API_KEY=igloo-broker-holds-the-real-key`, the variable
@@ -640,7 +641,8 @@ that way, since it never enters the guest.
   system's, does not trust the broker's, and fails to reach `github.com` from the guest. Node and
   Bun read `NODE_EXTRA_CA_CERTS`, which the guest sets; point any other at
   `/etc/ssl/certs/ca-certificates.crt`.
-- `runpod` reaches a pod by its API alone. SSH to a pod uses port 22 at an address, which the
+- `runpod` reaches a pod by its API alone: a command runs in it through `POST v2/pods/<id>/exec`,
+  and waits at most 25 seconds for it. SSH to a pod uses port 22 at an address, which the
   [tunnel](network.md#the-tunnel) does not carry, so `runpodctl ssh` does not connect, and neither
   do `runpodctl send` and `receive`, whose relays are on other ports. A pod's HTTP ports, at
   `<pod>-<port>.proxy.runpod.net`, are reached through the tunnel under `internet`, and under
