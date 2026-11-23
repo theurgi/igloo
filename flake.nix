@@ -64,6 +64,7 @@
         self.packages.${system}
         // import ./nix/checks.nix {
           inherit (self.nixosModules) guest;
+          homeModule = self.homeModules.default;
           inherit
             lib
             mkRunner
