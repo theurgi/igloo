@@ -13,7 +13,29 @@ const grants: readonly Broker.Grant[] = [
   { credential: 'GITHUB_TOKEN', profile: 'github', repos: ['you/api'] },
 ]
 
-const runpod: readonly Broker.Grant[] = [{ credential: 'RUNPOD_API_KEY', profile: 'runpod' }]
+/**
+ * The profiles igloo ships, read as the CLI reads them, from the JSON the
+ * package carries: `IGLOO_PROFILES`, which the devshell sets.
+ */
+const shippedProfiles = (): ReadonlyMap<string, Profiles.Profile> => {
+  const file = process.env['IGLOO_PROFILES']
+  if (file === undefined || file === '') {
+    throw new Error('IGLOO_PROFILES is not set: run the tests in `nix develop`')
+  }
+  const read = Profiles.read(file, JSON.parse(readFileSync(file, 'utf8')))
+  if (Result.isFailure(read)) throw new Error(read.failure)
+  return read.success
+}
+
+/** A grant of the shipped profile `name`, every set chosen, as a credential of the same name would be. */
+const shippedGrant = (name: string, credential: string): Broker.ProfileGrant => {
+  const profile = shippedProfiles().get(name)
+  if (profile === undefined) throw new Error(`igloo ships no ${name} profile`)
+  return { credential, ...Profiles.grantOf(name, profile, Object.keys(profile.allow)) }
+}
+
+/** Runpod's profile, as igloo ships it, with every set chosen. */
+const runpod: readonly Broker.Grant[] = [shippedGrant('runpod', 'RUNPOD_API_KEY')]
 
 const base = 'http://127.0.0.1:3128'
 
@@ -227,22 +249,24 @@ describe('Broker.tlsNames', () => {
     for (const name of Broker.tlsNames(twice)) assert.include(Broker.tlsNamesCovered, name)
   })
 
-  it('answers nothing for a grant that is not a git or cloud one', () => {
-    assert.deepStrictEqual(Broker.tlsNames([...inference, ...servers]), [])
+  it('answers nothing for a model server, which is reached by its path', () => {
+    assert.deepStrictEqual(Broker.tlsNames(servers), [])
   })
 
-  it('answers Runpod’s names for a runpod grant, beside GitHub’s for a github one', () => {
-    assert.deepStrictEqual(Broker.tlsNames(runpod), ['api.runpod.io', 'api.runpod.ai'])
+  it('answers each host of a profile grant, beside GitHub’s for a github one', () => {
+    assert.deepStrictEqual(Broker.tlsNames(runpod), ['api.runpod.ai', 'api.runpod.io'])
     assert.deepStrictEqual(Broker.tlsNames([...grants, ...runpod, ...inference]), [
       'github.com',
       'api.github.com',
       'uploads.github.com',
-      'api.runpod.io',
       'api.runpod.ai',
+      'api.runpod.io',
+      'api.anthropic.com',
+      'openrouter.ai',
     ])
-    // The certificate covers every profile's names, so a project's grants
-    // changing never changes the authority its guest trusts.
-    assert.deepStrictEqual(Broker.tlsNamesCovered, Broker.tlsNames([...grants, ...runpod]))
+    // The code's own names are github's alone; the certificate covers the
+    // shipped profiles' hosts beside them (`index.ts`).
+    assert.deepStrictEqual(Broker.tlsNamesCovered, Broker.tlsNames(grants))
   })
 })
 
@@ -322,11 +346,15 @@ describe('Broker.decideAddressed', () => {
 
   it('decides a request addressed to one of Runpod’s names for a runpod grant, and not otherwise', () => {
     assert.deepStrictEqual(addressed('https://api.runpod.io/graphql', 'POST', runpod), {
-      _tag: 'Cloud',
+      _tag: 'Profile',
       credential: 'RUNPOD_API_KEY',
+      graphql: { withheld: ['registryAuth'] },
       host: 'api.runpod.io',
-      operation: 'query',
       profile: 'runpod',
+      rule: 'POST graphql',
+      send: 'bearer',
+      sendsBody: true,
+      set: 'read',
       upstream: 'https://api.runpod.io/graphql',
     })
     assert.strictEqual(outcome(addressed('https://api.runpod.io/v2/pods', 'POST', runpod)), 'allow')
@@ -338,7 +366,7 @@ describe('Broker.decideAddressed', () => {
     )
     assert.strictEqual(
       outcome(addressed('https://api.runpod.io/v2/organization/invites', 'POST', runpod)),
-      403,
+      405,
     )
     for (const granted of [grants, inference, [...grants, ...inference, ...servers]]) {
       assert.strictEqual(outcome(addressed('https://api.runpod.io/graphql', 'POST', granted)), 421)
@@ -770,160 +798,6 @@ describe('Broker.decide, on an upload of a release’s asset', () => {
   })
 })
 
-describe('Broker.decide, on Runpod’s API', () => {
-  const at = (host: string, path: string, method = 'GET', granted = runpod) =>
-    Broker.decide(granted, method, `${base}/${host}${path}`)
-
-  it('reads anything under each REST API’s version, with its credential and query', () => {
-    assert.deepStrictEqual(
-      at('api.runpod.io', '/v2/catalog/gpus?include=AVAILABILITY&product=pod'),
-      {
-        _tag: 'Cloud',
-        credential: 'RUNPOD_API_KEY',
-        host: 'api.runpod.io',
-        operation: 'read',
-        profile: 'runpod',
-        upstream: 'https://api.runpod.io/v2/catalog/gpus?include=AVAILABILITY&product=pod',
-      },
-    )
-    for (const path of ['/v2/pods/abc/logs', '/v2/billing/pods', '/v2/organization/invites']) {
-      assert.strictEqual(outcome(at('api.runpod.io', path)), 'allow', path)
-    }
-    assert.strictEqual(outcome(at('API.RunPod.io', '/v2/pods', 'HEAD')), 'allow')
-  })
-
-  it('sends the query encoded, and cannot leave the version by its path', () => {
-    const decided = at('api.runpod.io', '/v2/pods?name=a b&x=1,2')
-    assert.strictEqual(
-      decided._tag === 'Cloud' ? decided.upstream : '',
-      'https://api.runpod.io/v2/pods?name=a+b&x=1%2C2',
-    )
-    // `..` is resolved before anything is matched, so this asks for `/graphql`
-    // with GET, and a percent-escape is refused outright.
-    assert.strictEqual(outcome(at('api.runpod.io', '/v2/../graphql')), 405)
-    assert.strictEqual(outcome(at('api.runpod.io', '/v2/%2e%2e/graphql')), 405)
-    assert.strictEqual(outcome(at('api.runpod.io', '/v2/pods%2Fx')), 400)
-  })
-
-  it('writes what an account runs and what it is made from', () => {
-    const writes: ReadonlyArray<readonly [string, string, string]> = [
-      ['POST', 'api.runpod.io', '/v2/pods'],
-      ['PATCH', 'api.runpod.io', '/v2/pods/abc'],
-      ['DELETE', 'api.runpod.io', '/v2/pods/abc'],
-      ['POST', 'api.runpod.io', '/v2/pods/abc/action'],
-      ['POST', 'api.runpod.io', '/v2/pods/abc/exec'],
-      ['DELETE', 'api.runpod.io', '/v2/queued-pods/q1'],
-      ['POST', 'api.runpod.io', '/v2/templates'],
-      ['PATCH', 'api.runpod.io', '/v2/serverless/ep1'],
-      ['POST', 'api.runpod.io', '/v2/network-volumes'],
-      ['DELETE', 'api.runpod.io', '/v2/global-volumes/v1'],
-      ['POST', 'api.runpod.io', '/v2/clusters'],
-      ['POST', 'api.runpod.io', '/v2/registries'],
-      ['DELETE', 'api.runpod.io', '/v2/registries/r1'],
-      ['PATCH', 'api.runpod.io', '/v2/registries/r1'],
-      ['POST', 'api.runpod.io', '/v2/account/secrets'],
-    ]
-    for (const [method, host, path] of writes) {
-      const decided = at(host, path, method)
-      assert.strictEqual(
-        decided._tag === 'Cloud' ? decided.operation : decided._tag,
-        'write',
-        `${method} ${path}`,
-      )
-    }
-  })
-
-  it('refuses what reaches past what the account runs, to who may use it and how', () => {
-    const refused: ReadonlyArray<readonly [string, string]> = [
-      ['POST', '/v2/organization/invites'],
-      ['DELETE', '/v2/organization/invites/i1'],
-      ['PATCH', '/v2/organization/users/u1'],
-      ['DELETE', '/v2/organization/users/u1'],
-      ['POST', '/v2/organization/roles'],
-      ['PATCH', '/v2/organization/roles/r1'],
-      ['POST', '/v2/organization/groups'],
-      ['PUT', '/v2/organization/groups/g1/members/u1'],
-      ['PUT', '/v2/account/ssh-keys'],
-      ['POST', '/v2/cost-centers'],
-      ['PUT', '/v2/cost-centers/c1/pod/p1'],
-      ['POST', '/v2/registries/delegations'],
-      ['DELETE', '/v2/registries/delegations/d1'],
-      ['POST', '/v2/signup/authentication-attempts'],
-      ['POST', '/v2/signup/authentication-attempts/a1/verify'],
-      ['POST', '/v2/tags'],
-      ['PATCH', '/v2/tags/t1'],
-      ['PUT', '/v2/tags/t1/resources/pod/p1'],
-      ['POST', '/v2/queued-pods'],
-      ['PUT', '/v2/pods/abc'],
-    ]
-    for (const [method, path] of refused) {
-      assert.deepStrictEqual(
-        at('api.runpod.io', path, method),
-        {
-          _tag: 'Deny',
-          asked: { host: 'api.runpod.io' },
-          json: true,
-          reason: `${method} ${path} is not a write this VM may make through api.runpod.io`,
-          status: 403,
-        },
-        `${method} ${path}`,
-      )
-    }
-  })
-
-  it('refuses anything outside the REST API’s version, and a method that neither reads nor writes', () => {
-    assert.strictEqual(outcome(at('api.runpod.io', '/v1/pods')), 403)
-    assert.strictEqual(outcome(at('api.runpod.io', '/')), 403)
-    assert.strictEqual(outcome(at('api.runpod.io', '/v2/pods', 'OPTIONS')), 405)
-    assert.strictEqual(outcome(at('api.runpod.io', '/v2/pods', 'TRACE')), 405)
-  })
-
-  it('takes a GraphQL request with POST alone, sent to the fixed path without its query', () => {
-    assert.deepStrictEqual(at('api.runpod.io', '/graphql?query=mutation{x}', 'POST'), {
-      _tag: 'Cloud',
-      credential: 'RUNPOD_API_KEY',
-      host: 'api.runpod.io',
-      operation: 'query',
-      profile: 'runpod',
-      upstream: 'https://api.runpod.io/graphql',
-    })
-    // GraphQL over GET puts the document in the query string, which nothing
-    // here reads, and a subscription's upgrade begins as a GET too.
-    assert.strictEqual(outcome(at('api.runpod.io', '/graphql?query={myself{id}}')), 405)
-    assert.strictEqual(outcome(at('api.runpod.io', '/graphql', 'PUT')), 405)
-  })
-
-  it('calls a serverless endpoint, reading with GET and calling with POST', () => {
-    assert.deepStrictEqual(at('api.runpod.ai', '/v2/ep1/runsync', 'POST'), {
-      _tag: 'Cloud',
-      credential: 'RUNPOD_API_KEY',
-      host: 'api.runpod.ai',
-      operation: 'invoke',
-      profile: 'runpod',
-      upstream: 'https://api.runpod.ai/v2/ep1/runsync',
-    })
-    const status = at('api.runpod.ai', '/v2/ep1/status/job-1?wait=5000')
-    assert.strictEqual(status._tag === 'Cloud' ? status.operation : status._tag, 'read')
-    assert.strictEqual(
-      status._tag === 'Cloud' ? status.upstream : '',
-      'https://api.runpod.ai/v2/ep1/status/job-1?wait=5000',
-    )
-    assert.strictEqual(
-      outcome(at('api.runpod.ai', '/v2/ep1/openai/v1/chat/completions', 'POST')),
-      'allow',
-    )
-    assert.strictEqual(outcome(at('api.runpod.ai', '/v2/ep1/health')), 'allow')
-    assert.strictEqual(outcome(at('api.runpod.ai', '/v2/ep1/run', 'DELETE')), 405)
-    assert.strictEqual(outcome(at('api.runpod.ai', '/v2/ep1')), 404)
-    assert.strictEqual(outcome(at('api.runpod.ai', '/v1/ep1/run', 'POST')), 404)
-  })
-
-  it('serves Runpod’s names only for a runpod grant', () => {
-    assert.strictEqual(outcome(at('api.runpod.io', '/v2/pods', 'GET', grants)), 404)
-    assert.strictEqual(outcome(at('api.runpod.ai', '/v2/ep1/run', 'POST', inference)), 404)
-  })
-})
-
 /** The field Runpod's profile withholds from a GraphQL query, a registry's login. */
 const registryAuth: ReadonlySet<string> = new Set(['registryAuth'])
 
@@ -1082,7 +956,6 @@ describe('Broker.graphqlQuery', () => {
 describe('Broker.decide, on how a refusal is written', () => {
   const granted: readonly Broker.Grant[] = [
     { credential: 'GITHUB_TOKEN', profile: 'github', repos: ['you/api'], write: ['you/web'] },
-    { credential: 'OPENROUTER_API_KEY', profile: 'openrouter' },
     { name: 'llama-swap', port: 8080, profile: 'model-server' },
   ]
   /** Whether a refusal is set to be written in JSON, or `undefined` for no refusal. */
@@ -1108,13 +981,11 @@ describe('Broker.decide, on how a refusal is written', () => {
     }
   })
 
-  it('leaves git’s refusals, an inference profile’s and a model server’s as text', () => {
+  it('leaves git’s refusals and a model server’s as text', () => {
     for (const [method, path] of [
       ['GET', '/github.com/you/api/info/refs?service=git-receive-pack'],
       ['POST', '/github.com/someone/else/git-upload-pack'],
       ['GET', '/github.com/you/api%2Fx/info/refs?service=git-upload-pack'],
-      ['POST', '/openrouter.ai/api/v1/keys'],
-      ['GET', '/openrouter.ai/api/v1/chat/completions'],
       ['POST', '/local/llama-swap/slots'],
       ['GET', '/elsewhere.example/'],
     ] as const) {
@@ -1442,8 +1313,8 @@ describe('Broker.relay', () => {
       {
         credential: 'ANTHROPIC_API_KEY',
         host: 'api.anthropic.com',
-        kind: 'Inference',
-        scope: 'claude-opus-5',
+        kind: 'Profile',
+        scope: undefined,
       },
       401,
     )
@@ -1497,150 +1368,26 @@ describe('Broker.relay', () => {
   })
 })
 
+/** The model providers' profiles, as igloo ships them, with every set chosen. */
 const inference: readonly Broker.Grant[] = [
-  { credential: 'ANTHROPIC_API_KEY', profile: 'anthropic-messages' },
-  { credential: 'OPENROUTER_API_KEY', profile: 'openrouter' },
+  shippedGrant('anthropic-messages', 'ANTHROPIC_API_KEY'),
+  shippedGrant('openrouter', 'OPENROUTER_API_KEY'),
 ]
 
-/** A `POST` to a brokered provider path, as a provider's own client builds it. */
-const call = (path: string, method = 'POST') => Broker.decide(inference, method, `${base}${path}`)
+/**
+ * A request to a provider, by default a `POST`: `path` is its name and then
+ * its own path, addressed by name as the provider's own client sends it.
+ */
+const call = (path: string, method = 'POST') =>
+  Broker.decideAddressed(inference, method, `https:/${path}`)
 
-describe('Broker.decide, on an inference request', () => {
-  it('routes the endpoints each profile serves', () => {
-    const decision = call('/api.anthropic.com/v1/messages')
-    assert.strictEqual(decision._tag, 'Inference')
-    assert.deepStrictEqual(
-      decision._tag === 'Inference'
-        ? { operation: decision.operation, upstream: decision.upstream }
-        : {},
-      { operation: 'messages', upstream: 'https://api.anthropic.com/v1/messages' },
-    )
-    assert.strictEqual(outcome(call('/api.anthropic.com/v1/messages/count_tokens')), 'allow')
-    assert.strictEqual(outcome(call('/openrouter.ai/api/v1/chat/completions')), 'allow')
-  })
-
-  it('decides which grant pays from the host the path names', () => {
-    const credential = (decision: Broker.Decision) =>
-      decision._tag === 'Inference' ? decision.credential : undefined
-    assert.strictEqual(credential(call('/api.anthropic.com/v1/messages')), 'ANTHROPIC_API_KEY')
-    assert.strictEqual(
-      credential(call('/openrouter.ai/api/v1/chat/completions')),
-      'OPENROUTER_API_KEY',
-    )
-  })
-
-  it('refuses every other endpoint the same credential would open', () => {
-    // A model grant is not a provider grant: the same key lists batches,
-    // uploads files and reads the organisation, and none of those is a model
-    // call. The allowlist is of endpoints for that reason.
-    for (const path of [
-      '/api.anthropic.com/v1/messages/batches',
-      '/api.anthropic.com/v1/models',
-      '/api.anthropic.com/v1/files',
-      '/openrouter.ai/api/v1/credits',
-      '/openrouter.ai/api/v1/chat',
-    ]) {
-      assert.strictEqual(outcome(call(path)), 404)
-    }
-  })
-
-  it('serves OpenRouter’s model listings, read with GET', () => {
-    // What omp reads at startup: the catalog of each kind of model.
-    for (const path of [
-      '/openrouter.ai/api/v1/models',
-      '/openrouter.ai/api/v1/images/models',
-      '/openrouter.ai/api/v1/videos/models',
-      '/openrouter.ai/api/v1/embeddings/models',
-    ]) {
-      const decision = call(path, 'GET')
-      assert.deepStrictEqual(
-        decision._tag === 'Inference' ? [decision.operation, decision.upstream] : [],
-        ['list-models', `https://openrouter.ai${path.slice('/openrouter.ai'.length)}`],
-      )
-      assert.strictEqual(outcome(call(path, 'POST')), 405)
-    }
-  })
-
-  it('serves OpenRouter’s Responses and Messages endpoints, and nothing beneath either', () => {
-    for (const [path, operation] of [
-      ['/openrouter.ai/api/v1/responses', 'responses'],
-      ['/openrouter.ai/api/v1/messages', 'messages'],
-    ] as const) {
-      const decision = call(path)
-      assert.deepStrictEqual(
-        decision._tag === 'Inference'
-          ? [decision.operation, decision.upstream, decision.credential]
-          : [],
-        [
-          operation,
-          `https://openrouter.ai${path.slice('/openrouter.ai'.length)}`,
-          'OPENROUTER_API_KEY',
-        ],
-      )
-      for (const method of ['GET', 'PUT', 'PATCH', 'DELETE']) {
-        assert.strictEqual(outcome(call(path, method)), 405, `${method} ${path}`)
-      }
-    }
-    // What OpenAI serves beside a model call, to read, cancel or delete a
-    // response it stored, and Anthropic's token count, which OpenRouter does
-    // not have.
-    for (const [path, method] of [
-      ['/openrouter.ai/api/v1/responses/resp_1', 'GET'],
-      ['/openrouter.ai/api/v1/responses/resp_1', 'DELETE'],
-      ['/openrouter.ai/api/v1/responses/resp_1/cancel', 'POST'],
-      ['/openrouter.ai/api/v1/responses/resp_1/input_items', 'GET'],
-      ['/openrouter.ai/api/v1/responses/compact', 'POST'],
-      ['/openrouter.ai/api/v1/messages/count_tokens', 'POST'],
-      ['/openrouter.ai/api/v1/messages/batches', 'POST'],
-    ] as const) {
-      assert.strictEqual(outcome(call(path, method)), 404, `${method} ${path}`)
-    }
-  })
-
-  it('carries a listing’s filter, encoded, and no other endpoint’s query', () => {
-    const listed = call('/openrouter.ai/api/v1/models?output_modalities=rerank&q=a b/../c#x', 'GET')
-    assert.strictEqual(
-      listed._tag === 'Inference' ? listed.upstream : '',
-      'https://openrouter.ai/api/v1/models?output_modalities=rerank&q=a+b%2F..%2Fc',
-    )
-    const chat = call('/openrouter.ai/api/v1/chat/completions?model=elsewhere')
-    assert.strictEqual(
-      chat._tag === 'Inference' ? chat.upstream : '',
-      'https://openrouter.ai/api/v1/chat/completions',
-    )
-  })
-
-  it('refuses a host no grant covers, and the wrong method on one that is', () => {
-    assert.strictEqual(outcome(call('/api.openai.com/v1/chat/completions')), 404)
-    assert.strictEqual(outcome(call('/api.anthropic.com/v1/messages', 'GET')), 405)
-  })
-
-  it('keeps every git refusal when both kinds of grant are held', () => {
-    // Both profiles in one broker: a git path must still be judged as a git
-    // path, rather than falling through to "no such inference endpoint".
-    const both = [...grants, ...inference]
-    assert.strictEqual(
-      outcome(Broker.decide(both, 'GET', `${base}/github.com/you/api/info/refs`)),
-      404,
-    )
-    assert.strictEqual(
-      outcome(Broker.decide(both, 'POST', `${base}/github.com/you/api/git-receive-pack`)),
-      403,
-    )
-    assert.strictEqual(
-      outcome(Broker.decide(both, 'POST', `${base}/api.anthropic.com/v1/messages`)),
-      'allow',
-    )
-  })
-})
-
-describe('Broker.upstreamHeaders, for an inference request', () => {
+describe('Broker.upstreamHeaders, for a model provider’s profile', () => {
   const decision = call('/api.anthropic.com/v1/messages')
   const openrouter = call('/openrouter.ai/api/v1/chat/completions')
   const listing = call('/openrouter.ai/api/v1/models', 'GET')
 
   const headersFor = (routed: Broker.Decision, guest: Record<string, string> = {}) =>
-    routed._tag === 'Inference'
+    routed._tag === 'Profile'
       ? Broker.upstreamHeaders(routed, 'sk-secret', new Headers(guest))
       : new Headers()
 
@@ -1771,7 +1518,7 @@ describe('Broker.responseHeaders', () => {
 
   it('passes a provider’s headers back, so a harness reads its retry delay and request id', () => {
     assert.deepStrictEqual(
-      [...Broker.responseHeaders('Inference', upstream())],
+      [...Broker.responseHeaders('Profile', upstream())],
       [
         ['anthropic-ratelimit-requests-remaining', '49'],
         ['content-type', 'text/event-stream'],
@@ -1794,102 +1541,25 @@ describe('Broker.responseHeaders', () => {
 })
 
 describe('Broker.guestEnvironment', () => {
-  it('points each provider’s client at the broker, with a placeholder for a key', () => {
-    assert.deepStrictEqual(Broker.guestEnvironment(inference, 3128), {
-      ANTHROPIC_API_KEY: Broker.guestPlaceholderKey,
-      ANTHROPIC_BASE_URL: 'http://127.0.0.1:3128/api.anthropic.com',
-      OPENCODE_CONFIG: '/etc/igloo/opencode.json',
-      OPENROUTER_API_KEY: Broker.guestPlaceholderKey,
-      OPENROUTER_BASE_URL: 'http://127.0.0.1:3128/openrouter.ai/api/v1',
-    })
+  it('adds nothing for a profile grant, whose placeholders composition sets from the profile', () => {
+    assert.deepStrictEqual(Broker.guestEnvironment([...inference, ...runpod], 3128), {})
   })
 
   it('holds no value a session variable cannot carry', () => {
-    // NixOS writes these inside double quotes, unescaped: a JSON value here
-    // reaches the guest with its quotes stripped, and opencode will not start.
-    for (const [name, value] of Object.entries(Broker.guestEnvironment(inference, 3128))) {
+    // NixOS writes these inside double quotes, unescaped, so a quote in a
+    // value ends it.
+    const [server] = servers
+    for (const [name, value] of Object.entries(
+      Broker.guestEnvironment([...grants, ...(server === undefined ? [] : [server])], 3128),
+    )) {
       assert.notMatch(value, /["\\]/, name)
     }
-  })
-
-  it('gives opencode its base URLs in the file that variable names', () => {
-    // opencode reads neither base URL variable, only its own configuration;
-    // its Anthropic client takes a base ending in `v1`.
-    const files = Broker.guestEtcFiles(inference, 3128)
-    assert.deepStrictEqual(Object.keys(files), ['igloo/opencode.json'])
-    assert.deepStrictEqual(JSON.parse(files['igloo/opencode.json'] ?? '{}'), {
-      provider: {
-        anthropic: { options: { baseURL: 'http://127.0.0.1:3128/api.anthropic.com/v1' } },
-        openrouter: { options: { baseURL: 'http://127.0.0.1:3128/openrouter.ai/api/v1' } },
-      },
-    })
-  })
-
-  it('configures only the providers a grant covers', () => {
-    const openrouterOnly = [{ credential: 'OPENROUTER_API_KEY', profile: 'openrouter' }] as const
-    assert.notProperty(Broker.guestEnvironment(openrouterOnly, 3128), 'ANTHROPIC_BASE_URL')
-    assert.deepStrictEqual(
-      Object.keys(
-        JSON.parse(Broker.guestEtcFiles(openrouterOnly, 3128)['igloo/opencode.json'] ?? '{}')
-          .provider,
-      ),
-      ['openrouter'],
-    )
   })
 
   it('gives a github grant only the token GitHub’s CLI needs before it asks for anything', () => {
     assert.deepStrictEqual(Broker.guestEnvironment(grants, 3128), {
       GH_TOKEN: Broker.guestPlaceholderKey,
     })
-    assert.deepStrictEqual(Broker.guestEtcFiles(grants, 3128), {})
-    assert.deepStrictEqual(Broker.guestClientFiles(grants, 3128), [])
-  })
-
-  it('gives a runpod grant the key its clients read, and their CLI', () => {
-    assert.deepStrictEqual(Broker.guestEnvironment(runpod, 3128), {
-      RUNPOD_API_KEY: Broker.guestPlaceholderKey,
-    })
-    assert.deepStrictEqual(Broker.guestPackages(runpod), ['runpodctl'])
-    assert.deepStrictEqual(Broker.guestEtcFiles(runpod, 3128), {})
-    assert.deepStrictEqual(Broker.guestClientFiles(runpod, 3128), [])
-    assert.deepStrictEqual(Broker.guestPackages([...grants, ...inference, ...servers]), [])
-  })
-
-  it('builds a base URL the profile’s own endpoints hang off', () => {
-    // The two halves have to meet: a client appends its endpoint to this, and
-    // the result has to be a path `decide` routes.
-    const environment = Broker.guestEnvironment(inference, 3128)
-    for (const [baseUrl, endpoint] of [
-      [environment['ANTHROPIC_BASE_URL'], 'v1/messages'],
-      [environment['OPENROUTER_BASE_URL'], 'chat/completions'],
-    ]) {
-      assert.strictEqual(
-        outcome(Broker.decide(inference, 'POST', `${String(baseUrl)}/${String(endpoint)}`)),
-        'allow',
-      )
-    }
-  })
-})
-
-describe('Broker.guestClientFiles', () => {
-  it('names the broker as each provider’s base, in pi’s and omp’s own files', () => {
-    const files = Broker.guestClientFiles(inference, 3128)
-    assert.deepStrictEqual(
-      files.map(({ path, program }) => [program, path]),
-      [
-        ['pi', '.pi/agent/models.json'],
-        ['omp', '.omp/agent/models.yml'],
-      ],
-    )
-    for (const file of files) {
-      // omp reads it as YAML, which JSON is.
-      assert.deepStrictEqual(JSON.parse(file.content), {
-        providers: {
-          anthropic: { baseUrl: 'http://127.0.0.1:3128/api.anthropic.com' },
-          openrouter: { baseUrl: 'http://127.0.0.1:3128/openrouter.ai/api/v1' },
-        },
-      })
-    }
   })
 })
 
@@ -2016,7 +1686,9 @@ describe('Broker.decide, for a model server', () => {
       'allow',
     )
     assert.strictEqual(
-      outcome(Broker.decide(held, 'POST', `${base}/openrouter.ai/api/v1/chat/completions`)),
+      outcome(
+        Broker.decideAddressed(held, 'POST', 'https://openrouter.ai/api/v1/chat/completions'),
+      ),
       'allow',
     )
     assert.strictEqual(
@@ -2120,20 +1792,14 @@ describe('Broker.guestEnvironment, for a model server', () => {
     assert.deepStrictEqual(Broker.guestEnvironment(only, 3128), {
       LLAMA_CPP_BASE_URL: 'http://127.0.0.1:3128/local/llama-swap/v1',
     })
-    assert.deepStrictEqual(Broker.guestEtcFiles(only, 3128), {})
-    assert.deepStrictEqual(Broker.guestClientFiles(only, 3128), [])
   })
 
   it('chooses none of several servers for omp', () => {
     assert.notProperty(Broker.guestEnvironment(servers, 3128), 'LLAMA_CPP_BASE_URL')
   })
 
-  it('keeps the providers’ variables beside it', () => {
+  it('sets it beside a profile grant', () => {
     const environment = Broker.guestEnvironment([...inference, ...servers.slice(0, 1)], 3128)
-    assert.strictEqual(
-      environment['OPENROUTER_BASE_URL'],
-      'http://127.0.0.1:3128/openrouter.ai/api/v1',
-    )
     assert.strictEqual(
       environment['LLAMA_CPP_BASE_URL'],
       'http://127.0.0.1:3128/local/llama-swap/v1',
@@ -2229,48 +1895,33 @@ describe('Broker.parseGrants', () => {
     assert.include(message('[{"profile":"github","repos":["you/api"]}]'), 'credential')
   })
 
-  it('reads an inference grant, which is a profile and a credential', () => {
-    assert.deepStrictEqual(
-      Broker.parseGrants(
-        '[{"credential":"K","profile":"anthropic-messages"},{"credential":"O","profile":"openrouter"}]',
-      ),
-      {
-        grants: [
-          { credential: 'K', profile: 'anthropic-messages' },
-          { credential: 'O', profile: 'openrouter' },
-        ],
-      },
-    )
+  it('refuses a grant of a service by its name alone, which a profile grant replaced', () => {
+    for (const profile of ['anthropic-messages', 'openrouter', 'runpod']) {
+      assert.include(
+        message(JSON.stringify([{ credential: 'K', profile }])),
+        `unknown profile "${profile}"`,
+      )
+    }
   })
 
   it('refuses a field it does not read, rather than serving without the limit', () => {
     for (const grant of [
-      { credential: 'K', models: ['m'], profile: 'anthropic-messages' },
-      { credential: 'K', maxOutputTokens: 64, profile: 'openrouter' },
-      { credential: 'K', profile: 'anthropic-messages', repos: ['you/api'] },
+      { ...shippedGrant('anthropic-messages', 'K'), models: ['m'] },
+      { ...shippedGrant('openrouter', 'K'), maxOutputTokens: 64 },
+      { ...shippedGrant('runpod', 'R'), repos: ['you/api'] },
       { credential: 'T', models: ['m'], profile: 'github', repos: ['you/api'] },
-      { credential: 'R', profile: 'runpod', repos: ['you/api'] },
-      { credential: 'R', profile: 'runpod', write: ['you/api'] },
     ]) {
       assert.include(message(JSON.stringify([grant])), 'which this broker does not read')
     }
   })
 
-  it('reads a runpod grant, the profile alone, and refuses a second', () => {
-    assert.deepStrictEqual(Broker.parseGrants('[{"credential":"R","profile":"runpod"}]'), {
-      grants: [{ credential: 'R', profile: 'runpod' }],
-    })
-    assert.include(message('[{"profile":"runpod"}]'), 'needs a credential name')
-    assert.include(
-      message('[{"credential":"R","profile":"runpod"},{"credential":"S","profile":"runpod"}]'),
-      'two runpod grants',
-    )
-  })
-
   it('refuses a second grant for one profile, which nothing could choose between', () => {
     assert.include(
       message(
-        '[{"credential":"K","profile":"anthropic-messages"},{"credential":"L","profile":"anthropic-messages"}]',
+        JSON.stringify([
+          shippedGrant('anthropic-messages', 'K'),
+          shippedGrant('anthropic-messages', 'L'),
+        ]),
       ),
       'two anthropic-messages grants',
     )
@@ -3626,19 +3277,49 @@ const held: ReadonlyMap<string, string> = new Map([['GITHUB_TOKEN', 'ghp-test']]
 const refs = (repo: string): string =>
   `http://broker/github.com/${repo}/info/refs?service=git-upload-pack`
 
-/** Serve `granted` with `send` standing in for the provider, for as long as `use` runs. */
+/** What `serving` serves a test's requests through. */
+interface Served {
+  readonly fetch: (request: Request | string) => Promise<Response>
+}
+
+/**
+ * Serve `granted` with `send` standing in for the provider, for as long as
+ * `use` runs. A request in the path form, to `http://broker/…`, is the plain
+ * listener's; one addressed to a profile's host by name is the TLS listener's,
+ * as the tunnel would hand it over. One count of ids across both.
+ */
 const serving = <A>(
   granted: readonly Broker.Grant[],
   credentials: ReadonlyMap<string, string>,
   send: NonNullable<Parameters<typeof Broker.serveRequests>[3]>,
-  use: (server: ReturnType<typeof Broker.serveRequests>) => Promise<A>,
+  use: (server: Served) => Promise<A>,
 ): Promise<A> =>
   withSocketDir(async dir => {
-    const server = Broker.serveRequests(join(dir, 'http.sock'), granted, credentials, send)
+    const ids = Broker.requestIds()
+    const plain = Broker.serveRequests(join(dir, 'http.sock'), granted, credentials, send, ids)
+    const named = granted.some(Broker.isProfileGrant)
+      ? Broker.serveTls(
+          join(dir, 'tls.sock'),
+          granted,
+          credentials,
+          tlsIdentity(dir),
+          [],
+          send,
+          ids,
+        )
+      : undefined
     try {
-      return await use(server)
+      return await use({
+        fetch: async asked => {
+          const request = typeof asked === 'string' ? new Request(asked) : asked
+          return named === undefined || new URL(request.url).hostname === 'broker'
+            ? plain.fetch(request)
+            : named.fetch(request)
+        },
+      })
     } finally {
-      await server.stop(true)
+      await plain.stop(true)
+      await named?.stop(true)
     }
   })
 
@@ -3690,8 +3371,8 @@ describe.concurrent('Broker.serveRequests', () => {
         const socketPath = join(dir, 'http.sock')
         const server = Broker.serveRequests(
           socketPath,
-          [{ credential: 'ANTHROPIC_KEY', profile: 'anthropic-messages' }],
-          new Map([['ANTHROPIC_KEY', 'sk-test']]),
+          [{ name: 'llama-swap', port: 8080, profile: 'model-server' }],
+          new Map(),
           () =>
             Promise.resolve(
               new Response(
@@ -3707,7 +3388,7 @@ describe.concurrent('Broker.serveRequests', () => {
             ),
         )
         try {
-          const response = await fetch('http://broker/api.anthropic.com/v1/messages', {
+          const response = await fetch('http://broker/local/llama-swap/v1/chat/completions', {
             body: JSON.stringify({ messages: [], model: 'claude-x', stream: true }),
             method: 'POST',
             unix: socketPath,
@@ -3831,7 +3512,7 @@ describe('Broker.serveRequests, on GitHub’s API', () => {
     }
     const providers: readonly Broker.Grant[] = [
       ...grants,
-      { credential: 'ANTHROPIC_KEY', profile: 'anthropic-messages' },
+      shippedGrant('anthropic-messages', 'ANTHROPIC_KEY'),
     ]
     const keys = new Map([...held, ['ANTHROPIC_KEY', 'sk-test']])
     return auditing(() =>
@@ -3841,7 +3522,7 @@ describe('Broker.serveRequests, on GitHub’s API', () => {
           new Request('http://broker/api.github.com/repos/you/api/issues', { headers: steering }),
         )
         const model = await server.fetch(
-          new Request('http://broker/api.anthropic.com/v1/messages', {
+          new Request('https://api.anthropic.com/v1/messages', {
             body: '{"messages":[],"model":"claude-x"}',
             headers: steering,
             method: 'POST',
@@ -3967,7 +3648,7 @@ const untimed = (audited: ReadonlyArray<unknown>, event: string): ReadonlyArray<
     )
     .map(({ t: _t, ...rest }) => rest)
 
-describe('Broker.serveRequests, on Runpod’s API', () => {
+describe('Broker.serveTls, on Runpod’s profile', () => {
   const credentials: ReadonlyMap<string, string> = new Map([['RUNPOD_API_KEY', 'rp-test']])
   const sent: Array<{
     readonly body: string | undefined
@@ -3990,7 +3671,7 @@ describe('Broker.serveRequests, on Runpod’s API', () => {
     body: NonNullable<RequestInit['body']>,
     headers: Record<string, string> = {},
   ) =>
-    new Request(`http://broker${path}`, {
+    new Request(`https:/${path}`, {
       body,
       headers: { Authorization: `Bearer ${Broker.guestPlaceholderKey}`, ...headers },
       method: 'POST',
@@ -4025,7 +3706,9 @@ describe('Broker.serveRequests, on Runpod’s API', () => {
             event: 'allow',
             host: 'api.runpod.io',
             id: 1,
-            operation: 'query',
+            profile: 'runpod',
+            rule: 'POST graphql',
+            set: 'read',
           },
         ])
       }),
@@ -4079,7 +3762,7 @@ describe('Broker.serveRequests, on Runpod’s API', () => {
         )
         assert.strictEqual(binary.status, 403)
         const empty = await server.fetch(
-          new Request('http://broker/api.runpod.io/graphql', { method: 'POST' }),
+          new Request('https://api.runpod.io/graphql', { method: 'POST' }),
         )
         assert.strictEqual(empty.status, 403)
         assert.strictEqual(sent.length, 0)
@@ -4098,7 +3781,7 @@ describe('Broker.serveRequests, on Runpod’s API', () => {
         const run = await server.fetch(post('/api.runpod.ai/v2/ep1/runsync', '{"input":{}}'))
         assert.strictEqual(run.status, 200)
         const health = await server.fetch(
-          new Request('http://broker/api.runpod.ai/v2/ep1/health', {
+          new Request('https://api.runpod.ai/v2/ep1/health', {
             headers: { Authorization: 'Bearer igloo-broker-holds-the-real-key' },
           }),
         )
@@ -4127,7 +3810,7 @@ describe('Broker.serveRequests, on how a refusal is written', () => {
       repos: ['you/api', 'you/gone'],
       write: ['you/web'],
     },
-    { credential: 'OPENROUTER_API_KEY', profile: 'openrouter' },
+    shippedGrant('openrouter', 'OPENROUTER_API_KEY'),
   ]
   const credentials: ReadonlyMap<string, string> = new Map([
     ['GITHUB_TOKEN', 'ghp-test'],
@@ -4138,7 +3821,7 @@ describe('Broker.serveRequests, on how a refusal is written', () => {
     url.includes('/you/gone')
       ? Promise.reject(new Error('ECONNREFUSED'))
       : Promise.resolve(new Response('Bad credentials', { status: 401 }))
-  const ask = (server: ReturnType<typeof Broker.serveRequests>, method: string, path: string) =>
+  const ask = (server: Served, method: string, path: string) =>
     server.fetch(new Request(`http://broker${path}`, { method }))
 
   it('writes one on GitHub’s API as GitHub writes an error, with its reason as the message', () =>
@@ -4214,7 +3897,7 @@ describe('Broker.serveRequests, on how a refusal is written', () => {
       }),
     ))
 
-  it('writes git’s and an inference profile’s as text', () =>
+  it('writes git’s as text', () =>
     auditing(() =>
       serving(granted, credentials, refusing, async server => {
         for (const [method, path, status, reason] of [
@@ -4229,18 +3912,6 @@ describe('Broker.serveRequests, on how a refusal is written', () => {
             '/github.com/you/api/info/refs?service=git-upload-pack',
             502,
             'github.com refused GITHUB_TOKEN; the credential the host holds is wrong, expired, or not scoped to you/api',
-          ],
-          [
-            'POST',
-            '/openrouter.ai/api/v1/keys',
-            404,
-            'openrouter.ai is brokered, but /api/v1/keys is not an endpoint this VM may call',
-          ],
-          [
-            'POST',
-            '/openrouter.ai/api/v1/chat/completions',
-            403,
-            'openrouter.ai refused OPENROUTER_API_KEY; the credential the host holds is wrong, expired, or not scoped to this request',
           ],
         ] as const) {
           const response = await ask(server, method, path)
@@ -4450,7 +4121,7 @@ describe('Broker.serveRequests, request by request', () => {
   it('answers a model call whose credential the provider refused with a final 403', () =>
     auditing(() =>
       serving(
-        [{ credential: 'ANTHROPIC_API_KEY', profile: 'anthropic-messages' }],
+        [shippedGrant('anthropic-messages', 'ANTHROPIC_API_KEY')],
         new Map([['ANTHROPIC_API_KEY', 'sk-ant-revoked']]),
         () =>
           Promise.resolve(
@@ -4461,7 +4132,7 @@ describe('Broker.serveRequests, request by request', () => {
           ),
         async server => {
           const response = await server.fetch(
-            new Request('http://broker/api.anthropic.com/v1/messages', {
+            new Request('https://api.anthropic.com/v1/messages', {
               body: JSON.stringify({ messages: [], model: 'claude-opus-5' }),
               method: 'POST',
             }),
@@ -4513,7 +4184,7 @@ describe('Broker.serveRequests, request by request', () => {
     const sent: Array<{ readonly init: RequestInit; readonly url: string }> = []
     return auditing(audited =>
       serving(
-        [{ credential: 'OPENROUTER_API_KEY', profile: 'openrouter' }],
+        [shippedGrant('openrouter', 'OPENROUTER_API_KEY')],
         new Map([['OPENROUTER_API_KEY', 'sk-or-test']]),
         (url, init) => {
           sent.push({ init, url })
@@ -4523,7 +4194,7 @@ describe('Broker.serveRequests, request by request', () => {
         },
         async server => {
           const response = await server.fetch(
-            new Request('http://broker/openrouter.ai/api/v1/models?output_modalities=rerank'),
+            new Request('https://openrouter.ai/api/v1/models?output_modalities=rerank'),
           )
           assert.strictEqual(await response.text(), '{"data":[]}')
           const [first] = sent
@@ -4544,8 +4215,8 @@ describe('Broker.serveRequests, request by request', () => {
               event.event === 'allow',
           )
           assert.deepStrictEqual(
-            allowed.map(event => [event['operation'], 'scope' in event]),
-            [['list-models', false]],
+            allowed.map(event => [event['set'], event['rule'], 'scope' in event]),
+            [['models', 'GET api/v1/models', false]],
           )
         },
       ),
@@ -4589,7 +4260,7 @@ describe('Broker.serveRequests, request by request', () => {
         async server => {
           for (const [path, body] of calls) {
             const response = await server.fetch(
-              new Request(`http://broker/${path}`, { body, method: 'POST' }),
+              new Request(`https://${path}`, { body, method: 'POST' }),
             )
             assert.strictEqual(response.status, 200, path)
           }
@@ -4616,7 +4287,7 @@ describe('Broker.serveRequests, request by request', () => {
     const sent: Array<Headers> = []
     return auditing(() =>
       serving(
-        [{ credential: 'ANTHROPIC_API_KEY', profile: 'anthropic-messages' }],
+        [shippedGrant('anthropic-messages', 'ANTHROPIC_API_KEY')],
         new Map([['ANTHROPIC_API_KEY', 'sk-ant-test']]),
         async (_url, init) => {
           sent.push(new Headers(init.headers))
@@ -4632,7 +4303,7 @@ describe('Broker.serveRequests, request by request', () => {
         },
         async server => {
           const response = await server.fetch(
-            new Request('http://broker/api.anthropic.com/v1/messages', {
+            new Request('https://api.anthropic.com/v1/messages', {
               body: JSON.stringify({ messages: [], model: 'claude-opus-5' }),
               headers: {
                 'anthropic-beta': 'context-management-2025-06-27',
@@ -4789,7 +4460,7 @@ const onLoopback = <A>(
   })
     .then(port =>
       use(
-        (url, init) => fetch(url.replace(/^https:\/\/[^/]+\//, `http://127.0.0.1:${port}/`), init),
+        (url, init) => fetch(url.replace(/^https?:\/\/[^/]+\//, `http://127.0.0.1:${port}/`), init),
         connections,
       ),
     )
@@ -4842,11 +4513,13 @@ const eventually = async (ready: () => boolean, ms = 2000): Promise<boolean> => 
 }
 
 describe('Broker.serveRequests, on a request body', () => {
+  // A model server with a key: the listener is the same for every grant, and
+  // this one is reached by its path, over the plain listener.
   const anthropic: readonly Broker.Grant[] = [
-    { credential: 'ANTHROPIC_API_KEY', profile: 'anthropic-messages' },
+    { credential: 'ANTHROPIC_API_KEY', name: 'llama-swap', port: 8080, profile: 'model-server' },
   ]
   const key = new Map([['ANTHROPIC_API_KEY', 'sk-ant-test']])
-  const messages = '/api.anthropic.com/v1/messages'
+  const messages = '/local/llama-swap/v1/chat/completions'
 
   it('sends a body on as it arrives, before the guest has sent the last of it', () => {
     const order: Array<string> = []
@@ -5087,11 +4760,13 @@ describe('Broker.serveRequests, on a request body', () => {
 })
 
 describe('Broker.serveRequests, on the guest’s connection', () => {
+  // A model server with a key: the listener is the same for every grant, and
+  // this one is reached by its path, over the plain listener.
   const anthropic: readonly Broker.Grant[] = [
-    { credential: 'ANTHROPIC_API_KEY', profile: 'anthropic-messages' },
+    { credential: 'ANTHROPIC_API_KEY', name: 'llama-swap', port: 8080, profile: 'model-server' },
   ]
   const key = new Map([['ANTHROPIC_API_KEY', 'sk-ant-test']])
-  const messages = '/api.anthropic.com/v1/messages'
+  const messages = '/local/llama-swap/v1/chat/completions'
   const body = '{"messages":[],"model":"m"}'
   const request = `POST ${messages} HTTP/1.1\r\nHost: broker\r\nContent-Length: ${String(body.length)}\r\n\r\n${body}`
 
@@ -6019,6 +5694,7 @@ describe('Broker.serveTls, for a profile grant', () => {
     servingTls(upstream(401), async server => {
       const refused = await server.fetch(new Request('https://api.example.com/v1/items'))
       assert.strictEqual(refused.status, 403)
+      assert.strictEqual(refused.headers.get('Content-Type'), 'application/json; charset=utf-8')
       assert.include(await refused.text(), 'refused EXAMPLE_KEY')
     }).then(() =>
       servingTls(upstream(302), async server => {
@@ -6071,27 +5747,6 @@ describe('Broker.serveTls, for a profile grant', () => {
     }))
 })
 
-/**
- * The profiles igloo ships, read as the CLI reads them, from the JSON the
- * package carries: `IGLOO_PROFILES`, which the devshell sets.
- */
-const shippedProfiles = (): ReadonlyMap<string, Profiles.Profile> => {
-  const file = process.env['IGLOO_PROFILES']
-  if (file === undefined || file === '') {
-    throw new Error('IGLOO_PROFILES is not set: run the tests in `nix develop`')
-  }
-  const read = Profiles.read(file, JSON.parse(readFileSync(file, 'utf8')))
-  if (Result.isFailure(read)) throw new Error(read.failure)
-  return read.success
-}
-
-/** A grant of the shipped profile `name`, every set chosen, as a credential of the same name would be. */
-const shippedGrant = (name: string, credential: string): Broker.ProfileGrant => {
-  const profile = shippedProfiles().get(name)
-  if (profile === undefined) throw new Error(`igloo ships no ${name} profile`)
-  return { credential, ...Profiles.grantOf(name, profile, Object.keys(profile.allow)) }
-}
-
 /** What a request came to: refused, or what reached the upstream. */
 type Reached = 'refused' | { readonly body?: string; readonly key: string; readonly url: string }
 
@@ -6122,7 +5777,7 @@ const sentToRunpod = (path: string): Reached => sentTo(`${runpodRest}${path}`, '
 const graphqlBody = (query: string) => JSON.stringify({ query })
 
 /**
- * What `runpod` serves, and refuses: each write `cloudWrites` lists, reads,
+ * What `runpod` serves, and refuses: each write its sets allow, reads,
  * GraphQL queries and mutations, a serverless endpoint's calls, the areas
  * refused by design, and writes nothing lists.
  */
@@ -6404,32 +6059,5 @@ describe('the shipped profiles, against what each serves', () => {
       false,
     )
     assert.deepStrictEqual(reached, queried.expected)
-  })
-})
-
-describe('the built-ins, against the same corpus', () => {
-  it('runpod', async () => {
-    const reached = await reachedBy(
-      [{ credential: 'RUNPOD_API_KEY', profile: 'runpod' }],
-      runpodCorpus,
-      false,
-    )
-    runpodCorpus.forEach((each, at) => {
-      assert.deepStrictEqual(reached[at], each.expected, `${each.method} ${each.url}`)
-    })
-  })
-
-  it('openrouter and anthropic-messages', async () => {
-    const reached = await reachedBy(
-      [
-        { credential: 'OPENROUTER_KEY', profile: 'openrouter' },
-        { credential: 'ANTHROPIC_KEY', profile: 'anthropic-messages' },
-      ],
-      inferenceCorpus,
-      true,
-    )
-    inferenceCorpus.forEach((each, at) => {
-      assert.deepStrictEqual(reached[at], each.expected, `${each.method} ${each.url}`)
-    })
   })
 })

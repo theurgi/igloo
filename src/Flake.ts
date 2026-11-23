@@ -26,12 +26,6 @@ export interface Credential {
   readonly name: string
 }
 
-export interface BrokerFile {
-  readonly content: string
-  readonly path: string
-  readonly program: string
-}
-
 export interface RunnerSpec {
   /** Directory holding igloo's own `flake.nix`, taken as a `path:` input. */
   readonly iglooFlakePath: string
@@ -41,34 +35,15 @@ export interface RunnerSpec {
    */
   readonly brokerAuthority: string | undefined
   /**
-   * Environment the guest needs in order to reach the broker's profiles — a
-   * base URL per provider, and a placeholder where each profile's client
-   * expects a key. Empty for a VM with no such grant.
+   * Environment the guest needs in order to reach the broker: the proxy, the
+   * trust a client verifies the broker's names by, and a placeholder where
+   * each profile's client expects a key. Empty for a VM with no broker.
    *
    * Emitted even when empty, for the same reason `credentials` is: whether a VM
    * was pointed at a broker should be readable here rather than inferred from an
    * absence.
    */
   readonly brokerEnv: Readonly<Record<string, string>>
-  /**
-   * Files under the guest's `/etc` that point a client at the broker, by path
-   * relative to it: configuration a variable in `brokerEnv` names. Empty for a
-   * VM with no inference grant.
-   */
-  readonly brokerEtc: Readonly<Record<string, string>>
-  /**
-   * Files pointing a client at the broker where it reads a base URL from its
-   * own configuration file alone: the path under root's home, the program
-   * that reads it, and the text. The guest writes each at boot if that program
-   * is installed and the file does not exist. Empty for a VM with no inference
-   * grant.
-   */
-  readonly brokerFiles: readonly BrokerFile[]
-  /**
-   * The packages the guest's clients of the broker's grants need, by their
-   * names in the guest's package set. Empty for a VM whose grants need none.
-   */
-  readonly brokerPackages: readonly string[]
   /**
    * Emitted even when empty, so that this file says whether a VM was launched
    * with credentials — which is the sort of thing that should not have to be
@@ -154,30 +129,6 @@ const renderBrokerEnv = (env: Readonly<Record<string, string>>): string => {
         .join('\n')}\n        };`
 }
 
-const renderBrokerEtc = (files: Readonly<Record<string, string>>): string => {
-  const paths = Object.keys(files).toSorted()
-  return paths.length === 0
-    ? '{ };'
-    : `{\n${paths
-        .map(file => `          "${nixString(file)}" = "${nixString(files[file] ?? '')}";`)
-        .join('\n')}\n        };`
-}
-
-const renderBrokerFiles = (files: readonly BrokerFile[]): string =>
-  files.length === 0
-    ? '[ ];'
-    : `[\n${files
-        .map(
-          file =>
-            `          { path = "${nixString(file.path)}"; program = "${nixString(
-              file.program,
-            )}"; content = "${nixString(file.content)}"; }`,
-        )
-        .join('\n')}\n        ];`
-
-const renderBrokerPackages = (names: readonly string[]): string =>
-  `[ ${names.map(name => `"${nixString(name)}" `).join('')}];`
-
 const renderGitBroker = (gitBroker: RunnerSpec['gitBroker']): string =>
   gitBroker === undefined
     ? 'null;'
@@ -220,9 +171,6 @@ export const render = (spec: RunnerSpec): string =>
       packages.x86_64-linux.default = igloo.lib.mkRunner {
         brokerAuthority = ${renderAuthority(spec.brokerAuthority)}
         brokerEnv = ${renderBrokerEnv(spec.brokerEnv)}
-        brokerEtc = ${renderBrokerEtc(spec.brokerEtc)}
-        brokerFiles = ${renderBrokerFiles(spec.brokerFiles)}
-        brokerPackages = ${renderBrokerPackages(spec.brokerPackages)}
         contentModules = ${renderContent(spec.contentModules)}
         credentials = ${renderCredentials(spec.credentials)}
         disk = ${spec.disk === undefined ? 'null' : `{ image = "${nixString(spec.disk.image)}"; }`};

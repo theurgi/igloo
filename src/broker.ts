@@ -7,27 +7,29 @@
  * grants refuses everything, and that is a configuration rather than a stub: it
  * holds no upstream it is authorized to construct a request to.
  *
- * There are three kinds of profile. `github` fetches and pushes over git's
- * smart HTTP protocol, and reads and writes through GitHub's API, for a fixed
- * set of repositories; `anthropic-messages` and `openrouter` call a provider's
- * models; `runpod` drives a Runpod account through its API, what it runs and
- * what it spends. Beside them, a `model-server` grant calls a model server on
- * this host's loopback, at a port the grant names. In each case the upstream
- * request is *constructed* — from a fixed template and the grant's own copy
- * of what it permits — so nothing a guest sends reaches
- * the upstream URL, and the credential header, where there is one, is always
- * this file's. A git request's other headers are built here too; an inference
- * or model server request carries the guest's, less its credentials and what
- * describes its connection. That makes absolute-form
- * targets, a `Host` that disagrees with the URL and a colliding `Authorization`
- * into consequences of the shape rather than checks that could be forgotten.
+ * Code for protocols, data for services. A **profile** grant is a service as
+ * data: the hosts its key goes to, how the key is sent at each, and the rules
+ * of the sets a credential chose there, which this file reads and never runs
+ * (`ProfileGrant`). `github` is still code of its own: it fetches and pushes
+ * over git's smart HTTP protocol, and reads and writes through GitHub's API,
+ * for a fixed set of repositories. Beside them, a `model-server` grant calls a
+ * model server on this host's loopback, at a port the grant names. In each
+ * case the upstream request is *constructed* — from the grant's own copy of
+ * what it permits — so nothing a guest sends reaches the upstream URL, and the
+ * credential header, where there is one, is always this file's. A git
+ * request's other headers are built here too; any other request carries the
+ * guest's, less its credentials and what describes its connection. That makes
+ * absolute-form targets, a `Host` that disagrees with the URL and a colliding
+ * `Authorization` into consequences of the shape rather than checks that could
+ * be forgotten.
  *
  * A request is authorized by its path alone, and on the TLS listener by the name
- * it was addressed to as well, which stands where the path form puts the host.
- * Its body is streamed upstream as it arrives and never read: what a provider
- * does with it, the tools it runs on a model's behalf included, is the
- * provider's. One body is read: a GraphQL request to Runpod, where a query and
- * a mutation share a path, so only the body can say which it is
+ * it was addressed to as well, which stands where the path form puts the host;
+ * a profile's hosts are answered by name alone. Its body is streamed upstream
+ * as it arrives and never read: what a service does with it, the tools a
+ * provider runs on a model's behalf included, is the service's. One body is
+ * read: a GraphQL request at a rule with GraphQL's reader, where a query and a
+ * mutation share a path, so only the body can say which it is
  * (`graphqlQuery`).
  *
  * Deliberately free of dependencies. It is packaged from this file alone, so its
@@ -47,7 +49,7 @@ const usage =
   'usage: broker <socket-path> [--grants <json>] [--proxy <socket-path>] [--tunnel <json>] [--tls <socket-path>]'
 
 /**
- * The upstream each profile reaches, and what kind of policy applies there.
+ * The profiles this file is the code of, and the upstream each reaches.
  *
  * The host is fixed by the profile rather than configured, so a grant cannot
  * name a destination: what a profile knows about an upstream — that it speaks
@@ -56,97 +58,48 @@ const usage =
  * without the host it was true of. A model server is the one upstream a grant
  * places, and it is placed no further than a port: see `ModelServerGrant`.
  *
- * The kind decides which part of this file answers a request: a `git` profile
- * fetches from the repositories a grant lists, and reads its forge's API, at
- * `api`, for them, and pushes to and writes through the API for those in its
- * `write`, uploading a release's assets at `uploads`; an `inference` profile
- * calls the endpoints `inferenceEndpoints` lists; a `cloud` profile reads an
- * account's API at `host`, writes there what `cloudWrites` lists,
- * queries its GraphQL at `host` without writing through it, and calls the
- * account's own serverless endpoints at `invoke`.
+ * A `git` profile fetches from the repositories a grant lists, and reads its
+ * forge's API, at `api`, for them, and pushes to and writes through the API
+ * for those in its `write`, uploading a release's assets at `uploads`.
  *
- * No profile limits a body's size. A body is streamed, so the broker holds
+ * No grant limits a body's size. A body is streamed, so the broker holds
  * little of it at once however large it is, and the upstream's own limit is
- * the one that applies: an inference provider's refusal reaches the guest as
- * the provider gave it. A body that never ends is ended by `headerTimeoutMs`,
- * or by an upstream that answers before it has all of it. The one body read,
- * a cloud account's GraphQL request, is held whole, and so is held to
- * `graphqlBodyLimit`.
+ * the one that applies: a provider's refusal reaches the guest as the provider
+ * gave it. A body that never ends is ended by `headerTimeoutMs`, or by an
+ * upstream that answers before it has all of it. The one body read, a GraphQL
+ * request's, is held whole, and so is held to `graphqlBodyLimit`.
  */
 export const profiles = {
-  // Anthropic's own, for the messages endpoint and for counting tokens.
-  'anthropic-messages': { host: 'api.anthropic.com', kind: 'inference' },
   github: { api: 'api.github.com', host: 'github.com', kind: 'git', uploads: 'uploads.github.com' },
-  openrouter: { host: 'openrouter.ai', kind: 'inference' },
-  // Runpod's REST API and its GraphQL at `host`, and the API a serverless
-  // endpoint is called through at `invoke`.
-  runpod: { host: 'api.runpod.io', invoke: 'api.runpod.ai', kind: 'cloud' },
 } as const
 
 export type ProfileName = keyof typeof profiles
-
-export type InferenceProfile = {
-  [K in ProfileName]: (typeof profiles)[K]['kind'] extends 'inference' ? K : never
-}[ProfileName]
-
-export type CloudProfile = {
-  [K in ProfileName]: (typeof profiles)[K]['kind'] extends 'cloud' ? K : never
-}[ProfileName]
 
 export const isProfileName = (value: unknown): value is ProfileName =>
   typeof value === 'string' && Object.hasOwn(profiles, value)
 
 /**
- * Whether a profile is one that calls a model.
- *
- * A predicate rather than a comparison at each call site, because narrowing the
- * name is what lets a grant be built for it without an assertion — and an
- * assertion is exactly the thing that would keep compiling if a third kind of
- * profile were added.
+ * The names a git profile is answered at: its host, its API's, and the one its
+ * API takes uploads at. A guest's client reaches each by its own name, through
+ * the tunnel, which hands the connection to the broker's TLS listener rather
+ * than to the host. A remote then reads as the repository's own URL, which is
+ * how a client that reads remotes recognises one, and a URL the API gives in
+ * an answer, a release's for its assets among them, leads back to the broker,
+ * which is where a client that follows one goes.
  */
-export const isInferenceProfile = (name: ProfileName): name is InferenceProfile =>
-  profiles[name].kind === 'inference'
-
-/** Whether a profile is one that drives a cloud account, for the reason `isInferenceProfile` gives. */
-export const isCloudProfile = (name: ProfileName): name is CloudProfile =>
-  profiles[name].kind === 'cloud'
-
-/** Every profile there is, for a message that has to list them. */
-export const profileNames: readonly string[] = Object.keys(profiles)
-
-/** A profile the broker answers by name, over TLS. */
-type AnsweredProfile = CloudProfile | GitGrant['profile']
-
-const isAnsweredProfile = (name: ProfileName): name is AnsweredProfile =>
-  profiles[name].kind === 'git' || profiles[name].kind === 'cloud'
-
-/**
- * The names a profile is answered at: a git profile's host, its API's, and the
- * one its API takes uploads at, and each of a cloud profile's. A guest's client
- * reaches each by its own name, through the tunnel, which hands the connection
- * to the broker's TLS listener rather than to the host. A remote then reads as
- * the repository's own URL, which is how a client that reads remotes
- * recognises one, and a URL the API gives in an answer, a release's for its
- * assets among them, leads back to the broker, which is where a client that
- * follows one goes. A cloud account's clients each take their hosts from
- * variables of their own names, so answering the names is the one way that
- * reaches all of them.
- */
-const answeredAt = (name: AnsweredProfile): readonly string[] => {
+const answeredAt = (name: ProfileName): readonly string[] => {
   const profile = profiles[name]
-  return profile.kind === 'git'
-    ? [profile.host, profile.api, profile.uploads]
-    : [profile.host, profile.invoke]
+  return [profile.host, profile.api, profile.uploads]
 }
 
 /**
- * Every name a broker may answer TLS for, which its certificate covers:
- * every profile's, whichever of them a project's grants use. A change to the
- * grants therefore changes neither the certificate nor the authority the
- * guest is built trusting.
+ * Every name this file's own code may answer TLS for, whichever of them a
+ * project's grants use. The certificate covers these and the hosts of every
+ * profile igloo ships, so that granting one changes neither the certificate
+ * nor the authority the guest is built trusting.
  */
 export const tlsNamesCovered: readonly string[] = [
-  ...new Set(profileNames.filter(isProfileName).filter(isAnsweredProfile).flatMap(answeredAt)),
+  ...new Set(Object.keys(profiles).filter(isProfileName).flatMap(answeredAt)),
 ]
 
 /**
@@ -156,18 +109,13 @@ export const tlsNamesCovered: readonly string[] = [
 export const forgeNames: readonly string[] = answeredAt('github')
 
 /**
- * Every git profile's API and the host it takes uploads at, and every name a
- * cloud profile is answered at. Their clients read an error's reason from the
- * `message` of a JSON body, as the API writes one, and show a response with
- * none as its status alone.
+ * Every git profile's API and the host it takes uploads at. Their clients
+ * read an error's reason from the `message` of a JSON body, as the API writes
+ * one, and show a response with none as its status alone.
  */
-const apiNames: readonly string[] = profileNames
+const apiNames: readonly string[] = Object.keys(profiles)
   .filter(isProfileName)
-  .filter(isAnsweredProfile)
-  .flatMap(name => {
-    const profile = profiles[name]
-    return profile.kind === 'git' ? [profile.api, profile.uploads] : answeredAt(name)
-  })
+  .flatMap(name => [profiles[name].api, profiles[name].uploads])
 
 /**
  * Fetch over git's smart HTTP, and read through the forge's API, for a fixed
@@ -186,35 +134,6 @@ export interface GitGrant {
   readonly repos: readonly string[]
   /** `owner/repo`, the repositories it may push to and write through the API as well, each fetched and read as one in `repos` is. */
   readonly write?: readonly string[]
-}
-
-/**
- * Call a model provider, whichever of its models a request names.
- *
- * Which models a key may call and what it may spend are limits the provider
- * sets on the key itself, where they bound the total rather than one request.
- * At most one per profile: a request names no credential, so nothing in it
- * could choose between two.
- */
-export interface InferenceGrant {
-  readonly credential: string
-  readonly profile: InferenceProfile
-}
-
-/**
- * Drive a cloud account through its API: read it, create, change and remove
- * what it runs, and call its serverless endpoints, never changing who may use
- * the account or how.
- *
- * What a write may change is fixed by the profile (`cloudWrites`), and its
- * GraphQL is read and never written through (`graphqlQuery`), since a write
- * there can mint the account a key. What the account may spend is its own
- * limit, on its balance, where it bounds the total. At most one per profile:
- * a request names no credential, so nothing in it could choose between two.
- */
-export interface CloudGrant {
-  readonly credential: string
-  readonly profile: CloudProfile
 }
 
 /**
@@ -291,7 +210,7 @@ export interface ProfileGrant {
   readonly profile: string
 }
 
-export type Grant = CloudGrant | GitGrant | InferenceGrant | ModelServerGrant | ProfileGrant
+export type Grant = GitGrant | ModelServerGrant | ProfileGrant
 
 /** Anything whose fields can be read by name: a non-null object, an array included. */
 const isObject = (value: unknown): value is Record<string, unknown> =>
@@ -302,27 +221,19 @@ export const isProfileGrant = (grant: Grant): grant is ProfileGrant => 'hosts' i
 export const isModelServerGrant = (grant: Grant): grant is ModelServerGrant =>
   grant.profile === 'model-server' && !isProfileGrant(grant)
 
-/** The kind of a grant whose profile is code here, or `undefined` for a model server's or a profile's. */
-const kindOf = (grant: Grant): (typeof profiles)[ProfileName]['kind'] | undefined =>
-  isModelServerGrant(grant) || isProfileGrant(grant) ? undefined : profiles[grant.profile].kind
-
-export const isInferenceGrant = (grant: Grant): grant is InferenceGrant =>
-  kindOf(grant) === 'inference'
-
-export const isGitGrant = (grant: Grant): grant is GitGrant => kindOf(grant) === 'git'
-
-export const isCloudGrant = (grant: Grant): grant is CloudGrant => kindOf(grant) === 'cloud'
+export const isGitGrant = (grant: Grant): grant is GitGrant =>
+  !isModelServerGrant(grant) && !isProfileGrant(grant)
 
 /**
- * The names a broker holding `grants` answers TLS for: each git or cloud
- * grant's, and each host of a profile grant's, once.
+ * The names a broker holding `grants` answers TLS for: each git grant's, and
+ * each host of a profile grant's, once.
  */
 export const tlsNames = (grants: readonly Grant[]): readonly string[] => [
   ...new Set(
     grants.flatMap(grant =>
       isProfileGrant(grant)
         ? Object.keys(grant.hosts)
-        : isGitGrant(grant) || isCloudGrant(grant)
+        : isGitGrant(grant)
           ? answeredAt(grant.profile)
           : [],
     ),
@@ -611,19 +522,8 @@ export type FetchOperation = 'fetch' | 'ls-refs'
 /** Those, and the two it makes to push: the advertisement a push asks for, and the push. */
 export type GitOperation = FetchOperation | 'push' | 'push-refs'
 
-/** The provider endpoints a grant may reach. */
-export type InferenceOperation =
-  | 'chat-completions'
-  | 'count-tokens'
-  | 'list-models'
-  | 'messages'
-  | 'responses'
-  | 'systemone'
-
-export type ModelServerOperation = Extract<
-  InferenceOperation,
-  'chat-completions' | 'list-models' | 'responses' | 'systemone'
->
+/** The endpoints of a model server a grant may reach. */
+export type ModelServerOperation = 'chat-completions' | 'list-models' | 'responses' | 'systemone'
 
 /**
  * A read on a name the broker answers that no grant covers: git's two fetch
@@ -637,31 +537,17 @@ export type AnonymousOperation = FetchOperation | 'read'
  */
 export type ApiOperation = 'graphql' | 'read' | 'upload' | 'write'
 
-/**
- * A request through a cloud account's API: a read, a write `cloudWrites`
- * lists, a GraphQL document of queries alone, or a call of a serverless
- * endpoint.
- */
-export type CloudOperation = 'invoke' | 'query' | 'read' | 'write'
-
-export type Operation =
-  | AnonymousOperation
-  | ApiOperation
-  | CloudOperation
-  | GitOperation
-  | InferenceOperation
+export type Operation = AnonymousOperation | ApiOperation | GitOperation | ModelServerOperation
 
 /**
  * Where a request is going, once it is known to be one this broker serves.
  *
  * Split by kind rather than carrying one `Allow` with optional fields, because
- * a git request is for one repository and an inference request names none, and
- * the headers each sends and returns are built differently. A model server's
- * request is built as an inference one is, and goes to a server the grant
- * names, with a credential only if the grant holds one. A cloud account's is
- * built as an inference one is too, and goes to the profile's host the request
- * names. An anonymous one goes to the host it was addressed to with no
- * credential at all.
+ * a git request is for one repository and a profile's names none, and the
+ * headers each sends and returns are built differently. A model server's
+ * request is built as a profile's is, and goes to a server the grant names,
+ * with a credential only if the grant holds one. An anonymous one goes to the
+ * host it was addressed to with no credential at all.
  */
 export type Decision =
   | {
@@ -672,14 +558,6 @@ export type Decision =
       readonly profile: GitGrant['profile']
       /** The repository as the *grant* spells it, not as the request did. */
       readonly repo: string
-      readonly upstream: string
-    }
-  | {
-      readonly _tag: 'Inference'
-      readonly credential: string
-      readonly host: string
-      readonly operation: InferenceOperation
-      readonly profile: InferenceProfile
       readonly upstream: string
     }
   | {
@@ -700,15 +578,6 @@ export type Decision =
       readonly profile: GitGrant['profile']
       /** The repository as the *grant* spells it, for a request under one. */
       readonly repo?: string
-      readonly upstream: string
-    }
-  | {
-      readonly _tag: 'Cloud'
-      readonly credential: string
-      readonly host: string
-      /** For `query`, the body is read and checked before anything is sent (`graphqlQuery`). */
-      readonly operation: CloudOperation
-      readonly profile: CloudProfile
       readonly upstream: string
     }
   | {
@@ -802,9 +671,7 @@ const grantedAs = (among: readonly string[] | undefined, wanted: string): string
 
 /** The fields a grant of each kind carries. */
 const grantFields = {
-  cloud: new Set(['credential', 'profile']),
   git: new Set(['credential', 'profile', 'repos', 'write']),
-  inference: new Set(['credential', 'profile']),
   'model-server': new Set(['credential', 'name', 'port', 'profile']),
 } as const
 
@@ -895,7 +762,7 @@ export const parseGrants = (json: string): { grants: Grant[] } | { message: stri
 
     if (!isProfileName(profile)) {
       return {
-        message: `unknown profile ${JSON.stringify(profile)}; the profiles are ${profileNames.join(', ')}`,
+        message: `unknown profile ${JSON.stringify(profile)}; the broker's own are ${Object.keys(profiles).join(', ')}, and any other is a profile grant, with hosts`,
       }
     }
     // Refused rather than ignored: a field this file does not read is a limit
@@ -914,103 +781,37 @@ export const parseGrants = (json: string): { grants: Grant[] } | { message: stri
       return { message: `there are two ${profile} grants, and a request could not choose one` }
     }
 
-    if (isCloudProfile(profile)) {
-      grants.push({ credential, profile })
-      continue
+    const read = repoList(profile, 'repos', repos)
+    if ('message' in read) return read
+    const written = entry['write'] === undefined ? [] : repoList(profile, 'write', entry['write'])
+    if ('message' in written) return written
+    if (read.length + written.length === 0) {
+      return { message: `the ${profile} grant names no repositories` }
     }
-
-    if (!isInferenceProfile(profile)) {
-      const read = repoList(profile, 'repos', repos)
-      if ('message' in read) return read
-      const written = entry['write'] === undefined ? [] : repoList(profile, 'write', entry['write'])
-      if ('message' in written) return written
-      if (read.length + written.length === 0) {
-        return { message: `the ${profile} grant names no repositories` }
-      }
-      grants.push({
-        credential,
-        profile,
-        repos: read,
-        ...(written.length === 0 ? {} : { write: written }),
-      })
-      continue
-    }
-
-    grants.push({ credential, profile })
+    grants.push({
+      credential,
+      profile,
+      repos: read,
+      ...(written.length === 0 ? {} : { write: written }),
+    })
   }
   return { grants }
 }
 
 /**
- * How a client inside the guest is pointed at this broker, per inference
- * profile: the variable holding the base URL, and the variable holding what the
- * client believes is its key.
+ * What the guest holds where a client reads its key, so that an unmodified
+ * client reaches the broker: a profile's placeholders, `GH_TOKEN`, and a model
+ * server's key where a harness reads one.
  *
- * The base path is what each provider's own client appends its endpoint to, so
- * the two halves meet at the paths `inferenceEndpoints` lists — an Anthropic
- * client appends `v1/messages` to its base, an OpenAI-shaped one appends
- * `chat/completions` to a base that already ends in `api/v1`.
+ * A **placeholder**, and that is load-bearing rather than tidy: a client
+ * refuses to construct itself with no key at all, so a VM that deliberately
+ * holds no key still needs something in the variable for a request to be made
+ * — the broker replaces it with the real one, which never leaves the host.
+ * Anything reading it inside the guest learns nothing.
  *
- * `provider` is the name pi, omp and opencode give the provider in their own
- * configuration, which is where they take a base URL from: none of them reads
- * `urlVariable`. opencode's Anthropic client appends `messages` to a base that
- * ends in `v1`, so its base takes `opencodeSuffix`.
- */
-const guestIngress: Readonly<
-  Record<
-    InferenceProfile,
-    {
-      readonly basePath: string
-      readonly keyVariable: string
-      readonly opencodeSuffix: string
-      readonly provider: string
-      readonly urlVariable: string
-    }
-  >
-> = {
-  'anthropic-messages': {
-    basePath: 'api.anthropic.com',
-    keyVariable: 'ANTHROPIC_API_KEY',
-    opencodeSuffix: '/v1',
-    provider: 'anthropic',
-    urlVariable: 'ANTHROPIC_BASE_URL',
-  },
-  openrouter: {
-    basePath: 'openrouter.ai/api/v1',
-    keyVariable: 'OPENROUTER_API_KEY',
-    opencodeSuffix: '',
-    provider: 'openrouter',
-    urlVariable: 'OPENROUTER_BASE_URL',
-  },
-}
-
-/** The inference grants' ingress, each with the base URL a client is given. */
-const ingressFor = (grants: readonly Grant[], port: number) =>
-  grants.filter(isInferenceGrant).map(grant => {
-    const ingress = guestIngress[grant.profile]
-    return { ...ingress, base: `http://127.0.0.1:${String(port)}/${ingress.basePath}` }
-  })
-
-/**
- * What the guest is told, so that an unmodified client reaches the broker.
- *
- * The key variable is set to a **placeholder**, and that is load-bearing rather
- * than tidy: a provider client refuses to construct itself with no key at all,
- * so a VM that deliberately holds no key still needs something in the variable
- * for a request to be made — the broker replaces it with the real one, which
- * never leaves the host. Anything reading it inside the guest learns nothing.
- *
- * The base URL variables are read by Claude Code, and by anything configured by
- * hand from their value. opencode takes the same URLs from the file
- * `OPENCODE_CONFIG` names, which it merges over the user's own configuration.
- *
- * Every value is plain text with no `"` or `\`: NixOS writes these into a shell
- * script and a PAM file inside double quotes, unescaped, so a quote in a value
- * ends it. That is why opencode's configuration is a file and not a variable.
- *
- * This is content, not policy. A module that unsets these makes a client talk to
- * the provider directly, with a placeholder for a key, and fail. It cannot make
- * a credential reachable, which is the thing worth protecting.
+ * This is content, not policy. A module that unsets these makes a client send
+ * no key, which the broker sets regardless, or fail to start. It cannot make a
+ * credential reachable, which is the thing worth protecting.
  */
 export const guestPlaceholderKey = 'igloo-broker-holds-the-real-key'
 
@@ -1024,17 +825,17 @@ const modelServerPrefix = 'local'
 export const modelServerBase = (name: string, port: number): string =>
   `http://127.0.0.1:${String(port)}/${modelServerPrefix}/${name}/v1`
 
+/**
+ * The variables the guest is given for `grants` beside a profile's
+ * placeholders, which composition sets from the profile. Every value is plain
+ * text with no `"` or `\`: NixOS writes these into a shell script and a PAM
+ * file inside double quotes, unescaped, so a quote in a value ends it.
+ */
 export const guestEnvironment = (
   grants: readonly Grant[],
   port: number,
 ): Record<string, string> => {
   const environment: Record<string, string> = {}
-  const ingress = ingressFor(grants, port)
-  if (ingress.length > 0) environment['OPENCODE_CONFIG'] = `/etc/${opencodeConfig}`
-  for (const each of ingress) {
-    environment[each.urlVariable] = each.base
-    environment[each.keyVariable] = guestPlaceholderKey
-  }
   // omp's built-in llama.cpp provider takes its base from this variable and
   // finds the server's models itself. It holds one URL, so with several
   // servers none is chosen for it.
@@ -1047,112 +848,7 @@ export const guestEnvironment = (
   if (grants.some(grant => isGitGrant(grant) && grant.profile === 'github')) {
     environment['GH_TOKEN'] = guestPlaceholderKey
   }
-  // Runpod's clients reach its API by name too, and each reads its key from
-  // this variable and asks for one when it is empty.
-  if (grants.some(grant => isCloudGrant(grant) && grant.profile === 'runpod')) {
-    environment['RUNPOD_API_KEY'] = guestPlaceholderKey
-  }
   return environment
-}
-
-/**
- * The packages the guest's clients of `grants` need, by their names in the
- * guest's package set: Runpod's CLI, for a `runpod` grant. Content, as the
- * environment is: a guest without one reaches the broker no less.
- */
-export const guestPackages = (grants: readonly Grant[]): readonly string[] =>
-  grants.some(grant => isCloudGrant(grant) && grant.profile === 'runpod') ? ['runpodctl'] : []
-
-/** Where under `/etc` the guest holds opencode's configuration. */
-const opencodeConfig = 'igloo/opencode.json'
-
-/**
- * Files the guest holds under `/etc`, by path relative to it: opencode's
- * configuration, naming the broker as each granted provider's base. Part of the
- * system, so rebuilt on every boot.
- */
-export const guestEtcFiles = (grants: readonly Grant[], port: number): Record<string, string> => {
-  const ingress = ingressFor(grants, port)
-  if (ingress.length === 0) return {}
-  return {
-    [opencodeConfig]: `${JSON.stringify(
-      {
-        provider: Object.fromEntries(
-          ingress.map(each => [
-            each.provider,
-            { options: { baseURL: each.base + each.opencodeSuffix } },
-          ]),
-        ),
-      },
-      undefined,
-      2,
-    )}\n`,
-  }
-}
-
-/** A file written into the guest's home at boot, for a client installed there. */
-export interface GuestClientFile {
-  readonly content: string
-  /** Relative to the home directory. */
-  readonly path: string
-  /** The client that reads it, by the name it is installed under. */
-  readonly program: string
-}
-
-/**
- * Configuration for the clients that take a base URL from a file in the home
- * directory and nowhere else: pi's `models.json` and omp's `models.yml`, each
- * naming the broker as its providers' base. One text serves both, since JSON is
- * YAML too.
- *
- * Written only where no such file exists, so a user's own is never replaced;
- * the broker's address is fixed, so a file written once stays right.
- */
-export const guestClientFiles = (grants: readonly Grant[], port: number): GuestClientFile[] => {
-  const ingress = ingressFor(grants, port)
-  if (ingress.length === 0) return []
-  const content = `${JSON.stringify(
-    { providers: Object.fromEntries(ingress.map(each => [each.provider, { baseUrl: each.base }])) },
-    undefined,
-    2,
-  )}\n`
-  return [
-    { content, path: '.pi/agent/models.json', program: 'pi' },
-    { content, path: '.omp/agent/models.yml', program: 'omp' },
-  ]
-}
-
-/**
- * The endpoints each inference profile serves, and the operation each one is.
- *
- * The key is also what the upstream path is built from, so a request selects an
- * endpoint rather than describing one. Small on purpose: a provider's other
- * endpoints mint keys, start batches and upload files, and a token that may call
- * a model is not thereby a token that may do those.
- *
- * OpenRouter takes a model call in each of the three shapes harnesses speak:
- * chat completions, OpenAI's Responses and Anthropic's Messages. Its Responses
- * endpoint stores nothing, so there is no stored response for a later request
- * to read back. Its model listings are the catalogs a client reads at startup,
- * which OpenRouter publishes whatever the key; they spend nothing and carry no
- * body.
- */
-const inferenceEndpoints: Readonly<
-  Record<InferenceProfile, Readonly<Record<string, InferenceOperation>>>
-> = {
-  'anthropic-messages': {
-    'v1/messages': 'messages',
-    'v1/messages/count_tokens': 'count-tokens',
-  },
-  openrouter: {
-    'api/v1/chat/completions': 'chat-completions',
-    'api/v1/embeddings/models': 'list-models',
-    'api/v1/images/models': 'list-models',
-    'api/v1/messages': 'messages',
-    'api/v1/models': 'list-models',
-    'api/v1/responses': 'responses',
-    'api/v1/videos/models': 'list-models',
-  },
 }
 
 /**
@@ -1184,8 +880,8 @@ const sendsBody = (operation: Operation): boolean =>
   operation !== 'push-refs' &&
   operation !== 'read'
 
-/** How each inference operation is requested: a listing is read, the rest are sent a body. */
-const methodOf = (operation: InferenceOperation): 'GET' | 'POST' =>
+/** How each model server operation is requested: a listing is read, the rest are sent a body. */
+const methodOf = (operation: ModelServerOperation): 'GET' | 'POST' =>
   sendsBody(operation) ? 'POST' : 'GET'
 
 /** The methods that write through a forge's API. */
@@ -1280,55 +976,6 @@ const listedIn = (
  */
 const writesTo = (method: string, tail: readonly string[]): boolean =>
   listedIn(apiWrites, method, tail) && !listedIn(apiWritesRefused, method, tail)
-
-/**
- * What a cloud profile may write, by the name it is answered at, and with
- * which methods: a path past the API's version, in `apiWrites`' form.
- *
- * Runpod's: what an account runs, pods, serverless endpoints and clusters,
- * and what they are made from and keep, templates, volumes, the logins
- * for the registries their images come from, and secrets. Each is created,
- * changed and removed, a pod started, stopped and reset and a command run in
- * it, and a queued pod cancelled. A command in a pod reaches what the pod does,
- * which its start command reaches already. Left out is what reaches past what
- * the account runs, to who may use it and how: an organization's members,
- * invitations, groups and roles; the SSH keys every pod the account starts
- * lets in; sign-in attempts, each ending in a new API key; tags, among which
- * cost centres are kept; cost centres themselves; and ECR delegations, each
- * registering a repository in an AWS account for Runpod to pull images from.
- */
-const cloudWrites: Readonly<
-  Record<CloudProfile, Readonly<Record<string, Readonly<Record<string, readonly string[]>>>>>
-> = {
-  runpod: {
-    [profiles.runpod.host]: {
-      'account/secrets': ['POST'],
-      'account/secrets/*': ['DELETE', 'PATCH'],
-      clusters: ['POST'],
-      'clusters/*': ['DELETE', 'PATCH'],
-      'global-volumes': ['POST'],
-      'global-volumes/*': ['DELETE', 'PATCH'],
-      'network-volumes': ['POST'],
-      'network-volumes/*': ['DELETE', 'PATCH'],
-      pods: ['POST'],
-      'pods/*': ['DELETE', 'PATCH'],
-      'pods/*/action': ['POST'],
-      'pods/*/exec': ['POST'],
-      'queued-pods/*': ['DELETE'],
-      registries: ['POST'],
-      'registries/*': ['DELETE', 'PATCH'],
-      serverless: ['POST'],
-      'serverless/*': ['DELETE', 'PATCH'],
-      templates: ['POST'],
-      'templates/*': ['DELETE', 'PATCH'],
-    },
-  },
-}
-
-/** The version each of a cloud profile's REST names takes its paths under. */
-const cloudVersions: Readonly<Record<CloudProfile, Readonly<Record<string, string>>>> = {
-  runpod: { [profiles.runpod.host]: 'v2' },
-}
 
 /**
  * Route a request for a profile grant's host, or `undefined` if the path's
@@ -1567,101 +1214,8 @@ const routeUploads = (
 }
 
 /**
- * Route a request for one of a cloud grant's names, or `undefined` if the
- * path's host is none of them.
- *
- * At a REST name, under its version (`cloudVersions`): a read, with `GET` or
- * `HEAD`, of anything there, and a write `cloudWrites` lists. At the GraphQL
- * path, a `POST`, which `handle` sends only once it has read the body and
- * found queries alone in it (`graphqlQuery`). At the invoke name, under
- * `v2/<endpoint>/`, a read or a call, `GET` or `POST`: an endpoint's own API,
- * which reaches nothing of the account but that endpoint, so nothing under it
- * is refused by its path.
- *
- * The upstream is the name and the request's path, segment by segment —
- * `decide` has refused a percent-escape and an empty segment, and the URL
- * parser has resolved every `.` and `..`, so no path leaves what it is under —
- * and its query, rebuilt so that each name and value is encoded. A GraphQL
- * request is sent to the fixed path alone, since its query is in its body.
- *
- * Everything else at those names is refused.
- */
-const routeCloud = (
-  grants: readonly Grant[],
-  method: string,
-  segments: readonly string[],
-  query: URLSearchParams,
-): Decision | undefined => {
-  const [host, ...rest] = segments
-  if (host === undefined) return undefined
-  const lowered = host.toLowerCase()
-  const grant = grants
-    .filter(isCloudGrant)
-    .find(candidate => answeredAt(candidate.profile).includes(lowered))
-  if (grant === undefined) return undefined
-
-  const profile = profiles[grant.profile]
-  const reads = method === 'GET' || method === 'HEAD'
-  const filter = new URLSearchParams(query).toString()
-  const allow = (operation: CloudOperation, path = rest.join('/')): Decision => ({
-    _tag: 'Cloud',
-    credential: grant.credential,
-    host: lowered,
-    operation,
-    profile: grant.profile,
-    upstream: `https://${lowered}/${path}${operation === 'query' || filter === '' ? '' : `?${filter}`}`,
-  })
-
-  if (lowered === profile.invoke) {
-    const [version, endpoint, ...call] = rest
-    if (version !== 'v2' || endpoint === undefined || call.length === 0) {
-      return deny(404, `a serverless endpoint is called at /v2/<endpoint>/… on ${lowered}`, {
-        host: lowered,
-      })
-    }
-    if (reads) return allow('read')
-    if (method === 'POST') return allow('invoke')
-    return deny(405, `${method} is not how a serverless endpoint is called`, { host: lowered })
-  }
-
-  if (lowered === profile.host && rest.length === 1 && rest[0] === 'graphql') {
-    if (method !== 'POST') {
-      return deny(405, `${method} is not how /graphql is requested; a query is sent with POST`, {
-        host: lowered,
-      })
-    }
-    return allow('query', 'graphql')
-  }
-
-  const [version, ...path] = rest
-  if (version === undefined || version !== cloudVersions[grant.profile][lowered]) {
-    return deny(
-      403,
-      `/${rest.join('/')} is not something this VM may ${reads ? 'read' : 'write'} through ${lowered}`,
-      { host: lowered },
-    )
-  }
-  if (reads) return allow('read')
-  if (!writeMethods.has(method)) {
-    return deny(405, `${method} is not a method this VM may use through ${lowered}`, {
-      host: lowered,
-    })
-  }
-  if (!listedIn(cloudWrites[grant.profile][lowered] ?? {}, method, path)) {
-    return deny(
-      403,
-      `${method} /${rest.join('/')} is not a write this VM may make through ${lowered}`,
-      {
-        host: lowered,
-      },
-    )
-  }
-  return allow('write')
-}
-
-/**
  * Route a git request, or `undefined` if the path is not a git endpoint at all —
- * which is what lets an inference endpoint be tried against the same path
+ * which is what lets a model server's endpoint be tried against the same path
  * without weakening any of the refusals below.
  */
 const routeGit = (
@@ -1742,49 +1296,6 @@ const gitEndpoints: Readonly<Record<GitOperation, string>> = {
 }
 
 /**
- * Route an inference request to the grant that pays for it: the one for the
- * host the path names, since `parseGrants` admits one per profile.
- */
-const routeInference = (
-  grants: readonly Grant[],
-  method: string,
-  segments: readonly string[],
-  query: URLSearchParams,
-): Decision | undefined => {
-  const [host, ...rest] = segments
-  if (host === undefined) return undefined
-  const lowered = host.toLowerCase()
-  const grant = grants
-    .filter(isInferenceGrant)
-    .find(candidate => profiles[candidate.profile].host === lowered)
-  if (grant === undefined) return undefined
-
-  const asked = rest.join('/')
-  const { profile } = grant
-  // The upstream path is the table's key, not the request's — equal by the
-  // lookup, and structurally so rather than by inspection.
-  for (const [path, operation] of Object.entries(inferenceEndpoints[profile])) {
-    if (path !== asked) continue
-    if (method !== methodOf(operation)) {
-      return deny(405, `${method} is not how ${path} is requested`)
-    }
-    // A listing's query is its filter, so it is carried, rebuilt so that every
-    // name and value is encoded and none can reach past the query. Any other
-    // endpoint's is dropped.
-    const filter = operation === 'list-models' ? new URLSearchParams(query).toString() : ''
-    return {
-      _tag: 'Inference',
-      credential: grant.credential,
-      host: profiles[profile].host,
-      operation,
-      profile,
-      upstream: `https://${profiles[profile].host}/${path}${filter === '' ? '' : `?${filter}`}`,
-    }
-  }
-  return deny(404, `${host} is brokered, but /${asked} is not an endpoint this VM may call`)
-}
-
-/**
  * Route a request for a model server, or `undefined` if the path does not ask
  * for one. The path is `/local/<name>/` and an endpoint `modelServerEndpoints`
  * lists.
@@ -1833,10 +1344,9 @@ const routeModelServer = (
  * Whether this request is one the grants permit, and if so what to send upstream.
  *
  * Pure. `target` is the request URL as received; nothing is taken from it except
- * the path, as a sequence of segments matched against a fixed shape, git's
- * `service`, a model listing's filter, and an API request's query, a forge's or
- * a cloud account's. A refusal is
- * set to be written in JSON when the path's first segment, the host the request
+ * the path, as a sequence of segments matched against a fixed shape or a
+ * profile's rules, git's `service`, and the query of a forge's API request or
+ * a profile's. A refusal is set to be written in JSON when the path's first segment, the host the request
  * is for, is one of `jsonNames`, whatever refused it.
  *
  * A profile grant's hosts are not routed here: they are answered by name
@@ -1893,30 +1403,23 @@ const route = (
     .slice(1)
   if (segments.some(segment => segment === '')) return deny(404, 'empty path segment')
 
-  // A profile's host first, by its name: its paths are the service's own, and
-  // one could end in what reads as a git endpoint. Then a forge's API and its
-  // uploads, by their hosts, and a cloud account's
-  // names: their paths are the API's own, and one could end in what reads as
-  // a git endpoint. Then git,
-  // and only then a model server and inference: a git endpoint has a shape of its own, so trying
-  // it first keeps every refusal it makes — the push at the advertisement, the
-  // wrong method, the path that is not three segments — rather than letting an
-  // unrecognised git path fall through to a different profile's "no such
-  // endpoint".
+  // A profile's host first, by its name, then a forge's API and its uploads,
+  // by their hosts: their paths are the service's own, and one could end in
+  // what reads as a git endpoint. Then git, and only then a model server: a
+  // git endpoint has a shape of its own, so trying it first keeps every
+  // refusal it makes — the push at the advertisement, the wrong method, the
+  // path that is not three segments — rather than letting an unrecognised git
+  // path fall through to a model server's "no such endpoint".
   const profile = addressed ? routeProfile(grants, method, segments, url.searchParams) : undefined
   if (profile !== undefined) return profile
   const api = routeApi(grants, method, segments, url.searchParams)
   if (api !== undefined) return api
   const upload = routeUploads(grants, method, segments, url.searchParams)
   if (upload !== undefined) return upload
-  const cloud = routeCloud(grants, method, segments, url.searchParams)
-  if (cloud !== undefined) return cloud
   const git = routeGit(grants, method, segments, url.searchParams.get('service'))
   if (git !== undefined) return git
   const local = routeModelServer(grants, method, segments)
   if (local !== undefined) return local
-  const inference = routeInference(grants, method, segments, url.searchParams)
-  if (inference !== undefined) return inference
   return deny(404, 'not an endpoint this broker serves')
 }
 
@@ -2134,26 +1637,15 @@ const carriesBody = (decision: Exclude<Decision, { _tag: 'Deny' }>): boolean =>
 
 /**
  * The fields a GraphQL request may not name, for a decision whose body is
- * read as one before it is sent, or `undefined` for one whose body is not
- * read: a rule with GraphQL's reader, or a cloud account's query.
+ * read as one before it is sent, a rule's with GraphQL's reader, or
+ * `undefined` for one whose body is not read.
  */
 const withheldFrom = (
   decision: Exclude<Decision, { _tag: 'Deny' }>,
-): ReadonlySet<string> | undefined => {
-  if (decision._tag === 'Profile') {
-    return decision.graphql === undefined ? undefined : new Set(decision.graphql.withheld)
-  }
-  return decision._tag === 'Cloud' && decision.operation === 'query' ? graphqlWithheld : undefined
-}
-
-/**
- * The fields no GraphQL query may select, each one that returns a credential
- * the account holds: `registryAuth`, a registry's login, on Runpod's
- * `ContainerRegistryAuth`. A server returns only the fields a document names,
- * by their own names whatever alias they are given and wherever a fragment
- * puts them, so a document that names none of these returns none.
- */
-const graphqlWithheld: ReadonlySet<string> = new Set(['registryAuth'])
+): ReadonlySet<string> | undefined =>
+  decision._tag === 'Profile' && decision.graphql !== undefined
+    ? new Set(decision.graphql.withheld)
+    : undefined
 
 /** A GraphQL token: a name, a punctuator, or a value whose content decides nothing, a string or a number. */
 type GraphqlToken =
@@ -2408,17 +1900,18 @@ const packTypes = {
  * A git request's headers are built, and carry of the guest's only what git
  * negotiates with the upstream, each checked first.
  *
- * An inference request carries the guest's headers but those in
+ * A profile's request carries the guest's headers but those in
  * `unforwardedRequestHeaders`, so a harness reaches its provider as it would
  * from the host: its API version, its betas, its session and cache hints, its
  * own name. None of them can send the request elsewhere or attach a
  * credential, since the URL is built from the grant, the credential is set
- * after the guest's are dropped, and so are the headers a front end could
- * take another method, path or origin from. A model server's request is built
- * the same way, as is one through a forge's API or a cloud account's, and so
- * is an anonymous read, whose credentials are dropped and none set. An asset's
- * upload carries the length `uploadLength` gives it, if any, and a cloud
- * account's GraphQL request the type of the body the broker wrote for it.
+ * after the guest's are dropped, replacing a header of the same name, and so
+ * are dropped the headers a front end could take another method, path or
+ * origin from. A model server's request is built the same way, as is one
+ * through a forge's API, and so is an anonymous read, whose credentials are
+ * dropped and none set. An asset's upload carries the length `uploadLength`
+ * gives it, if any, and a GraphQL request the type of the body the broker
+ * wrote for it.
  *
  * `token` is the value of the credential the decision names, and `undefined`
  * only for a model server that takes none and an anonymous read: `handle`
@@ -2456,8 +1949,6 @@ export const upstreamHeaders = (
       if (send === 'bearer') headers.set('Authorization', `Bearer ${token}`)
       else if ('header' in send) headers.set(send.header, token)
       else headers.set('Authorization', `Basic ${btoa(`${send.basic}:${token}`)}`)
-    } else if (decision._tag === 'Inference' && decision.profile === 'anthropic-messages') {
-      headers.set('x-api-key', token)
     } else {
       headers.set('Authorization', `Bearer ${token}`)
     }
@@ -3222,23 +2713,25 @@ const returnedHeaders = (
  * it, so this also ends a body that never does. A git fetch's body is its
  * negotiation, kilobytes or a few megabytes, which takes seconds at most.
  *
- * Inference gets minutes rather than seconds because a **non-streaming** request
- * generates its whole answer before any header arrives, so the budget has to
- * cover generation rather than round-trip. A request that needs longer than this
- * is one that should be streaming, where the first byte arrives immediately. A
- * model server's call is a model call too, and may wait on its model loading.
- * An anonymous read is given git's: no model is generating its answer.
+ * A model call gets minutes rather than seconds because a **non-streaming**
+ * request generates its whole answer before any header arrives, so the budget
+ * has to cover generation rather than round-trip. A request that needs longer
+ * than this is one that should be streaming, where the first byte arrives
+ * immediately. A model server's call may wait on its model loading too.
  *
  * A push's body is its pack, as large as what is pushed, and the upstream
  * answers only once it has all of it and has applied it, so a push is given
  * the minutes a model call is. So is an asset's upload, whose body is the
- * asset, for the same reason, and a cloud account's write, which may wait on
- * the capacity for what it creates. A call of a cloud account's serverless
- * endpoint is given an inference request's, since what it waits on is
- * whatever the endpoint runs, a model among them, and the rest of a cloud
- * account's requests git's.
+ * asset, for the same reason.
+ *
+ * A profile's request is given the long wait whatever it is: one rule may
+ * cover a model call, a write that waits on the capacity for what it creates
+ * and a read alike, and a wait a rule chose would be one more thing a profile
+ * could get wrong. The rest, git's fetch, its advertisements, a read through
+ * the forge's API and an anonymous read, are given the short one: nothing is
+ * generating their answer.
  */
-const headerTimeoutMs = { git: 30_000, inference: 600_000, push: 600_000 } as const
+const headerTimeoutMs = { long: 600_000, short: 30_000 } as const
 
 /**
  * Pass a body through, counting it, and report when it ends however it ends.
@@ -3402,8 +2895,8 @@ const handle = async (
   }
 
   // Which credential pays and what it was expected to cover, both settled by
-  // the path: a git request is for a repository, and an inference request
-  // names its model only in a body that is not parsed.
+  // the path: a git request is for a repository, and a model call names its
+  // model only in a body that is not parsed.
   const scope = decision._tag === 'Git' || decision._tag === 'Api' ? decision.repo : undefined
   // A model server's grant may hold none, and then the request is sent with
   // none, as the server was configured to take it. An anonymous read is sent
@@ -3436,16 +2929,12 @@ const handle = async (
     () => {
       abort.abort()
     },
-    decision._tag === 'Inference' ||
-      decision._tag === 'Profile' ||
+    decision._tag === 'Profile' ||
       decision._tag === 'ModelServer' ||
-      (decision._tag === 'Cloud' && decision.host === profiles[decision.profile].invoke)
-      ? headerTimeoutMs.inference
-      : decision.operation === 'push' ||
-          decision.operation === 'upload' ||
-          (decision._tag === 'Cloud' && decision.operation === 'write')
-        ? headerTimeoutMs.push
-        : headerTimeoutMs.git,
+      decision.operation === 'push' ||
+      decision.operation === 'upload'
+      ? headerTimeoutMs.long
+      : headerTimeoutMs.short,
   )
 
   const length = uploadLength(decision, request.headers)
@@ -4084,16 +3573,14 @@ const grantFacts = (grant: Grant): Readonly<Record<string, Fact>> =>
       }
     : isGitGrant(grant)
       ? { credential: grant.credential, profile: grant.profile, repos: grant.repos }
-      : isProfileGrant(grant)
-        ? {
-            credential: grant.credential,
-            hosts: Object.keys(grant.hosts).toSorted(),
-            profile: grant.profile,
-            sets: [
-              ...new Set(Object.values(grant.hosts).flatMap(at => at.allow.map(rule => rule.set))),
-            ].toSorted(),
-          }
-        : { credential: grant.credential, profile: grant.profile }
+      : {
+          credential: grant.credential,
+          hosts: Object.keys(grant.hosts).toSorted(),
+          profile: grant.profile,
+          sets: [
+            ...new Set(Object.values(grant.hosts).flatMap(at => at.allow.map(rule => rule.set))),
+          ].toSorted(),
+        }
 
 const main = (): void => {
   const argv = process.argv.slice(2)

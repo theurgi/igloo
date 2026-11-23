@@ -57,21 +57,6 @@ let
       # makes a client reach the provider directly with a placeholder key and
       # fail. It cannot make a credential reachable.
       brokerEnv ? { },
-      # Files under the guest's /etc that point a client at the broker, as
-      # { "igloo/opencode.json" = "…"; }: configuration a variable in
-      # `brokerEnv` names. Content, as `brokerEnv` is.
-      brokerEtc ? { },
-      # Files pointing a client at the broker where it takes a base URL from
-      # its own file in the home directory and nowhere else, as
-      # [ { path; program; content; } ], `path` under root's home. Each is
-      # written at boot when `program` is installed and `path` does not
-      # exist, so a user's own file is never replaced. Content, as
-      # `brokerEnv` is.
-      brokerFiles ? [ ],
-      # Packages the guest's clients of the broker's grants need, by their
-      # names in the guest's package set, as [ "runpodctl" ]. Content, as
-      # `brokerEnv` is: a guest without them reaches the broker no less.
-      brokerPackages ? [ ],
       # NixOS modules composing the guest environment — the content plane.
       # They compose by normal module semantics and may override anything in
       # `coreModule` or disable it whole; they may not set any of the
@@ -139,8 +124,7 @@ let
     # second `-fw_cfg` option. systemd also uses the name as a filename.
     # NixOS writes a session variable into a shell script and a PAM file
     # inside double quotes, unescaped, so a quote or a backslash in a value
-    # would end it or change it, silently. Configuration that needs either
-    # goes in `brokerEtc`.
+    # would end it or change it, silently.
     assert lib.all (
       name:
       lib.assertMsg (
@@ -182,15 +166,6 @@ let
           );
         };
 
-      # Install the clients the broker's grants are for, from the guest's
-      # package set, so a content module's overlay applies to them as to
-      # anything else the guest installs.
-      brokerPackagesModule =
-        { pkgs, ... }:
-        {
-          environment.systemPackages = map (name: pkgs.${name}) brokerPackages;
-        };
-
       # Trust the authority behind the broker's certificate, beside the
       # system's own.
       brokerAuthorityModule =
@@ -199,47 +174,13 @@ let
           security.pki.certificates = [ brokerAuthority ];
         };
 
-      # Point the guest's model-provider clients at the broker. Session
-      # variables reach every login: Claude Code reads its base URL from one,
-      # opencode its configuration, and every client its placeholder key.
+      # Point the guest's clients at the broker. Session variables reach
+      # every login: the proxy, the trust a client verifies the broker's
+      # names by, and every placeholder key.
       brokerEnvModule =
         { ... }:
         {
           environment.sessionVariables = brokerEnv;
-          environment.etc = lib.mapAttrs (_: text: { inherit text; }) brokerEtc;
-        };
-
-      # The clients that read a base URL from their own file and nowhere
-      # else. Written once, at boot, and left alone after: the broker's
-      # address is fixed, so a file written once stays right, and one the
-      # user keeps is theirs.
-      brokerFilesModule =
-        { config, pkgs, ... }:
-        let
-          home = config.users.users.root.home;
-        in
-        {
-          systemd.services.igloo-broker-client-files = {
-            description = "Point model clients at the credential broker";
-            wantedBy = [ "multi-user.target" ];
-            unitConfig.RequiresMountsFor = [ home ];
-            serviceConfig = {
-              Type = "oneshot";
-              RemainAfterExit = true;
-            };
-            script = lib.concatMapStrings (
-              file:
-              let
-                target = lib.escapeShellArg "${home}/${file.path}";
-              in
-              ''
-                if [ -x ${lib.escapeShellArg "/run/current-system/sw/bin/${file.program}"} ] &&
-                  [ ! -e ${target} ] && [ ! -L ${target} ]; then
-                  install -D -m 0644 ${pkgs.writeText "igloo-${file.program}-broker" file.content} ${target}
-                fi
-              ''
-            ) brokerFiles;
-          };
         };
 
       # The serial QEMU gives the disk, which is how the guest finds it:
@@ -471,8 +412,6 @@ let
         ++ lib.optional (gitBroker != null) gitBrokerModule
         ++ lib.optional (brokerAuthority != null) brokerAuthorityModule
         ++ lib.optional (brokerEnv != { }) brokerEnvModule
-        ++ lib.optional (brokerFiles != [ ]) brokerFilesModule
-        ++ lib.optional (brokerPackages != [ ]) brokerPackagesModule
         ++ contentModules
         ++ [
           {

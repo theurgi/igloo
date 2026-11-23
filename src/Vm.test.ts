@@ -887,7 +887,7 @@ describe('Vm.brokerArgv', () => {
   it('starts no tunnel and no TLS listener for a VM with nowhere to tunnel to and no name to answer', () => {
     const argv = Vm.brokerArgv(bins, {
       ...spec,
-      grants: [{ credential: 'ANTHROPIC_KEY', profile: 'anthropic-messages' }],
+      grants: [{ name: 'local', port: 8080, profile: 'model-server' }],
     })
     assert.isFalse(argv.includes('--proxy'))
     assert.isFalse(argv.includes('--tunnel'))
