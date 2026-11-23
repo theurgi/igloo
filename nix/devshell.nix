@@ -4,6 +4,7 @@
   broker,
   landlock,
   pkgs,
+  profiles,
   storeView,
 }:
 pkgs.mkShell {
@@ -59,6 +60,10 @@ pkgs.mkShell {
     # keeping them from the user's loopback services and abstract sockets,
     # and the evaluation from the user's files.
     export IGLOO_LANDLOCK="${landlock}/bin/igloo-landlock"
+
+    # The broker profiles igloo ships, as the package carries them, for the
+    # CLI run from the checkout and for the tests.
+    export IGLOO_PROFILES="${profiles}"
 
     # Frozen, so a `bun.lock` that disagrees with `package.json` fails
     # here rather than being rewritten on the way into a shell. Changing

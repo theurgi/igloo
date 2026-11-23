@@ -142,7 +142,21 @@ in
     };
 
     policy = lib.mkOption {
-      type = lib.types.attrsOf lib.types.anything;
+      # Freeform but for `profiles`, whose entries are each one definition:
+      # merged as any other attribute set, two modules defining a profile
+      # of the same name would join their sets into one neither wrote.
+      type = lib.types.submodule {
+        freeformType = lib.types.attrsOf lib.types.anything;
+        options.profiles = lib.mkOption {
+          type = lib.types.attrsOf (lib.types.uniq lib.types.anything);
+          default = { };
+          description = ''
+            Broker profiles this user defines, each by name, for any
+            project's brokered credential to grant: one imported from a
+            flake, or one of igloo's replaced. One definition per name.
+          '';
+        };
+      };
       default = { };
       example = lib.literalExpression ''
         {

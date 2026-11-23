@@ -38,6 +38,12 @@ let
     $CC -std=c11 -O2 -Wall -Wextra -o $out/bin/igloo-landlock ${../src/landlock.c}
   '';
 
+  # The broker profiles igloo ships, as the JSON the CLI reads beneath the
+  # user layer's. A store path of its own, named by the wrapper and the
+  # devshell, so the installed CLI, a checkout's and the tests read the
+  # same data.
+  profiles = pkgs.writeText "igloo-profiles.json" (builtins.toJSON (import ./profiles));
+
   # One source for the release, which `src/index.ts` imports for
   # `--version`. The root package's own version is not part of the tree
   # `bun install` produces, so a bump leaves `cliDeps`' hash as it is.
@@ -160,6 +166,7 @@ let
         --set IGLOO_BROKER ${broker}/bin/igloo-broker \
         --set IGLOO_BWRAP ${pkgs.bubblewrap}/bin/bwrap \
         --set IGLOO_LANDLOCK ${landlock}/bin/igloo-landlock \
+        --set IGLOO_PROFILES ${profiles} \
         --set IGLOO_SSH_PROXY ${pkgs.systemd}/lib/systemd/systemd-ssh-proxy \
         --set IGLOO_STORE_VIEW ${storeView}/bin/igloo-store-view \
         --set IGLOO_VIRTIOFSD ${pkgs.virtiofsd}/bin/virtiofsd \
@@ -187,6 +194,7 @@ in
     broker
     cli
     landlock
+    profiles
     storeView
     ;
 }
