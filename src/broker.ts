@@ -150,6 +150,12 @@ export const tlsNamesCovered: readonly string[] = [
 ]
 
 /**
+ * The names the broker's own code answers for a forge, which no profile may
+ * name: a request is routed by the name it was addressed to.
+ */
+export const forgeNames: readonly string[] = answeredAt('github')
+
+/**
  * Every git profile's API and the host it takes uploads at, and every name a
  * cloud profile is answered at. Their clients read an error's reason from the
  * `message` of a JSON body, as the API writes one, and show a response with
@@ -231,32 +237,355 @@ export interface ModelServerGrant {
   readonly profile: 'model-server'
 }
 
-export type Grant = CloudGrant | GitGrant | InferenceGrant | ModelServerGrant
+/**
+ * How a profile's key is sent at one of its hosts: as `Authorization: Bearer`,
+ * as the whole value of one named header, or as `Authorization: Basic` with a
+ * fixed username. Never in a query or a path, which a server can echo into an
+ * error or a log.
+ */
+export type Send = 'bearer' | { readonly basic: string } | { readonly header: string }
+
+/**
+ * What a rule matches: a request by one of `method`, `'*'` for any, at a path
+ * in `apiWrites`' form, where `*` is any one segment, a last `**` any number
+ * of them, none included, and `""` the host's root. Fixed segments are
+ * compared as they are written, since services match them by case.
+ *
+ * `graphql` makes it a GraphQL request's rule: the body is read, and sent only
+ * if it holds queries alone and names no field in `withheld` (`graphqlQuery`).
+ */
+export interface Rule {
+  readonly graphql?: { readonly withheld: readonly string[] }
+  readonly method: '*' | readonly string[]
+  readonly path: string
+}
+
+/** A rule a grant allows, under the name of the set it was chosen as part of. */
+export interface ChosenRule extends Rule {
+  readonly set: string
+}
+
+/** One host of a profile grant: how its key is sent there, and the rules that hold there. */
+export interface ProfileHost {
+  readonly allow: readonly ChosenRule[]
+  readonly deny: readonly Rule[]
+  readonly send: Send
+}
+
+/**
+ * A service's key, sent to the hosts a profile names under the rules of the
+ * sets the grant chose. Data rather than code: the hosts, the way the key is
+ * sent and every rule are the grant's own, written by whoever defined the
+ * profile and pinned to those hosts by whoever holds the key.
+ *
+ * Only the sets a grant chose reach the broker, and only at the hosts they
+ * reach, so a host no chosen rule names is not one of `hosts` and is not
+ * answered. `deny` holds whatever is chosen. Answered by name alone, over the
+ * TLS listener: there is no path form for a profile's host. At most one per
+ * profile, and a host is one grant's: a request is routed by the name it was
+ * addressed to.
+ */
+export interface ProfileGrant {
+  readonly credential: string
+  readonly hosts: Readonly<Record<string, ProfileHost>>
+  readonly profile: string
+}
+
+export type Grant = CloudGrant | GitGrant | InferenceGrant | ModelServerGrant | ProfileGrant
 
 /** Anything whose fields can be read by name: a non-null object, an array included. */
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null
 
+export const isProfileGrant = (grant: Grant): grant is ProfileGrant => 'hosts' in grant
+
 export const isModelServerGrant = (grant: Grant): grant is ModelServerGrant =>
-  grant.profile === 'model-server'
+  grant.profile === 'model-server' && !isProfileGrant(grant)
+
+/** The kind of a grant whose profile is code here, or `undefined` for a model server's or a profile's. */
+const kindOf = (grant: Grant): (typeof profiles)[ProfileName]['kind'] | undefined =>
+  isModelServerGrant(grant) || isProfileGrant(grant) ? undefined : profiles[grant.profile].kind
 
 export const isInferenceGrant = (grant: Grant): grant is InferenceGrant =>
-  !isModelServerGrant(grant) && profiles[grant.profile].kind === 'inference'
+  kindOf(grant) === 'inference'
 
-export const isGitGrant = (grant: Grant): grant is GitGrant =>
-  !isModelServerGrant(grant) && profiles[grant.profile].kind === 'git'
+export const isGitGrant = (grant: Grant): grant is GitGrant => kindOf(grant) === 'git'
 
-export const isCloudGrant = (grant: Grant): grant is CloudGrant =>
-  !isModelServerGrant(grant) && profiles[grant.profile].kind === 'cloud'
+export const isCloudGrant = (grant: Grant): grant is CloudGrant => kindOf(grant) === 'cloud'
 
-/** The names a broker holding `grants` answers TLS for: each git or cloud grant's, once. */
+/**
+ * The names a broker holding `grants` answers TLS for: each git or cloud
+ * grant's, and each host of a profile grant's, once.
+ */
 export const tlsNames = (grants: readonly Grant[]): readonly string[] => [
   ...new Set(
-    grants
-      .filter((grant): grant is CloudGrant | GitGrant => isGitGrant(grant) || isCloudGrant(grant))
-      .flatMap(grant => answeredAt(grant.profile)),
+    grants.flatMap(grant =>
+      isProfileGrant(grant)
+        ? Object.keys(grant.hosts)
+        : isGitGrant(grant) || isCloudGrant(grant)
+          ? answeredAt(grant.profile)
+          : [],
+    ),
   ),
 ]
+
+/**
+ * The names whose clients read an error's reason from the `message` of a JSON
+ * body: `apiNames`, and each host of a profile grant. A refusal the broker
+ * writes for one of them is written that way.
+ */
+const jsonNames = (grants: readonly Grant[]): readonly string[] => [
+  ...apiNames,
+  ...grants.filter(isProfileGrant).flatMap(grant => Object.keys(grant.hosts)),
+]
+
+/**
+ * What a profile may be called: lowercase letters, digits and `-`, as a
+ * credential's `profile` names it and the log records it. A set is named the
+ * same way.
+ */
+export const isProfileNameForm = (value: string): boolean => /^[a-z0-9][a-z0-9-]*$/.test(value)
+
+/**
+ * A variable a profile's clients read a key from, which the guest holds the
+ * placeholder in: a name with the form of a key's, so that no profile can set
+ * `PATH` or `LD_PRELOAD`.
+ */
+export const isPlaceholderName = (value: string): boolean =>
+  /^[A-Z][A-Z0-9_]*_(?:KEY|TOKEN)$/.test(value)
+
+/** The methods a rule may name. */
+export const ruleMethods: ReadonlySet<string> = new Set([
+  'DELETE',
+  'GET',
+  'HEAD',
+  'OPTIONS',
+  'PATCH',
+  'POST',
+  'PUT',
+])
+
+/**
+ * Headers the broker drops, sets or frames a request by, which a key sent as
+ * a named header would collide with: each would be dropped before it was sent,
+ * replaced by the broker's own, or read as describing the connection or the
+ * body rather than as holding a key.
+ */
+const unsendableHeaders: ReadonlySet<string> = new Set([
+  'accept-encoding',
+  'connection',
+  'content-encoding',
+  'content-length',
+  'content-type',
+  'expect',
+  'host',
+  'keep-alive',
+  'proxy-connection',
+  'te',
+  'trailer',
+  'transfer-encoding',
+  'upgrade',
+])
+
+/** An HTTP header's name: a token, as RFC 9110 has it. */
+const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/
+
+/** The shapes `send` takes, for a message refusing one. */
+const SEND_SHAPES = 'send is "bearer", { header = "<name>"; } or { basic = "<username>"; }'
+
+/** Why `send` cannot send a key, or `undefined` if it can. */
+export const sendProblem = (send: unknown): string | undefined => {
+  if (send === 'bearer') return undefined
+  if (!isObject(send) || Array.isArray(send)) return SEND_SHAPES
+  const keys = Object.keys(send)
+  const [only] = keys
+  if (keys.length !== 1 || (only !== 'header' && only !== 'basic')) return SEND_SHAPES
+  const value = send[only]
+  if (only === 'header') {
+    if (typeof value !== 'string' || !HEADER_NAME.test(value)) {
+      return `${JSON.stringify(value)} is not a header's name`
+    }
+    if (unsendableHeaders.has(value.toLowerCase())) {
+      return `${value} is a header the broker drops, sets or frames a request by, so it cannot carry a key`
+    }
+    return undefined
+  }
+  // A Basic username is everything before the first `:`.
+  // oxlint-disable-next-line no-control-regex -- control characters are what it refuses.
+  return typeof value === 'string' && /^[^:\u0000-\u001f\u007f]+$/.test(value)
+    ? undefined
+    : `${JSON.stringify(value)} is not a username: one with no ":" and no control characters`
+}
+
+/** Whether `send` is a way a key can be sent, as `sendProblem` reads it. */
+export const isSend = (send: unknown): send is Send => sendProblem(send) === undefined
+
+/** One fixed segment of a rule's path: what a URL's path may hold, less `%`. */
+const RULE_SEGMENT = /^[A-Za-z0-9._~!$&'()+,;=:@-]+$/
+
+/** Why `path` is not a rule's path, or `undefined` if it is. */
+export const rulePathProblem = (path: string): string | undefined => {
+  if (path === '') return undefined
+  if (path.startsWith('/') || path.endsWith('/')) {
+    return `${JSON.stringify(path)} is written with no leading or trailing /, and the host's root as ""`
+  }
+  const segments = path.split('/')
+  for (const [at, segment] of segments.entries()) {
+    if (segment === '') return `${JSON.stringify(path)} has an empty segment`
+    if (segment === '**') {
+      if (at === segments.length - 1) continue
+      return `${JSON.stringify(path)} has ** before its last segment, the one place it means any number of segments`
+    }
+    if (segment === '*') continue
+    if (segment.includes('*')) {
+      return `${JSON.stringify(path)} has * inside a segment, where it is a segment of its own`
+    }
+    if (segment === '.' || segment === '..') {
+      return `${JSON.stringify(path)} has a ${segment} segment, which no path it is matched against keeps`
+    }
+    if (!RULE_SEGMENT.test(segment)) {
+      return `${JSON.stringify(path)} has ${JSON.stringify(segment)}, which no path it is matched against holds`
+    }
+  }
+  return undefined
+}
+
+/** A GraphQL name, which `graphql.withheld` lists fields by. */
+const GRAPHQL_FIELD = /^[_A-Za-z][_0-9A-Za-z]*$/
+
+/**
+ * A rule as the broker reads it, from its fields as the grant has them, or
+ * why it is not one. `chosen` for an `allow` rule, which carries its set.
+ */
+const readRule = (
+  raw: unknown,
+  chosen: boolean,
+): { readonly rule: ChosenRule | Rule } | { readonly message: string } => {
+  if (!isObject(raw) || Array.isArray(raw)) return { message: 'a rule is an object' }
+  const fields = new Set(chosen ? ['graphql', 'method', 'path', 'set'] : ['method', 'path'])
+  const unread = Object.keys(raw).find(key => !fields.has(key))
+  if (unread !== undefined) {
+    return {
+      message: `a${chosen ? 'n allow' : ' deny'} rule sets ${unread}, which this broker does not read`,
+    }
+  }
+  const { graphql, method, path, set } = raw
+  if (typeof path !== 'string') return { message: 'a rule has no path' }
+  const problem = rulePathProblem(path)
+  if (problem !== undefined) return { message: problem }
+  let methods: Rule['method']
+  if (method === '*') {
+    methods = '*'
+  } else if (
+    Array.isArray(method) &&
+    method.length > 0 &&
+    method.every(each => typeof each === 'string' && ruleMethods.has(each))
+  ) {
+    methods = [...new Set(method as readonly string[])]
+  } else {
+    return {
+      message: `${JSON.stringify(method)} at ${JSON.stringify(path)} is not "*" or a list of methods`,
+    }
+  }
+  let reader: Rule['graphql']
+  if (graphql !== undefined) {
+    if (methods === '*' || methods.length !== 1 || methods[0] !== 'POST') {
+      return { message: `the GraphQL rule at ${JSON.stringify(path)} is for POST alone` }
+    }
+    const withheld = isObject(graphql) ? graphql['withheld'] : undefined
+    if (
+      !isObject(graphql) ||
+      Array.isArray(graphql) ||
+      Object.keys(graphql).some(key => key !== 'withheld') ||
+      !Array.isArray(withheld) ||
+      !withheld.every(name => typeof name === 'string' && GRAPHQL_FIELD.test(name))
+    ) {
+      return {
+        message: `the GraphQL rule at ${JSON.stringify(path)} takes withheld, a list of field names, and nothing else`,
+      }
+    }
+    reader = { withheld: withheld as readonly string[] }
+  }
+  const rule = { ...(reader === undefined ? {} : { graphql: reader }), method: methods, path }
+  if (!chosen) return { rule }
+  if (typeof set !== 'string' || !isProfileNameForm(set)) {
+    return { message: `the rule at ${JSON.stringify(path)} names no set it was chosen as part of` }
+  }
+  return { rule: { ...rule, set } }
+}
+
+/** The rules of one host of a profile grant, or why they are not rules. */
+const readRules = (
+  where: string,
+  list: unknown,
+  chosen: boolean,
+): { readonly rules: readonly (ChosenRule | Rule)[] } | { readonly message: string } => {
+  if (!Array.isArray(list)) return { message: `${where} lists no rules` }
+  const rules: Array<ChosenRule | Rule> = []
+  for (const each of list as unknown[]) {
+    const read = readRule(each, chosen)
+    if ('message' in read) return { message: `${where}: ${read.message}` }
+    rules.push(read.rule)
+  }
+  return { rules }
+}
+
+/** A profile grant as the broker reads it, or why it is not one. */
+const readProfileGrant = (
+  entry: Record<string, unknown>,
+): { readonly grant: ProfileGrant } | { readonly message: string } => {
+  const { credential, hosts, profile } = entry
+  // Not a name the broker's own code answers to.
+  if (
+    typeof profile !== 'string' ||
+    !isProfileNameForm(profile) ||
+    profile === 'model-server' ||
+    (isProfileName(profile) && profiles[profile].kind === 'git')
+  ) {
+    return { message: `${JSON.stringify(profile)} is not a profile's name` }
+  }
+  const unread = Object.keys(entry).find(key => !['credential', 'hosts', 'profile'].includes(key))
+  if (unread !== undefined) {
+    return { message: `the ${profile} grant sets ${unread}, which this broker does not read` }
+  }
+  if (typeof credential !== 'string' || credential === '') {
+    return { message: 'a grant needs a credential name' }
+  }
+  if (!isObject(hosts) || Array.isArray(hosts) || Object.keys(hosts).length === 0) {
+    return { message: `the ${profile} grant reaches no host` }
+  }
+  const read: Record<string, ProfileHost> = {}
+  for (const [host, raw] of Object.entries(hosts)) {
+    // A name with a dot, in the form the TLS listener compares it in: never
+    // an address, which the tunnel judges as one, and never a single label.
+    if (!isHostname(host) || !host.includes('.')) {
+      return {
+        message: `${JSON.stringify(host)} in the ${profile} grant is not a lowercase hostname with a dot`,
+      }
+    }
+    const where = `the ${profile} grant's ${host}`
+    if (!isObject(raw) || Array.isArray(raw)) return { message: `${where} is not an object` }
+    const field = Object.keys(raw).find(key => !['allow', 'deny', 'send'].includes(key))
+    if (field !== undefined) {
+      return { message: `${where} sets ${field}, which this broker does not read` }
+    }
+    const send = raw['send']
+    if (!isSend(send)) return { message: `${where}: ${sendProblem(send) ?? ''}` }
+    const allow = readRules(where, raw['allow'], true)
+    if ('message' in allow) return allow
+    if (allow.rules.length === 0) {
+      return { message: `${where} allows nothing, so it is not one of the grant's hosts` }
+    }
+    const deny = readRules(where, raw['deny'], false)
+    if ('message' in deny) return deny
+    read[host] = {
+      allow: allow.rules.filter((rule): rule is ChosenRule => 'set' in rule),
+      deny: deny.rules,
+      send,
+    }
+  }
+  return { grant: { credential, hosts: read, profile } }
+}
 
 /**
  * The names the broker's TLS certificate and key are loaded under, beside the
@@ -383,6 +712,22 @@ export type Decision =
       readonly upstream: string
     }
   | {
+      readonly _tag: 'Profile'
+      readonly credential: string
+      /** Set for a rule with GraphQL's reader: the body is read and checked before anything is sent. */
+      readonly graphql?: { readonly withheld: readonly string[] }
+      readonly host: string
+      readonly profile: string
+      /** The rule that allowed it, as text: its methods and its path. */
+      readonly rule: string
+      readonly send: Send
+      /** Whether the request sends a body: anything but a GET or a HEAD. */
+      readonly sendsBody: boolean
+      /** The set the rule was chosen as part of. */
+      readonly set: string
+      readonly upstream: string
+    }
+  | {
       readonly _tag: 'Anonymous'
       /** A name the broker answers: where the request goes. */
       readonly host: string
@@ -417,9 +762,11 @@ const deny = (status: number, reason: string, asked?: Asked): Decision => ({
   status,
 })
 
-/** `decision`, set to be written in JSON if it refuses a request addressed to one of `apiNames`. */
-const refusedAt = (host: string, decision: Decision): Decision =>
-  decision._tag === 'Deny' && apiNames.includes(host) ? { ...decision, json: true } : decision
+/** `decision`, set to be written in JSON if it refuses a request addressed to one of `jsonNames`. */
+const refusedAt = (grants: readonly Grant[], host: string, decision: Decision): Decision =>
+  decision._tag === 'Deny' && jsonNames(grants).includes(host)
+    ? { ...decision, json: true }
+    : decision
 
 /** `owner/repo`, with no path traversal and nothing that needs encoding. */
 const REPO = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/
@@ -499,6 +846,28 @@ export const parseGrants = (json: string): { grants: Grant[] } | { message: stri
   for (const entry of raw as unknown[]) {
     if (!isObject(entry)) return { message: 'a grant must be an object' }
     const { credential, profile, repos } = entry
+
+    if ('hosts' in entry) {
+      const read = readProfileGrant(entry)
+      if ('message' in read) return read
+      const { grant } = read
+      if (grants.some(other => other.profile === grant.profile)) {
+        return {
+          message: `there are two ${grant.profile} grants, and a request could not choose one`,
+        }
+      }
+      // A request is routed by the name it was addressed to, so a name is one
+      // grant's or none, and never one the broker's own code answers.
+      const taken = [...tlsNames(grants), ...forgeNames]
+      const shared = Object.keys(grant.hosts).find(host => taken.includes(host))
+      if (shared !== undefined) {
+        return {
+          message: `${shared} is a host of the ${grant.profile} grant and of another, and a request to it could not choose one`,
+        }
+      }
+      grants.push(grant)
+      continue
+    }
 
     if (profile === 'model-server') {
       const unread = Object.keys(entry).find(key => !grantFields['model-server'].has(key))
@@ -870,6 +1239,29 @@ const apiWritesRefused: Readonly<Record<string, readonly string[]>> = {
 }
 
 /**
+ * Whether `pattern`, a path in `apiWrites`' form, matches `path`, a sequence
+ * of segments: `*` any one segment, a last `**` any number of them, none
+ * included, `""` the root alone, and every other segment compared as written.
+ */
+const pathMatches = (pattern: string, path: readonly string[]): boolean => {
+  const segments = pattern === '' ? [] : pattern.split('/')
+  const open = segments.at(-1) === '**'
+  const fixed = open ? segments.slice(0, -1) : segments
+  return (
+    (open ? path.length >= fixed.length : path.length === fixed.length) &&
+    fixed.every((segment, at) => segment === '*' || segment === path[at])
+  )
+}
+
+/** Whether `rule` matches a request by `method` at `path`, a sequence of segments. */
+const ruleMatches = (rule: Rule, method: string, path: readonly string[]): boolean =>
+  (rule.method === '*' || rule.method.includes(method)) && pathMatches(rule.path, path)
+
+/** A rule as the log and a refusal name it: `GET,HEAD v2/**`, the root as `/`. */
+const ruleText = (rule: Rule): string =>
+  `${rule.method === '*' ? '*' : rule.method.join(',')} ${rule.path === '' ? '/' : rule.path}`
+
+/**
  * Whether `table`, paths in `apiWrites`' form, lets `method` write at `path`,
  * a sequence of segments.
  */
@@ -878,16 +1270,9 @@ const listedIn = (
   method: string,
   path: readonly string[],
 ): boolean =>
-  Object.entries(table).some(([listed, methods]) => {
-    if (!methods.includes(method)) return false
-    const pattern = listed.split('/')
-    const open = pattern.at(-1) === '**'
-    const fixed = open ? pattern.slice(0, -1) : pattern
-    return (
-      (open ? path.length >= fixed.length : path.length === fixed.length) &&
-      fixed.every((segment, at) => segment === '*' || segment === path[at])
-    )
-  })
+  Object.entries(table).some(
+    ([listed, methods]) => methods.includes(method) && pathMatches(listed, path),
+  )
 
 /**
  * Whether `method` may write at `tail`, the path past a repository: one
@@ -943,6 +1328,74 @@ const cloudWrites: Readonly<
 /** The version each of a cloud profile's REST names takes its paths under. */
 const cloudVersions: Readonly<Record<CloudProfile, Readonly<Record<string, string>>>> = {
   runpod: { [profiles.runpod.host]: 'v2' },
+}
+
+/**
+ * Route a request for a profile grant's host, or `undefined` if the path's
+ * host is none of them.
+ *
+ * A `deny` rule that matches refuses it, whatever is chosen; then a chosen
+ * rule that matches allows it; and anything else is refused. Order means
+ * nothing: of the chosen rules that match, one with no reader is taken before
+ * one with GraphQL's, since a request any rule allows unread is allowed.
+ *
+ * The upstream is the host and the request's path, segment by segment —
+ * `decide` has refused a percent-escape and an empty segment, and the URL
+ * parser has resolved every `.` and `..`, so the path sent is the one the
+ * rule matched — and its query, rebuilt so that each name and value is
+ * encoded. A GraphQL request goes without its query, since a server may take
+ * an operation from the query in place of the body that was read.
+ */
+const routeProfile = (
+  grants: readonly Grant[],
+  method: string,
+  segments: readonly string[],
+  query: URLSearchParams,
+): Decision | undefined => {
+  const [host, ...rest] = segments
+  if (host === undefined) return undefined
+  const lowered = host.toLowerCase()
+  const grant = grants
+    .filter(isProfileGrant)
+    .find(candidate => Object.hasOwn(candidate.hosts, lowered))
+  const at = grant?.hosts[lowered]
+  if (grant === undefined || at === undefined) return undefined
+
+  const path = `/${rest.join('/')}`
+  const denied = at.deny.find(rule => ruleMatches(rule, method, rest))
+  if (denied !== undefined) {
+    return deny(
+      403,
+      `${method} ${path} is refused at ${lowered} by the ${grant.profile} profile's deny rule ${ruleText(denied)}`,
+      { host: lowered },
+    )
+  }
+  const matching = at.allow.filter(rule => ruleMatches(rule, method, rest))
+  const rule = matching.find(each => each.graphql === undefined) ?? matching[0]
+  if (rule === undefined) {
+    // A path a chosen rule names, by another method.
+    if (at.allow.some(each => pathMatches(each.path, rest))) {
+      return deny(405, `${method} is not how ${path} is requested through ${lowered}`, {
+        host: lowered,
+      })
+    }
+    return deny(403, `${method} ${path} is not something this VM may do through ${lowered}`, {
+      host: lowered,
+    })
+  }
+  const filter = rule.graphql === undefined ? new URLSearchParams(query).toString() : ''
+  return {
+    _tag: 'Profile',
+    credential: grant.credential,
+    ...(rule.graphql === undefined ? {} : { graphql: rule.graphql }),
+    host: lowered,
+    profile: grant.profile,
+    rule: ruleText(rule),
+    send: at.send,
+    sendsBody: method !== 'GET' && method !== 'HEAD',
+    set: rule.set,
+    upstream: `https://${lowered}${path}${filter === '' ? '' : `?${filter}`}`,
+  }
 }
 
 /**
@@ -1384,9 +1837,21 @@ const routeModelServer = (
  * `service`, a model listing's filter, and an API request's query, a forge's or
  * a cloud account's. A refusal is
  * set to be written in JSON when the path's first segment, the host the request
- * is for, is one of `apiNames`, whatever refused it.
+ * is for, is one of `jsonNames`, whatever refused it.
+ *
+ * A profile grant's hosts are not routed here: they are answered by name
+ * alone (`decideAddressed`).
  */
-export const decide = (grants: readonly Grant[], method: string, target: string): Decision => {
+export const decide = (grants: readonly Grant[], method: string, target: string): Decision =>
+  decideAt(grants, method, target, false)
+
+/** `decide`, routing a profile grant's hosts too when the request was `addressed` to one by name. */
+const decideAt = (
+  grants: readonly Grant[],
+  method: string,
+  target: string,
+  addressed: boolean,
+): Decision => {
   // Parsed against a base, because a request target is not always a URL: a
   // client that sends no `Host` — anything speaking HTTP/1.0 — leaves the server
   // reporting the bare path, which is not one on its own. The base is inert
@@ -1399,11 +1864,20 @@ export const decide = (grants: readonly Grant[], method: string, target: string)
   } catch {
     return deny(400, 'unparseable request target')
   }
-  return refusedAt(url.pathname.split('/')[1]?.toLowerCase() ?? '', route(grants, method, url))
+  return refusedAt(
+    grants,
+    url.pathname.split('/')[1]?.toLowerCase() ?? '',
+    route(grants, method, url, addressed),
+  )
 }
 
-/** `decide`, once the target is parsed. */
-const route = (grants: readonly Grant[], method: string, url: URL): Decision => {
+/** `decideAt`, once the target is parsed. */
+const route = (
+  grants: readonly Grant[],
+  method: string,
+  url: URL,
+  addressed: boolean,
+): Decision => {
   if (grants.length === 0) return deny(403, 'this VM has no brokered credential')
 
   // Refused rather than decoded. A repository name never needs an escape, so the
@@ -1419,7 +1893,9 @@ const route = (grants: readonly Grant[], method: string, url: URL): Decision => 
     .slice(1)
   if (segments.some(segment => segment === '')) return deny(404, 'empty path segment')
 
-  // A forge's API and its uploads first, by their hosts, and a cloud account's
+  // A profile's host first, by its name: its paths are the service's own, and
+  // one could end in what reads as a git endpoint. Then a forge's API and its
+  // uploads, by their hosts, and a cloud account's
   // names: their paths are the API's own, and one could end in what reads as
   // a git endpoint. Then git,
   // and only then a model server and inference: a git endpoint has a shape of its own, so trying
@@ -1427,6 +1903,8 @@ const route = (grants: readonly Grant[], method: string, url: URL): Decision => 
   // wrong method, the path that is not three segments — rather than letting an
   // unrecognised git path fall through to a different profile's "no such
   // endpoint".
+  const profile = addressed ? routeProfile(grants, method, segments, url.searchParams) : undefined
+  if (profile !== undefined) return profile
   const api = routeApi(grants, method, segments, url.searchParams)
   if (api !== undefined) return api
   const upload = routeUploads(grants, method, segments, url.searchParams)
@@ -1477,9 +1955,13 @@ export const decideAddressed = (
   const host = parsed.hostname.toLowerCase()
   const name = host.endsWith('.') ? host.slice(0, -1) : host
   if (!tlsNames(grants).includes(name)) {
-    return refusedAt(name, deny(421, `${name} is not answered here for this VM`, { host: name }))
+    return refusedAt(
+      grants,
+      name,
+      deny(421, `${name} is not answered here for this VM`, { host: name }),
+    )
   }
-  const granted = decide(grants, method, `/${name}${parsed.pathname}${parsed.search}`)
+  const granted = decideAt(grants, method, `/${name}${parsed.pathname}${parsed.search}`, true)
   if (granted._tag !== 'Deny') return granted
 
   const operation = readOf(method, parsed)
@@ -1490,6 +1972,7 @@ export const decideAddressed = (
     // this is no git endpoint hides why a read was not sent on.
     return granted.status === 404
       ? refusedAt(
+          grants,
           name,
           deny(
             403,
@@ -1643,6 +2126,27 @@ export const graphqlBodyLimit = 256 * 1024
 const graphqlFields: ReadonlySet<string> = new Set(['operationName', 'query', 'variables'])
 
 /**
+ * Whether a request sends a body upstream: a profile's by its method, and
+ * any other by what it is.
+ */
+const carriesBody = (decision: Exclude<Decision, { _tag: 'Deny' }>): boolean =>
+  decision._tag === 'Profile' ? decision.sendsBody : sendsBody(decision.operation)
+
+/**
+ * The fields a GraphQL request may not name, for a decision whose body is
+ * read as one before it is sent, or `undefined` for one whose body is not
+ * read: a rule with GraphQL's reader, or a cloud account's query.
+ */
+const withheldFrom = (
+  decision: Exclude<Decision, { _tag: 'Deny' }>,
+): ReadonlySet<string> | undefined => {
+  if (decision._tag === 'Profile') {
+    return decision.graphql === undefined ? undefined : new Set(decision.graphql.withheld)
+  }
+  return decision._tag === 'Cloud' && decision.operation === 'query' ? graphqlWithheld : undefined
+}
+
+/**
  * The fields no GraphQL query may select, each one that returns a credential
  * the account holds: `registryAuth`, a registry's login, on Runpod's
  * `ContainerRegistryAuth`. A server returns only the fields a document names,
@@ -1729,7 +2233,7 @@ const unreadDocument = 'the GraphQL document could not be read as one'
 
 /**
  * Why a GraphQL document is not sent, or `undefined` if it is: one whose every
- * operation is a query, and that names no field in `graphqlWithheld`.
+ * operation is a query, and that names no field in `withheld`.
  *
  * A document is a run of definitions, each an operation or a fragment. An
  * operation begins with `query`, `mutation` or `subscription`, or is a bare
@@ -1744,14 +2248,17 @@ const unreadDocument = 'the GraphQL document could not be read as one'
  * A fragment on the mutation type can be defined, but spread into a query the
  * server refuses it, so a fragment decides nothing either way.
  */
-export const graphqlRefusal = (document: string): string | undefined => {
+export const graphqlRefusal = (
+  document: string,
+  withheld: ReadonlySet<string>,
+): string | undefined => {
   const tokens = graphqlTokens(document)
   if (tokens === undefined) return unreadDocument
   let place: 'between' | 'head' | 'selection' = 'between'
   let depth = 0
   let queries = 0
   for (const token of tokens) {
-    if ('name' in token && graphqlWithheld.has(token.name)) {
+    if ('name' in token && withheld.has(token.name)) {
       return `the query names ${token.name}, which holds a credential, so it is not sent`
     }
     if (place === 'between') {
@@ -1809,6 +2316,7 @@ export const graphqlRefusal = (document: string): string | undefined => {
  */
 export const graphqlQuery = (
   text: string,
+  withheld: ReadonlySet<string>,
 ): { readonly body: string } | { readonly reason: string } => {
   let request: unknown
   try {
@@ -1839,7 +2347,7 @@ export const graphqlQuery = (
   if (operationName !== undefined && operationName !== null && typeof operationName !== 'string') {
     return { reason: 'a GraphQL request’s operationName is a string' }
   }
-  const refused = graphqlRefusal(query)
+  const refused = graphqlRefusal(query, withheld)
   if (refused !== undefined) return { reason: refused }
   return { body: JSON.stringify({ operationName, query, variables }) }
 }
@@ -1930,10 +2438,10 @@ export const upstreamHeaders = (
     for (const [name, value] of guest) {
       if (!unforwardedRequestHeaders.has(name) && !named.has(name)) headers.append(name, value)
     }
-    if (!sendsBody(decision.operation)) for (const name of bodyHeaders) headers.delete(name)
+    if (!carriesBody(decision)) for (const name of bodyHeaders) headers.delete(name)
     // A GraphQL request's body is the one `graphqlQuery` wrote, so it is
     // described as that rather than as the guest's was.
-    if (decision._tag === 'Cloud' && decision.operation === 'query') {
+    if (withheldFrom(decision) !== undefined) {
       headers.delete('content-encoding')
       headers.set('Content-Type', 'application/json')
     }
@@ -1941,7 +2449,14 @@ export const upstreamHeaders = (
     if (length !== undefined) headers.set('Content-Length', String(length))
     headers.set('Accept-Encoding', 'identity')
     if (token === undefined) return headers
-    if (decision._tag === 'Inference' && decision.profile === 'anthropic-messages') {
+    // Set, never appended: a header of the same name the guest sent is
+    // replaced by the one holding the key.
+    if (decision._tag === 'Profile') {
+      const { send } = decision
+      if (send === 'bearer') headers.set('Authorization', `Bearer ${token}`)
+      else if ('header' in send) headers.set(send.header, token)
+      else headers.set('Authorization', `Basic ${btoa(`${send.basic}:${token}`)}`)
+    } else if (decision._tag === 'Inference' && decision.profile === 'anthropic-messages') {
       headers.set('x-api-key', token)
     } else {
       headers.set('Authorization', `Bearer ${token}`)
@@ -2836,6 +3351,7 @@ type Upstream = (url: string, init: RequestInit) => Promise<Response>
  */
 const handle = async (
   request: Request,
+  grants: readonly Grant[],
   decideFor: (request: Request) => Decision,
   credentials: ReadonlyMap<string, string>,
   id: number,
@@ -2854,12 +3370,13 @@ const handle = async (
   }
   // The broker's own answers below are written as its refusals for the same
   // host are.
-  const json = apiNames.includes(decision.host)
+  const json = jsonNames(grants).includes(decision.host)
 
-  // A GraphQL request to a cloud account is read whole and checked before it
-  // is allowed, and the body sent is the one the check wrote.
+  // A GraphQL request is read whole and checked before it is allowed, and the
+  // body sent is the one the check wrote.
+  const withheld = withheldFrom(decision)
   let written: string | undefined
-  if (decision._tag === 'Cloud' && decision.operation === 'query') {
+  if (withheld !== undefined) {
     const whole = await readWhole(request.body, graphqlBodyLimit)
     let text: string | undefined
     try {
@@ -2876,7 +3393,7 @@ const handle = async (
           }
         : text === undefined
           ? { reason: 'a GraphQL request is sent as JSON, and this one is not', status: 403 }
-          : { ...graphqlQuery(text), status: 403 }
+          : { ...graphqlQuery(text, withheld), status: 403 }
     if ('reason' in query) {
       audit({ event: 'deny', host: decision.host, id, reason: query.reason, status: query.status })
       return refusal(query.status, query.reason, json)
@@ -2898,7 +3415,9 @@ const handle = async (
     event: 'allow',
     host: decision.host,
     id,
-    operation: decision.operation,
+    ...(decision._tag === 'Profile'
+      ? { profile: decision.profile, rule: decision.rule, set: decision.set }
+      : { operation: decision.operation }),
     ...(scope === undefined ? {} : { scope }),
     ...(decision._tag === 'ModelServer' ? { server: decision.server } : {}),
   })
@@ -2918,6 +3437,7 @@ const handle = async (
       abort.abort()
     },
     decision._tag === 'Inference' ||
+      decision._tag === 'Profile' ||
       decision._tag === 'ModelServer' ||
       (decision._tag === 'Cloud' && decision.host === profiles[decision.profile].invoke)
       ? headerTimeoutMs.inference
@@ -2934,7 +3454,7 @@ const handle = async (
     upstream = await send(decision.upstream, {
       // Streamed as it arrives, never read, and held to its length where it is
       // sent with one — but for a GraphQL request's, read and written above.
-      body: !sendsBody(decision.operation)
+      body: !carriesBody(decision)
         ? undefined
         : written !== undefined
           ? written
@@ -3483,6 +4003,7 @@ export const serveRequests = (
 ): import('bun').Server<undefined> =>
   listen(socketPath, request => decide(grants, request.method, request.url), {
     credentials,
+    grants,
     ids,
     send,
   })
@@ -3508,6 +4029,7 @@ export const serveTls = (
 ): import('bun').Server<undefined> =>
   listen(socketPath, request => decideAddressed(grants, request.method, request.url, reach), {
     credentials,
+    grants,
     ids,
     send,
     tls,
@@ -3518,12 +4040,13 @@ const listen = (
   decideFor: (request: Request) => Decision,
   options: {
     readonly credentials: ReadonlyMap<string, string>
+    readonly grants: readonly Grant[]
     readonly ids: () => number
     readonly send: Upstream
     readonly tls?: TlsIdentity
   },
 ): import('bun').Server<undefined> => {
-  const { credentials, ids, send, tls } = options
+  const { credentials, grants, ids, send, tls } = options
   clearStaleSocket(socketPath)
 
   // @ts-expect-error Bun's types declare `idleTimeout` only for a TCP listener.
@@ -3531,7 +4054,7 @@ const listen = (
   return Bun.serve({
     fetch(request) {
       const id = ids()
-      return handle(request, decideFor, credentials, id, send).catch(error => {
+      return handle(request, grants, decideFor, credentials, id, send).catch(error => {
         audit({ event: 'error', id, reason: String(error) })
         return refusal(500, 'the request could not be completed')
       })
@@ -3561,7 +4084,16 @@ const grantFacts = (grant: Grant): Readonly<Record<string, Fact>> =>
       }
     : isGitGrant(grant)
       ? { credential: grant.credential, profile: grant.profile, repos: grant.repos }
-      : { credential: grant.credential, profile: grant.profile }
+      : isProfileGrant(grant)
+        ? {
+            credential: grant.credential,
+            hosts: Object.keys(grant.hosts).toSorted(),
+            profile: grant.profile,
+            sets: [
+              ...new Set(Object.values(grant.hosts).flatMap(at => at.allow.map(rule => rule.set))),
+            ].toSorted(),
+          }
+        : { credential: grant.credential, profile: grant.profile }
 
 const main = (): void => {
   const argv = process.argv.slice(2)

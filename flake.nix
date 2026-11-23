@@ -49,10 +49,15 @@
         broker
         cli
         landlock
+        profiles
         storeView
         ;
     in
     {
+      # The broker profiles igloo ships, as the data they are: for anyone to
+      # read, copy, or import into their own user layer under another name.
+      brokerProfiles = import ./nix/profiles;
+
       # `nix flake check` builds the packages, and checks that a content
       # module cannot reach host execution and can disable the guest core.
       checks.${system} =
@@ -73,6 +78,7 @@
           broker
           landlock
           pkgs
+          profiles
           storeView
           ;
       };

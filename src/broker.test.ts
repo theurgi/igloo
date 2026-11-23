@@ -1,4 +1,5 @@
 import { assert, describe, it, vi } from '@effect/vitest'
+import { Result } from 'effect'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { connect, createServer } from 'node:net'
 import { networkInterfaces, tmpdir } from 'node:os'
@@ -6,6 +7,7 @@ import { join } from 'node:path'
 import { connect as connectTls } from 'node:tls'
 
 import * as Broker from './broker.ts'
+import * as Profiles from './Profiles.ts'
 
 const grants: readonly Broker.Grant[] = [
   { credential: 'GITHUB_TOKEN', profile: 'github', repos: ['you/api'] },
@@ -922,6 +924,9 @@ describe('Broker.decide, on Runpod’s API', () => {
   })
 })
 
+/** The field Runpod's profile withholds from a GraphQL query, a registry's login. */
+const registryAuth: ReadonlySet<string> = new Set(['registryAuth'])
+
 describe('Broker.graphqlRefusal', () => {
   it('sends a document whose every operation is a query', () => {
     for (const document of [
@@ -939,7 +944,7 @@ describe('Broker.graphqlRefusal', () => {
       '\uFEFF{ myself { id } }',
       'query { pods(limit: 5, cost: -1.5e3, flag: true, none: null, kind: SPOT, ids: ["a", "b"]) { id } }',
     ]) {
-      assert.isUndefined(Broker.graphqlRefusal(document), document)
+      assert.isUndefined(Broker.graphqlRefusal(document, registryAuth), document)
     }
   })
 
@@ -955,10 +960,10 @@ describe('Broker.graphqlRefusal', () => {
       'query Q($a: In = {b: "}"}) { x } mutation { createApiKey { id } }',
       'query { a(s: """ """) } mutation { createApiKey { id } }',
     ]) {
-      assert.strictEqual(Broker.graphqlRefusal(document), mutation, document)
+      assert.strictEqual(Broker.graphqlRefusal(document, registryAuth), mutation, document)
     }
     assert.strictEqual(
-      Broker.graphqlRefusal('subscription { podStatus { id } }'),
+      Broker.graphqlRefusal('subscription { podStatus { id } }', registryAuth),
       'a subscription is not a query, and this VM may only query through GraphQL',
     )
   })
@@ -971,7 +976,7 @@ describe('Broker.graphqlRefusal', () => {
       'query { myself { containerRegistryCreds { ...Creds } } } fragment Creds on ContainerRegistryAuth { registryAuth }',
       'query { myself { containerRegistryCreds { ... @include(if: true) { registryAuth } } } }',
     ]) {
-      assert.strictEqual(Broker.graphqlRefusal(document), withheld, document)
+      assert.strictEqual(Broker.graphqlRefusal(document, registryAuth), withheld, document)
     }
   })
 
@@ -997,7 +1002,7 @@ describe('Broker.graphqlRefusal', () => {
       '{ a } ; mutation { b }',
       '{ a(n: 1) } é',
     ]) {
-      assert.isDefined(Broker.graphqlRefusal(document), JSON.stringify(document))
+      assert.isDefined(Broker.graphqlRefusal(document, registryAuth), JSON.stringify(document))
     }
   })
 })
@@ -1005,14 +1010,20 @@ describe('Broker.graphqlRefusal', () => {
 describe('Broker.graphqlQuery', () => {
   it('writes the request it read again, and nothing else', () => {
     assert.deepStrictEqual(
-      Broker.graphqlQuery('{"query":"{ myself { id } }","variables":{"a":1},"operationName":null}'),
+      Broker.graphqlQuery(
+        '{"query":"{ myself { id } }","variables":{"a":1},"operationName":null}',
+        registryAuth,
+      ),
       { body: '{"operationName":null,"query":"{ myself { id } }","variables":{"a":1}}' },
     )
-    assert.deepStrictEqual(Broker.graphqlQuery('{"query":"{ myself { id } }"}'), {
+    assert.deepStrictEqual(Broker.graphqlQuery('{"query":"{ myself { id } }"}', registryAuth), {
       body: '{"query":"{ myself { id } }"}',
     })
     assert.deepStrictEqual(
-      Broker.graphqlQuery('{"variables":null,"query":"query Q { a }","operationName":"Q"}'),
+      Broker.graphqlQuery(
+        '{"variables":null,"query":"query Q { a }","operationName":"Q"}',
+        registryAuth,
+      ),
       {
         body: '{"operationName":"Q","query":"query Q { a }","variables":null}',
       },
@@ -1023,11 +1034,17 @@ describe('Broker.graphqlQuery', () => {
     // Whatever a second parser would make of the text, the server is sent the
     // object this one read.
     assert.deepStrictEqual(
-      Broker.graphqlQuery('{"query":"mutation { createApiKey { id } }","query":"{ a }"}'),
+      Broker.graphqlQuery(
+        '{"query":"mutation { createApiKey { id } }","query":"{ a }"}',
+        registryAuth,
+      ),
       { body: '{"query":"{ a }"}' },
     )
     assert.deepStrictEqual(
-      Broker.graphqlQuery('{"query":"{ a }","query":"mutation { createApiKey { id } }"}'),
+      Broker.graphqlQuery(
+        '{"query":"{ a }","query":"mutation { createApiKey { id } }"}',
+        registryAuth,
+      ),
       {
         reason:
           'a mutation writes, and this VM may only read through GraphQL; write through the REST API instead',
@@ -1057,7 +1074,7 @@ describe('Broker.graphqlQuery', () => {
       ['{"query":"{ a }","operationName":1}', 'a GraphQL request’s operationName is a string'],
     ]
     for (const [text, reason] of refusals) {
-      assert.deepStrictEqual(Broker.graphqlQuery(text), { reason }, text)
+      assert.deepStrictEqual(Broker.graphqlQuery(text, registryAuth), { reason }, text)
     }
   })
 })
@@ -3007,7 +3024,7 @@ describe('Broker.serveTunnel', () => {
  * A certificate for github.com and its key, as PEM, made by openssl for this
  * run: a key kept in the tree is one a secret scanner reports.
  */
-const tlsIdentity = (dir: string): Broker.TlsIdentity => {
+const tlsIdentity = (dir: string, name = 'github.com'): Broker.TlsIdentity => {
   const cert = join(dir, 'certificate.pem')
   const key = join(dir, 'key.pem')
   const made = Bun.spawnSync(
@@ -3023,9 +3040,9 @@ const tlsIdentity = (dir: string): Broker.TlsIdentity => {
       '-days',
       '1',
       '-subj',
-      '/CN=github.com',
+      `/CN=${name}`,
       '-addext',
-      'subjectAltName=DNS:github.com',
+      `subjectAltName=DNS:${name}`,
       '-keyout',
       key,
       '-out',
@@ -5579,4 +5596,840 @@ describe('Broker.serveRequests, for a model server', () => {
         },
       ),
     ))
+})
+
+/** A profile grant at two hosts, with a rule of each kind the format has. */
+const example: Broker.ProfileGrant = {
+  credential: 'EXAMPLE_KEY',
+  hosts: {
+    'api.example.com': {
+      allow: [
+        { method: ['GET', 'HEAD'], path: 'v1/**', set: 'read' },
+        { method: ['GET'], path: '', set: 'read' },
+        { method: ['POST'], path: 'v1/items', set: 'write' },
+        { method: ['DELETE', 'PATCH'], path: 'v1/items/*', set: 'write' },
+        { method: '*', path: 'open/**', set: 'open' },
+        { graphql: { withheld: ['apiKeys'] }, method: ['POST'], path: 'graphql', set: 'read' },
+      ],
+      deny: [{ method: '*', path: 'v1/items/*/keys/**' }],
+      send: 'bearer',
+    },
+    'uploads.example.com': {
+      allow: [{ method: ['POST'], path: 'files', set: 'write' }],
+      deny: [],
+      send: { header: 'X-Example-Key' },
+    },
+  },
+  profile: 'example',
+}
+const exampleGrants: readonly Broker.Grant[] = [example]
+
+/** `decideAddressed` for a request to `url`, as the TLS listener reads one. */
+const addressed = (method: string, url: string, reach: Broker.TunnelScope = []) =>
+  Broker.decideAddressed(exampleGrants, method, url, reach)
+
+describe('Broker.parseGrants, for a profile grant', () => {
+  const grantJson = (change: Record<string, unknown> = {}, host: Record<string, unknown> = {}) =>
+    JSON.stringify([
+      {
+        credential: 'K',
+        hosts: {
+          'api.example.com': {
+            allow: [{ method: ['GET'], path: 'v1/**', set: 'read' }],
+            deny: [],
+            send: 'bearer',
+            ...host,
+          },
+        },
+        profile: 'example',
+        ...change,
+      },
+    ])
+
+  it('reads one, every field as it was sent', () => {
+    assert.deepStrictEqual(Broker.parseGrants(JSON.stringify(exampleGrants)), {
+      grants: [...exampleGrants],
+    })
+  })
+
+  it('refuses a field it does not read, on the grant, a host or a rule', () => {
+    assert.include(message(grantJson({ repos: ['you/api'] })), 'repos')
+    assert.include(message(grantJson({}, { redirects: 'return' })), 'redirects')
+    assert.include(
+      message(
+        grantJson({}, { allow: [{ length: 'kept', method: ['GET'], path: 'v1', set: 'r' }] }),
+      ),
+      'length',
+    )
+    assert.include(
+      message(grantJson({}, { deny: [{ method: ['GET'], path: 'v1', set: 'read' }] })),
+      'set',
+    )
+  })
+
+  it('refuses a host that is an address, a single label, or not lowercase', () => {
+    for (const host of ['10.0.0.1', 'localhost', 'API.example.com']) {
+      const json = JSON.stringify([
+        {
+          credential: 'K',
+          hosts: {
+            [host]: { allow: [{ method: ['GET'], path: '', set: 'r' }], deny: [], send: 'bearer' },
+          },
+          profile: 'example',
+        },
+      ])
+      assert.include(message(json), 'not a lowercase hostname', host)
+    }
+  })
+
+  it('refuses a host with no rule, or one sending its key in a header the broker owns', () => {
+    assert.include(message(grantJson({}, { allow: [] })), 'allows nothing')
+    assert.include(message(grantJson({}, { send: { header: 'Content-Length' } })), 'frames')
+    assert.include(message(grantJson({}, { send: { basic: 'a:b' } })), 'username')
+    assert.include(message(grantJson({}, { send: 'query' })), 'bearer')
+  })
+
+  it('refuses a rule whose path or methods are not a rule’s', () => {
+    for (const path of [
+      'v1/**/x',
+      '/v1',
+      'v1/',
+      'v1//x',
+      'v1/a*',
+      'v1/..',
+      'v1/%2e',
+      'repos/{repo}/**',
+    ]) {
+      const json = grantJson({}, { allow: [{ method: ['GET'], path, set: 'read' }] })
+      assert.isTrue('message' in Broker.parseGrants(json), path)
+    }
+    for (const method of [[], ['FETCH'], 'GET', ['*']]) {
+      const json = grantJson({}, { allow: [{ method, path: 'v1', set: 'read' }] })
+      assert.isTrue('message' in Broker.parseGrants(json), JSON.stringify(method))
+    }
+    assert.include(
+      message(
+        grantJson(
+          {},
+          {
+            allow: [{ graphql: { withheld: [] }, method: ['GET'], path: 'graphql', set: 'read' }],
+          },
+        ),
+      ),
+      'POST alone',
+    )
+  })
+
+  it('refuses two grants for one profile, and a host two grants name', () => {
+    const one = grantJson().slice(1, -1)
+    assert.include(message(`[${one},${one}]`), 'two example grants')
+    const other = grantJson({ profile: 'other' }).slice(1, -1)
+    assert.include(message(`[${one},${other}]`), 'api.example.com')
+  })
+
+  it('refuses a host the broker’s own code answers, and a code profile’s name', () => {
+    const github = JSON.stringify([
+      {
+        credential: 'K',
+        hosts: {
+          'api.github.com': {
+            allow: [{ method: ['GET'], path: '', set: 'r' }],
+            deny: [],
+            send: 'bearer',
+          },
+        },
+        profile: 'forge',
+      },
+    ])
+    assert.include(message(github), 'api.github.com')
+    assert.include(message(grantJson({ profile: 'github' })), 'github')
+    assert.include(message(grantJson({ profile: 'model-server' })), 'model-server')
+  })
+})
+
+describe('Broker.decideAddressed, for a profile grant', () => {
+  it('allows what a chosen rule matches, sending the path and the query rebuilt', () => {
+    assert.deepStrictEqual(addressed('GET', 'https://api.example.com/v1/items?b=2&a=x%20y'), {
+      _tag: 'Profile',
+      credential: 'EXAMPLE_KEY',
+      host: 'api.example.com',
+      profile: 'example',
+      rule: 'GET,HEAD v1/**',
+      send: 'bearer',
+      sendsBody: false,
+      set: 'read',
+      upstream: 'https://api.example.com/v1/items?b=2&a=x+y',
+    })
+    const written = addressed('POST', 'https://API.Example.com/v1/items')
+    assert.strictEqual(written._tag === 'Profile' ? written.set : written._tag, 'write')
+    assert.strictEqual(written._tag === 'Profile' ? written.sendsBody : undefined, true)
+    const uploaded = addressed('POST', 'https://uploads.example.com/files?name=a.txt')
+    assert.strictEqual(
+      uploaded._tag === 'Profile' ? uploaded.upstream : uploaded._tag,
+      'https://uploads.example.com/files?name=a.txt',
+    )
+  })
+
+  it('refuses what a deny rule matches, whatever set allows it', () => {
+    const denied = addressed('GET', 'https://api.example.com/v1/items/7/keys')
+    assert.strictEqual(outcome(denied), 403)
+    assert.include(denied._tag === 'Deny' ? denied.reason : '', 'deny rule * v1/items/*/keys/**')
+    assert.strictEqual(
+      outcome(addressed('DELETE', 'https://api.example.com/v1/items/7/keys/1')),
+      403,
+    )
+    assert.strictEqual(outcome(addressed('DELETE', 'https://api.example.com/v1/items/7')), 'allow')
+  })
+
+  it('refuses what no chosen rule matches, by its path or by its method', () => {
+    assert.strictEqual(outcome(addressed('POST', 'https://api.example.com/v2/other')), 403)
+    assert.strictEqual(outcome(addressed('POST', 'https://api.example.com/v1/other')), 405)
+    assert.strictEqual(outcome(addressed('PUT', 'https://api.example.com/v1/items')), 405)
+    assert.strictEqual(outcome(addressed('GET', 'https://uploads.example.com/files')), 405)
+    assert.strictEqual(outcome(addressed('GET', 'https://api.example.com/v2/items')), 403)
+  })
+
+  it('takes any method for a rule whose method is "*"', () => {
+    for (const method of ['GET', 'PUT', 'OPTIONS', 'PROPFIND']) {
+      assert.strictEqual(outcome(addressed(method, 'https://api.example.com/open/a/b')), 'allow')
+    }
+    assert.strictEqual(outcome(addressed('GET', 'https://api.example.com/open')), 'allow')
+  })
+
+  it('matches the host’s root by "" alone, with its query', () => {
+    const root = addressed('GET', 'https://api.example.com/?page=2')
+    assert.strictEqual(
+      root._tag === 'Profile' ? root.upstream : root._tag,
+      'https://api.example.com/?page=2',
+    )
+    assert.strictEqual(root._tag === 'Profile' ? root.rule : root._tag, 'GET /')
+    assert.strictEqual(outcome(addressed('HEAD', 'https://api.example.com/')), 405)
+    assert.strictEqual(outcome(addressed('GET', 'https://api.example.com/x')), 403)
+  })
+
+  it('refuses a percent-escape, and sends a path with every dot segment resolved', () => {
+    assert.strictEqual(outcome(addressed('GET', 'https://api.example.com/v1/a%2Fb')), 400)
+    const resolved = addressed('POST', 'https://api.example.com/v1/x/../items')
+    assert.strictEqual(
+      resolved._tag === 'Profile' ? resolved.upstream : resolved._tag,
+      'https://api.example.com/v1/items',
+    )
+    assert.strictEqual(outcome(addressed('POST', 'https://api.example.com/v1/../v2/items')), 403)
+  })
+
+  it('reads a path ending in a git endpoint as the profile’s, not as git', () => {
+    const advertised = addressed(
+      'GET',
+      'https://api.example.com/v1/a/b/info/refs?service=git-upload-pack',
+    )
+    assert.strictEqual(
+      advertised._tag === 'Profile' ? advertised.upstream : advertised._tag,
+      'https://api.example.com/v1/a/b/info/refs?service=git-upload-pack',
+    )
+    const push = addressed('POST', 'https://api.example.com/a/b/git-receive-pack')
+    assert.strictEqual(outcome(push), 403)
+    assert.include(push._tag === 'Deny' ? push.reason : '', 'through api.example.com')
+  })
+
+  it('sends a GraphQL rule’s request without its query', () => {
+    const query = addressed(
+      'POST',
+      'https://api.example.com/graphql?query=mutation%20%7B%20x%20%7D',
+    )
+    assert.deepStrictEqual(
+      query._tag === 'Profile' ? [query.upstream, query.graphql] : query._tag,
+      ['https://api.example.com/graphql', { withheld: ['apiKeys'] }],
+    )
+  })
+
+  it('answers only the hosts the grant names, and not in the path form', () => {
+    assert.strictEqual(outcome(addressed('GET', 'https://www.example.com/v1/items')), 421)
+    assert.deepStrictEqual(Broker.tlsNames(exampleGrants), [
+      'api.example.com',
+      'uploads.example.com',
+    ])
+    assert.strictEqual(
+      outcome(Broker.decide(exampleGrants, 'GET', '/api.example.com/v1/items')),
+      404,
+    )
+  })
+
+  it('writes its refusals in JSON', () => {
+    const refused = addressed('POST', 'https://api.example.com/v1/other')
+    assert.isTrue(refused._tag === 'Deny' && refused.json === true)
+  })
+})
+
+describe('Broker.decideAddressed, on a read no profile rule covers', () => {
+  it('sends it without the key where the tunnel reaches the host, a read a deny rule matches too', () => {
+    for (const path of ['/docs/start', '/v1/items/7/keys']) {
+      assert.deepStrictEqual(
+        addressed('GET', `https://api.example.com${path}?q=1`, ['api.example.com']),
+        {
+          _tag: 'Anonymous',
+          host: 'api.example.com',
+          operation: 'read',
+          upstream: `https://api.example.com${path}?q=1`,
+        },
+      )
+    }
+    assert.strictEqual(outcome(addressed('GET', 'https://api.example.com/docs', 'any')), 'allow')
+  })
+
+  it('refuses it where the tunnel does not reach the host, and refuses a write either way', () => {
+    assert.strictEqual(outcome(addressed('GET', 'https://api.example.com/docs')), 403)
+    assert.strictEqual(
+      outcome(addressed('GET', 'https://api.example.com/docs', ['example.com'])),
+      403,
+    )
+    assert.strictEqual(outcome(addressed('POST', 'https://api.example.com/docs', 'any')), 403)
+    assert.strictEqual(
+      outcome(addressed('DELETE', 'https://api.example.com/v1/items/7/keys/1', 'any')),
+      403,
+    )
+  })
+})
+
+describe('Broker.upstreamHeaders, for a profile grant', () => {
+  const decision = (send: Broker.Send) => {
+    const decided = addressed('POST', 'https://api.example.com/v1/items')
+    if (decided._tag !== 'Profile') throw new Error('not allowed')
+    return { ...decided, send }
+  }
+  const guest = {
+    Authorization: 'Bearer igloo-broker-holds-the-real-key',
+    'Content-Type': 'application/json',
+    'X-Example-Key': 'igloo-broker-holds-the-real-key',
+    'X-Request-Id': 'r1',
+  }
+
+  it('sends the key as a bearer token, replacing the guest’s', () => {
+    const headers = Broker.upstreamHeaders(decision('bearer'), 'k-real', new Headers(guest))
+    assert.strictEqual(headers.get('Authorization'), 'Bearer k-real')
+    assert.strictEqual(headers.get('X-Request-Id'), 'r1')
+    assert.strictEqual(headers.get('Content-Type'), 'application/json')
+  })
+
+  it('sends the key as a named header’s one value, replacing the guest’s copy of it', () => {
+    const headers = Broker.upstreamHeaders(
+      decision({ header: 'x-example-key' }),
+      'k-real',
+      new Headers(guest),
+    )
+    assert.strictEqual(headers.get('X-Example-Key'), 'k-real')
+    assert.isNull(headers.get('Authorization'))
+  })
+
+  it('sends the key as a Basic password under the profile’s username', () => {
+    const headers = Broker.upstreamHeaders(
+      decision({ basic: 'x-access-token' }),
+      'k-real',
+      new Headers(guest),
+    )
+    assert.strictEqual(headers.get('Authorization'), `Basic ${btoa('x-access-token:k-real')}`)
+  })
+
+  it('sends no body’s headers for a read', () => {
+    const read = addressed('GET', 'https://api.example.com/v1/items')
+    if (read._tag !== 'Profile') throw new Error('not allowed')
+    const headers = Broker.upstreamHeaders(read, 'k-real', new Headers(guest))
+    assert.isNull(headers.get('Content-Type'))
+  })
+})
+
+describe('Broker.serveTls, for a profile grant', () => {
+  const credentials: ReadonlyMap<string, string> = new Map([['EXAMPLE_KEY', 'k-real']])
+  const sent: Array<{
+    readonly body: string | undefined
+    readonly init: RequestInit
+    readonly url: string
+  }> = []
+  const upstream =
+    (status = 200) =>
+    async (url: string, init: RequestInit): Promise<Response> => {
+      const body =
+        init.body === undefined || init.body === null
+          ? undefined
+          : await new Response(init.body).text()
+      sent.push({ body, init, url })
+      return new Response('{"ok":true}', {
+        headers: { 'Content-Type': 'application/json' },
+        status,
+      })
+    }
+  const servingTls = <A>(
+    send: (url: string, init: RequestInit) => Promise<Response>,
+    use: (server: ReturnType<typeof Broker.serveTls>) => Promise<A>,
+  ): Promise<A> =>
+    withSocketDir(async dir => {
+      const server = Broker.serveTls(
+        join(dir, 'tls.sock'),
+        exampleGrants,
+        credentials,
+        tlsIdentity(dir, 'api.example.com'),
+        [],
+        send,
+      )
+      try {
+        return await use(server)
+      } finally {
+        await server.stop(true)
+      }
+    })
+  const graphql = (query: string) =>
+    new Request('https://api.example.com/graphql', {
+      body: JSON.stringify({ query }),
+      method: 'POST',
+    })
+
+  it('reads a GraphQL rule’s body with the rule’s own withheld fields', () =>
+    servingTls(upstream(), async server => {
+      sent.length = 0
+      assert.strictEqual((await server.fetch(graphql('{ me { registryAuth } }'))).status, 200)
+      assert.strictEqual(sent[0]?.body, '{"query":"{ me { registryAuth } }"}')
+      assert.strictEqual(new Headers(sent[0]?.init.headers).get('Content-Type'), 'application/json')
+      const withheld = await server.fetch(graphql('{ me { apiKeys { value } } }'))
+      assert.strictEqual(withheld.status, 403)
+      assert.include(await withheld.text(), 'apiKeys')
+      assert.strictEqual((await server.fetch(graphql('mutation { a }'))).status, 403)
+      assert.strictEqual(sent.length, 1)
+    }))
+
+  it('logs the profile, the set and the rule that allowed a request', () =>
+    auditing(audited =>
+      servingTls(upstream(), async server => {
+        await server.fetch(
+          new Request('https://api.example.com/v1/items', { method: 'POST', body: '{}' }),
+        )
+        assert.deepStrictEqual(untimed(audited, 'allow'), [
+          {
+            credential: 'EXAMPLE_KEY',
+            event: 'allow',
+            host: 'api.example.com',
+            id: 1,
+            profile: 'example',
+            rule: 'POST v1/items',
+            set: 'write',
+          },
+        ])
+      }),
+    ))
+
+  it('makes the host’s 401 the broker’s 403, naming the credential, and refuses its redirect', () =>
+    servingTls(upstream(401), async server => {
+      const refused = await server.fetch(new Request('https://api.example.com/v1/items'))
+      assert.strictEqual(refused.status, 403)
+      assert.include(await refused.text(), 'refused EXAMPLE_KEY')
+    }).then(() =>
+      servingTls(upstream(302), async server => {
+        assert.strictEqual(
+          (await server.fetch(new Request('https://api.example.com/v1/items'))).status,
+          502,
+        )
+      }),
+    ))
+
+  it('answers a profile host through the tunnel for its grant, and not without one', () =>
+    withSocketDir(async dir => {
+      sent.length = 0
+      const identity = tlsIdentity(dir, 'api.example.com')
+      const tlsPath = join(dir, 'tls.sock')
+      const proxyPath = join(dir, 'proxy.sock')
+      const server = Broker.serveTls(tlsPath, exampleGrants, credentials, identity, [], upstream())
+      const tunnel = Broker.serveTunnel(proxyPath, [], Broker.publicDestinations, {
+        names: Broker.tlsNames(exampleGrants),
+        socket: tlsPath,
+      })
+      try {
+        const served = await overTunnel(
+          proxyPath,
+          'api.example.com',
+          identity.cert,
+          addressedTo('api.example.com', '/v1/items'),
+        )
+        assert.strictEqual(served.split('\r\n')[0], 'HTTP/1.1 200 OK')
+        assert.strictEqual(sent[0]?.url, 'https://api.example.com/v1/items')
+        assert.strictEqual(new Headers(sent[0]?.init.headers).get('Authorization'), 'Bearer k-real')
+      } finally {
+        tunnel.stop(true)
+        await server.stop(true)
+      }
+      const without = Broker.serveTls(
+        join(dir, 'other.sock'),
+        grants,
+        held,
+        identity,
+        [],
+        upstream(),
+      )
+      try {
+        const refused = await without.fetch(new Request('https://api.example.com/v1/items'))
+        assert.strictEqual(refused.status, 421)
+      } finally {
+        await without.stop(true)
+      }
+    }))
+})
+
+/**
+ * The profiles igloo ships, read as the CLI reads them, from the JSON the
+ * package carries: `IGLOO_PROFILES`, which the devshell sets.
+ */
+const shippedProfiles = (): ReadonlyMap<string, Profiles.Profile> => {
+  const file = process.env['IGLOO_PROFILES']
+  if (file === undefined || file === '') {
+    throw new Error('IGLOO_PROFILES is not set: run the tests in `nix develop`')
+  }
+  const read = Profiles.read(file, JSON.parse(readFileSync(file, 'utf8')))
+  if (Result.isFailure(read)) throw new Error(read.failure)
+  return read.success
+}
+
+/** A grant of the shipped profile `name`, every set chosen, as a credential of the same name would be. */
+const shippedGrant = (name: string, credential: string): Broker.ProfileGrant => {
+  const profile = shippedProfiles().get(name)
+  if (profile === undefined) throw new Error(`igloo ships no ${name} profile`)
+  return { credential, ...Profiles.grantOf(name, profile, Object.keys(profile.allow)) }
+}
+
+/** What a request came to: refused, or what reached the upstream. */
+type Reached = 'refused' | { readonly body?: string; readonly key: string; readonly url: string }
+
+/** A request of the corpus, by the name it is addressed to, and what it should come to. */
+interface Case {
+  readonly body?: string
+  readonly expected: Reached
+  readonly method: string
+  readonly url: string
+}
+
+/** The key each profile sends, and how, as the upstream sees it. */
+const keys = {
+  'anthropic-messages': { credential: 'ANTHROPIC_KEY', header: 'x-api-key: an-k', value: 'an-k' },
+  openrouter: { credential: 'OPENROUTER_KEY', header: 'authorization: Bearer or-k', value: 'or-k' },
+  runpod: { credential: 'RUNPOD_API_KEY', header: 'authorization: Bearer rp-k', value: 'rp-k' },
+} as const
+
+const sentTo = (url: string, profile: keyof typeof keys, body?: string): Reached => ({
+  ...(body === undefined ? {} : { body }),
+  key: keys[profile].header,
+  url,
+})
+
+const runpodRest = 'https://api.runpod.io'
+const runpodInvoke = 'https://api.runpod.ai'
+const sentToRunpod = (path: string): Reached => sentTo(`${runpodRest}${path}`, 'runpod')
+const graphqlBody = (query: string) => JSON.stringify({ query })
+
+/**
+ * What `runpod` serves, and refuses: each write `cloudWrites` lists, reads,
+ * GraphQL queries and mutations, a serverless endpoint's calls, the areas
+ * refused by design, and writes nothing lists.
+ */
+const runpodCorpus: readonly Case[] = [
+  ...[
+    ['POST', '/v2/account/secrets'],
+    ['DELETE', '/v2/account/secrets/s1'],
+    ['PATCH', '/v2/account/secrets/s1'],
+    ['POST', '/v2/clusters'],
+    ['DELETE', '/v2/clusters/c1'],
+    ['PATCH', '/v2/clusters/c1'],
+    ['POST', '/v2/global-volumes'],
+    ['DELETE', '/v2/global-volumes/g1'],
+    ['PATCH', '/v2/global-volumes/g1'],
+    ['POST', '/v2/network-volumes'],
+    ['DELETE', '/v2/network-volumes/n1'],
+    ['PATCH', '/v2/network-volumes/n1'],
+    ['POST', '/v2/pods'],
+    ['DELETE', '/v2/pods/p1'],
+    ['PATCH', '/v2/pods/p1'],
+    ['POST', '/v2/pods/p1/action'],
+    ['POST', '/v2/pods/p1/exec'],
+    ['DELETE', '/v2/queued-pods/q1'],
+    ['POST', '/v2/registries'],
+    ['DELETE', '/v2/registries/r1'],
+    ['PATCH', '/v2/registries/r1'],
+    ['POST', '/v2/serverless'],
+    ['DELETE', '/v2/serverless/e1'],
+    ['PATCH', '/v2/serverless/e1'],
+    ['POST', '/v2/templates'],
+    ['DELETE', '/v2/templates/t1'],
+    ['PATCH', '/v2/templates/t1'],
+  ].map(([method = '', path = '']) => ({
+    body: '{}',
+    expected: sentTo(`${runpodRest}${path}`, 'runpod', '{}'),
+    method,
+    url: `${runpodRest}${path}`,
+  })),
+  { expected: sentToRunpod('/v2/pods'), method: 'GET', url: `${runpodRest}/v2/pods` },
+  {
+    expected: sentToRunpod('/v2/pods?computeType=GPU&name=a+b'),
+    method: 'GET',
+    url: `${runpodRest}/v2/pods?computeType=GPU&name=a%20b`,
+  },
+  {
+    expected: sentToRunpod('/v2/templates/t1'),
+    method: 'HEAD',
+    url: `${runpodRest}/v2/templates/t1`,
+  },
+  { expected: sentToRunpod('/v2'), method: 'GET', url: `${runpodRest}/v2` },
+  {
+    expected: sentToRunpod('/v2/user/ssh-keys'),
+    method: 'GET',
+    url: `${runpodRest}/v2/user/ssh-keys`,
+  },
+  ...[
+    // Refused by design: who may use the account, and how.
+    ['POST', '/v2/organization/members'],
+    ['PATCH', '/v2/organization'],
+    ['POST', '/v2/user/ssh-keys'],
+    ['DELETE', '/v2/user/ssh-keys/k1'],
+    ['POST', '/v2/signup/attempts'],
+    ['POST', '/v2/tags'],
+    ['PATCH', '/v2/tags/t1'],
+    ['POST', '/v2/cost-centers'],
+    ['POST', '/v2/ecr-delegations'],
+    // Writes nothing lists: a method, a shape, a version.
+    ['PUT', '/v2/pods/p1'],
+    ['DELETE', '/v2/pods'],
+    ['POST', '/v2/pods/p1/action/more'],
+    ['POST', '/v2/pods/p1/start'],
+    ['POST', '/v1/pods'],
+    ['OPTIONS', '/v2/pods'],
+    ['GET', '/v1/pods'],
+    ['GET', '/'],
+    ['GET', '/graphql'],
+  ].map(([method = '', path = '']) => ({
+    ...(method === 'GET' || method === 'HEAD' || method === 'OPTIONS' ? {} : { body: '{}' }),
+    expected: 'refused' as const,
+    method,
+    url: `${runpodRest}${path}`,
+  })),
+  // GraphQL: queries alone, sent as written again, and without the URL's query.
+  ...[
+    ['{ myself { clientBalance } }', true],
+    ['query Pods { myself { pods { id } } }', true],
+    ['query { myself { id } } fragment F on Pod { id }', true],
+    ['mutation { createApiKey(input: {name: "x"}) { rawKey } }', false],
+    ['{ myself { containerRegistryCreds { registryAuth } } }', false],
+    ['subscription { podStatus { id } }', false],
+  ].map(([query, sent]) => ({
+    body: graphqlBody(String(query)),
+    expected:
+      sent === true
+        ? sentTo(`${runpodRest}/graphql`, 'runpod', graphqlBody(String(query)))
+        : ('refused' as const),
+    method: 'POST',
+    url: `${runpodRest}/graphql?query=${encodeURIComponent('mutation { a }')}`,
+  })),
+  {
+    body: '[{"query":"{ a }"}]',
+    expected: 'refused',
+    method: 'POST',
+    url: `${runpodRest}/graphql`,
+  },
+  // A serverless endpoint's own calls.
+  ...[
+    ['POST', '/v2/ep1/run'],
+    ['POST', '/v2/ep1/runsync?wait=60'],
+    ['GET', '/v2/ep1/status/job-1'],
+    ['HEAD', '/v2/ep1/health'],
+  ].map(([method = '', path = '']) => ({
+    ...(method === 'POST' ? { body: '{"input":{}}' } : {}),
+    expected: sentTo(
+      `${runpodInvoke}${path}`,
+      'runpod',
+      method === 'POST' ? '{"input":{}}' : undefined,
+    ),
+    method,
+    url: `${runpodInvoke}${path}`,
+  })),
+  ...[
+    ['POST', '/v2/ep1'],
+    ['PUT', '/v2/ep1/run'],
+    ['DELETE', '/v2/ep1/run'],
+    ['POST', '/v1/ep1/run'],
+    ['GET', '/v2'],
+  ].map(([method = '', path = '']) => ({
+    ...(method === 'GET' ? {} : { body: '{}' }),
+    expected: 'refused' as const,
+    method,
+    url: `${runpodInvoke}${path}`,
+  })),
+]
+
+/** What `openrouter` and `anthropic-messages` serve, and refuse: each endpoint, an unlisted one, a wrong method. */
+const inferenceCorpus: readonly (Case & {
+  readonly profile: 'anthropic-messages' | 'openrouter'
+})[] = [
+  ...[
+    ['POST', '/api/v1/chat/completions'],
+    ['POST', '/api/v1/messages'],
+    ['POST', '/api/v1/responses'],
+    ['GET', '/api/v1/models'],
+    ['GET', '/api/v1/models?category=programming'],
+    ['GET', '/api/v1/embeddings/models'],
+    ['GET', '/api/v1/images/models'],
+    ['GET', '/api/v1/videos/models'],
+  ].map(([method = '', path = '']) => ({
+    ...(method === 'POST' ? { body: '{"model":"m"}' } : {}),
+    expected: sentTo(
+      `https://openrouter.ai${path}`,
+      'openrouter',
+      method === 'POST' ? '{"model":"m"}' : undefined,
+    ),
+    method,
+    profile: 'openrouter' as const,
+    url: `https://openrouter.ai${path}`,
+  })),
+  ...[
+    ['GET', '/api/v1/chat/completions'],
+    ['POST', '/api/v1/models'],
+    ['POST', '/api/v1/keys'],
+    ['GET', '/api/v1/credits'],
+    ['POST', '/api/v1/completions'],
+    ['GET', '/api/v1'],
+  ].map(([method = '', path = '']) => ({
+    ...(method === 'POST' ? { body: '{}' } : {}),
+    expected: 'refused' as const,
+    method,
+    profile: 'openrouter' as const,
+    url: `https://openrouter.ai${path}`,
+  })),
+  ...['/v1/messages', '/v1/messages/count_tokens'].map(path => ({
+    body: '{"model":"m"}',
+    expected: sentTo(`https://api.anthropic.com${path}`, 'anthropic-messages', '{"model":"m"}'),
+    method: 'POST',
+    profile: 'anthropic-messages' as const,
+    url: `https://api.anthropic.com${path}`,
+  })),
+  ...[
+    ['GET', '/v1/messages'],
+    ['POST', '/v1/messages/batches'],
+    ['GET', '/v1/models'],
+    ['POST', '/v1/files'],
+  ].map(([method = '', path = '']) => ({
+    ...(method === 'POST' ? { body: '{}' } : {}),
+    expected: 'refused' as const,
+    method,
+    profile: 'anthropic-messages' as const,
+    url: `https://api.anthropic.com${path}`,
+  })),
+]
+
+/**
+ * Each case through a listener serving `served`, and what reached the
+ * upstream. `pathForm` sends it as the plain listener takes it, with the host
+ * as the path's first segment, where the TLS listener takes it by name.
+ */
+const reachedBy = async (
+  served: readonly Broker.Grant[],
+  cases: readonly Case[],
+  pathForm: boolean,
+): Promise<readonly Reached[]> =>
+  auditing(() =>
+    withSocketDir(async dir => {
+      const reached: Array<{ body?: string; key: string; url: string }> = []
+      const send = async (url: string, init: RequestInit): Promise<Response> => {
+        const headers = new Headers(init.headers)
+        const key =
+          headers.get('x-api-key') === null
+            ? `authorization: ${headers.get('authorization') ?? ''}`
+            : `x-api-key: ${headers.get('x-api-key') ?? ''}`
+        const body =
+          init.body === undefined || init.body === null
+            ? undefined
+            : await new Response(init.body).text()
+        reached.push({ ...(body === undefined || body === '' ? {} : { body }), key, url })
+        return new Response('{}', { headers: { 'Content-Type': 'application/json' } })
+      }
+      const credentials = new Map(Object.values(keys).map(each => [each.credential, each.value]))
+      const server = pathForm
+        ? Broker.serveRequests(join(dir, 'http.sock'), served, credentials, send)
+        : Broker.serveTls(join(dir, 'tls.sock'), served, credentials, tlsIdentity(dir), [], send)
+      try {
+        const outcomes: Array<Reached> = []
+        for (const each of cases) {
+          const url = new URL(each.url)
+          const target = pathForm
+            ? `http://broker/${url.host}${url.pathname}${url.search}`
+            : each.url
+          const before = reached.length
+          const response = await server.fetch(
+            new Request(target, {
+              method: each.method,
+              ...(each.body === undefined ? {} : { body: each.body }),
+            }),
+          )
+          await response.arrayBuffer()
+          const sent = reached[before]
+          outcomes.push(response.status >= 400 || sent === undefined ? 'refused' : sent)
+        }
+        return outcomes
+      } finally {
+        await server.stop(true)
+      }
+    }),
+  )
+
+describe('the shipped profiles, against what each serves', () => {
+  it('runpod: every set chosen serves and refuses what the corpus expects', async () => {
+    const reached = await reachedBy([shippedGrant('runpod', 'RUNPOD_API_KEY')], runpodCorpus, false)
+    runpodCorpus.forEach((each, at) => {
+      assert.deepStrictEqual(reached[at], each.expected, `${each.method} ${each.url}`)
+    })
+  })
+
+  it('openrouter and anthropic-messages: each endpoint, and nothing else', async () => {
+    const grantsOf = [
+      shippedGrant('openrouter', 'OPENROUTER_KEY'),
+      shippedGrant('anthropic-messages', 'ANTHROPIC_KEY'),
+    ]
+    const reached = await reachedBy(grantsOf, inferenceCorpus, false)
+    inferenceCorpus.forEach((each, at) => {
+      assert.deepStrictEqual(reached[at], each.expected, `${each.method} ${each.url}`)
+    })
+  })
+
+  it('carries a model call’s query, which nothing needs and nothing was sent with before', async () => {
+    const queried: Case = {
+      body: '{}',
+      expected: sentTo('https://openrouter.ai/api/v1/chat/completions?x=1', 'openrouter', '{}'),
+      method: 'POST',
+      url: 'https://openrouter.ai/api/v1/chat/completions?x=1',
+    }
+    const [reached] = await reachedBy(
+      [shippedGrant('openrouter', 'OPENROUTER_KEY')],
+      [queried],
+      false,
+    )
+    assert.deepStrictEqual(reached, queried.expected)
+  })
+})
+
+describe('the built-ins, against the same corpus', () => {
+  it('runpod', async () => {
+    const reached = await reachedBy(
+      [{ credential: 'RUNPOD_API_KEY', profile: 'runpod' }],
+      runpodCorpus,
+      false,
+    )
+    runpodCorpus.forEach((each, at) => {
+      assert.deepStrictEqual(reached[at], each.expected, `${each.method} ${each.url}`)
+    })
+  })
+
+  it('openrouter and anthropic-messages', async () => {
+    const reached = await reachedBy(
+      [
+        { credential: 'OPENROUTER_KEY', profile: 'openrouter' },
+        { credential: 'ANTHROPIC_KEY', profile: 'anthropic-messages' },
+      ],
+      inferenceCorpus,
+      true,
+    )
+    inferenceCorpus.forEach((each, at) => {
+      assert.deepStrictEqual(reached[at], each.expected, `${each.method} ${each.url}`)
+    })
+  })
 })
