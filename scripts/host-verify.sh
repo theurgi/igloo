@@ -2086,25 +2086,47 @@ EOF
       source = { file = "$broker_config/from-file"; };
       mode = "broker";
       profile = "anthropic-messages";
+      hosts = [ "api.anthropic.com" ];
+      allow = [ "messages" ];
       projects = [ "$project" ];
     };
     IGLOO_VERIFY_CLOUD = {
       source = { file = "$broker_config/from-file"; };
       mode = "broker";
       profile = "runpod";
+      hosts = [ "api.runpod.ai" "api.runpod.io" ];
+      allow = [ "clusters" "invoke" "pods" "read" "registries" "secrets" "serverless" "templates" "volumes" ];
+      projects = [ "$project" ];
+    };
+    IGLOO_VERIFY_PROFILE = {
+      source = { file = "$broker_config/from-file"; };
+      mode = "broker";
+      profile = "igloo-verify";
+      hosts = [ "gitlab.com" ];
+      allow = [ "projects" ];
       projects = [ "$project" ];
     };
   };
+  # A profile of the user layer's own, at a public host that refuses an
+  # invalid key on a read it serves without one: its refusal is what shows
+  # the key was sent, in the header the profile names.
+  profiles.igloo-verify = {
+    placeholders = [ "IGLOO_VERIFY_TOKEN" ];
+    hosts."gitlab.com".send.header = "PRIVATE-TOKEN";
+    allow.projects."gitlab.com" = [ { method = "GET"; path = "api/v4/projects"; } ];
+  };
+  tunnelCeiling = [ "gitlab.com" ];
   modelServers.igloo-verify = {
     port = $model_port;
     projects = [ "$project" ];
   };
 }
 EOF
-	# Restricted with no tunnel: the least a VM with grants can reach. The
+	# Restricted, reaching one host besides what the grants reach: the
+	# profile's, so a read no rule covers there goes on without the key. The
 	# broker is not told the mode, so what passes it here passes it under
 	# internet too.
-	printf '{ network = "restricted"; }\n' >"$project/igloo-policy.nix"
+	printf '{ network = "restricted"; tunnel = [ "gitlab.com" ]; }\n' >"$project/igloo-policy.nix"
 	# The core is deflated, so the guest has no HTTPS client to prove the
 	# broker's TLS names and the tunnel with. A content layer is how a project
 	# adds one, which makes this both the fixture and a second use of the
@@ -2112,7 +2134,7 @@ EOF
 	# project layer, because that is the one place outside the layers a
 	# confined evaluation may read from.
 	cat >"$project/workspace/igloo-verify-curl.nix" <<'EOF'
-{ pkgs, ... }: { environment.systemPackages = [ pkgs.curl ]; }
+{ pkgs, ... }: { environment.systemPackages = [ pkgs.curl pkgs.runpodctl ]; }
 EOF
 	cat >"$project/igloo.nix" <<'EOF'
 { ... }: { imports = [ ./workspace/igloo-verify-curl.nix ]; }
@@ -2679,16 +2701,18 @@ EOF
 
 			# ---------------------------------------------- the runpod profile --
 			#
-			# Runpod's API, answered by the broker as GitHub's is. The key is
-			# the same invalid one, so a request reaching Runpod comes back as
-			# Runpod refusing the broker's credential, and a call of an endpoint
-			# that does not exist as Runpod's own 404: nothing here creates or
-			# spends anything. runpodctl is Go, which verifies against the
-			# system's authorities and takes its proxy from HTTPS_PROXY, so it
-			# reaching Runpod shows both reach it.
+			# Runpod's API, through igloo's runpod profile with every set
+			# chosen, answered by the broker by name. The key is the same
+			# invalid one, so a request reaching Runpod comes back as Runpod
+			# refusing the broker's credential, and a call of an endpoint that
+			# does not exist as Runpod's own 404: nothing here creates or spends
+			# anything. runpodctl, which the content layer installs as a user
+			# would, is Go, which verifies against the system's authorities and
+			# takes its proxy from HTTPS_PROXY, so it reaching Runpod shows both
+			# reach it.
 			section "the runpod profile"
 			{
-				echo "=== the key the guest's clients read, and their CLI"
+				echo "=== the key the guest's clients read, and their CLI, from the content layer"
 				guest 'printenv RUNPOD_API_KEY 2>&1; command -v runpodctl 2>&1'
 				echo
 				echo "=== a read through the REST API"
@@ -2721,7 +2745,7 @@ EOF
 			} >"$out/artifacts/runpod.txt" 2>&1
 			if grep -qx 'igloo-broker-holds-the-real-key' "$out/artifacts/runpod.txt" &&
 				grep -q '/runpodctl$' "$out/artifacts/runpod.txt"; then
-				verdict PASS runpod-guest "the guest has runpodctl, and RUNPOD_API_KEY is the placeholder, which the broker replaces"
+				verdict PASS runpod-guest "RUNPOD_API_KEY is the profile's placeholder, which the broker replaces, and runpodctl is the content layer's"
 			else
 				verdict FAIL runpod-guest "read artifacts/runpod.txt"
 			fi
@@ -2747,7 +2771,7 @@ EOF
 			else
 				verdict FAIL runpod-graphql-refuses "read artifacts/runpod.txt"
 			fi
-			if grep -qxF '{"message":"broker: POST /v2/organization/invites is not a write this VM may make through api.runpod.io"}' "$out/artifacts/runpod.txt"; then
+			if grep -qxF '{"message":"broker: POST /v2/organization/invites is not something this VM may do through api.runpod.io, which allows GET, HEAD there"}' "$out/artifacts/runpod.txt"; then
 				verdict PASS runpod-rest-refuses "an invitation to the account's organization is refused through the REST API, with its reason"
 			else
 				verdict FAIL runpod-rest-refuses "read artifacts/runpod.txt"
@@ -2788,70 +2812,51 @@ EOF
 				verdict PASS broker-value-stays-host "the value is nowhere in the guest, by name or by content"
 			fi
 
-			# --------------------------------------------- the inference profile --
+			# ------------------------------------------ the model provider profile --
 			#
-			# The request is written with a bash redirection rather than a client,
-			# so nothing has to be installed in the guest and what is sent is
-			# exactly what is written here. The key is the same invalid one, which
-			# leaves only "a valid key authenticates" unproven and proves the rest
-			# of the chain — base URL, tether, endpoint allowlist, header
-			# injection, TLS to the provider.
-			section "the inference profile"
-			post_to_broker() { # post_to_broker <path> <json body>
-				printf 'exec 3<>/dev/tcp/127.0.0.1/3128 && printf %s >&3 && timeout 30 cat <&3\n' \
-					"'POST $1 HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: ${#2}\r\nConnection: close\r\n\r\n$2'"
+			# igloo's anthropic-messages profile, reached as Claude Code reaches
+			# Anthropic: by its own name, through the tunnel, which hands the
+			# connection to the broker. curl stands in for the client, so what is
+			# sent is exactly what is written here. The key is the same invalid
+			# one, which leaves only "a valid key authenticates" unproven and
+			# proves the rest of the chain — the name answered, the guest trusting
+			# the broker, the rules, the key's header, TLS to the provider.
+			section "the model provider profile"
+			post_by_name() { # post_by_name <url> <json body>
+				printf "timeout 60 curl -sS -i -N -H 'Content-Type: application/json' -H 'anthropic-version: 2023-06-01' --data-binary '%s' '%s' 2>&1\n" "$2" "$1"
 			}
 
 			called='{"model":"claude-opus-5","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}'
 			tooled='{"model":"claude-opus-5","max_tokens":16,"messages":[],"tools":[{"type":"web_fetch_20260209","name":"web_fetch"}]}'
 
 			{
-				echo "=== the environment the guest was given"
-				guest 'printenv ANTHROPIC_BASE_URL ANTHROPIC_API_KEY 2>&1'
-				echo
-				# One line per client that reads its base URL from its own file:
-				# whether it is installed, and if so whether the boot wrote that
-				# file pointing at the broker. opencode's is the file its variable
-				# names. Each is matched as JSON, quotes and all, since a value that
-				# lost its quotes on the way still holds the URL.
-				echo "=== the clients pointed at the broker by configuration"
-				guest 'for pair in pi:.pi/agent/models.json omp:.omp/agent/models.yml; do
-					p=${pair%%:*} f=/root/${pair#*:}
-					if ! command -v "$p" >/dev/null; then echo "client-file $p not-installed"
-					elif grep -qF "\"baseUrl\": \"http://127.0.0.1:3128/api.anthropic.com\"" "$f" 2>/dev/null; then echo "client-file $p points-at-broker"
-					else echo "client-file $p missing"; fi
-				done
-				grep -qF "\"baseURL\": \"http://127.0.0.1:3128/api.anthropic.com/v1\"" "$OPENCODE_CONFIG" 2>/dev/null &&
-					echo "client-env opencode points-at-broker"' 2>&1
+				echo "=== the key the guest's clients read, and no base URL"
+				guest 'printenv ANTHROPIC_API_KEY 2>&1; printenv ANTHROPIC_BASE_URL OPENROUTER_BASE_URL OPENCODE_CONFIG || echo no-base-url'
 				echo
 				echo "=== a model call, which should reach the provider and be refused there"
-				guest "$(post_to_broker /api.anthropic.com/v1/messages "$called")" 2>&1 | head -20
+				guest "$(post_by_name https://api.anthropic.com/v1/messages "$called")" | head -20
 				echo
 				echo "=== a provider-side tool, which is the provider's to run"
-				guest "$(post_to_broker /api.anthropic.com/v1/messages "$tooled")" 2>&1 | head -20
+				guest "$(post_by_name https://api.anthropic.com/v1/messages "$tooled")" | head -20
 				echo
 				echo "=== an endpoint the same key would open, outside the grant"
-				guest "$(post_to_broker /api.anthropic.com/v1/models "$called")" 2>&1 | head -20
+				guest "$(post_by_name https://api.anthropic.com/v1/messages/batches "$called")" | head -20
+				echo
+				echo "=== the tunnel's hand-offs to the broker for Anthropic's name, from its log"
+				grep '"answered":true' "$(boot_log broker.log)" | grep 'api.anthropic.com'
 			} >"$out/artifacts/inference.txt" 2>&1
 
-			if grep -q 'ANTHROPIC_BASE_URL' "$out/artifacts/inference.txt" ||
-				grep -q '127.0.0.1:3128/api.anthropic.com' "$out/artifacts/inference.txt"; then
-				verdict PASS inference-guest-env "the guest's environment points a provider client at the broker"
+			if grep -qx 'igloo-broker-holds-the-real-key' "$out/artifacts/inference.txt" &&
+				grep -qx 'no-base-url' "$out/artifacts/inference.txt"; then
+				verdict PASS inference-guest-env "the guest holds the profile's placeholder key, and no base URL: a client keeps its provider's own address"
 			else
-				verdict FAIL inference-guest-env "the base URL did not reach the guest — read artifacts/inference.txt"
+				verdict FAIL inference-guest-env "read artifacts/inference.txt"
 			fi
 
-			# pi and omp read a base URL from their own file alone, which the
-			# guest writes at boot where the client is installed; opencode reads
-			# its configuration from the file OPENCODE_CONFIG names.
-			if grep -q '^client-file .* missing' "$out/artifacts/inference.txt"; then
-				verdict FAIL inference-client-config "an installed client's file was not written at boot — read artifacts/inference.txt"
-			elif ! grep -q '^client-env opencode points-at-broker' "$out/artifacts/inference.txt"; then
-				verdict FAIL inference-client-config "the file OPENCODE_CONFIG names does not point at the broker — read artifacts/inference.txt"
-			elif grep -q '^client-file .* not-installed' "$out/artifacts/inference.txt"; then
-				verdict NOTE inference-client-config "opencode is pointed at the broker; not installed here, so not checked: $(sed -n 's/^client-file \(.*\) not-installed$/\1/p' "$out/artifacts/inference.txt" | tr '\n' ' ')"
+			if grep -q '"answered":true,"event":"tunnel-open","id":[0-9]*,"target":"api.anthropic.com:443"' "$out/artifacts/inference.txt"; then
+				verdict PASS inference-answered "the guest's connection to api.anthropic.com reached the broker's own TLS listener, which it trusted"
 			else
-				verdict PASS inference-client-config "pi's, omp's and opencode's configuration point at the broker, written by the guest rather than by hand"
+				verdict FAIL inference-answered "read artifacts/inference.txt, then logs/up-broker/broker.log"
 			fi
 
 			# The whole chain, and the one check that proves the broker really
@@ -2873,10 +2878,73 @@ EOF
 				verdict FAIL inference-passes-server-tools "a request for a provider-side tool did not reach the provider — read artifacts/inference.txt, then logs/up-broker/broker.log"
 			fi
 
-			if grep -q 'is not an endpoint this VM may call' "$out/artifacts/inference.txt"; then
-				verdict PASS inference-scopes-endpoints "an endpoint outside the grant is refused, so a model key is not a provider key"
+			if grep -q 'is not something this VM may do through api.anthropic.com' "$out/artifacts/inference.txt"; then
+				verdict PASS inference-scopes-endpoints "an endpoint outside the profile's sets is refused, so a model key is not a provider key"
 			else
 				verdict FAIL inference-scopes-endpoints "an ungranted endpoint was not refused — read artifacts/inference.txt"
+			fi
+
+			# --------------------------------------- a profile the user layer defines --
+			#
+			# A profile that is no part of igloo, defined in the user layer at
+			# GitLab's API, which answers its public projects to anyone and
+			# refuses an invalid key with 401 on the same read: its refusal of
+			# the key, relayed as the broker's 403 naming the credential, is what
+			# shows the key went in the header the profile names. The project's
+			# tunnel reaches gitlab.com, so a read no rule covers goes there
+			# without the key, and comes back as GitLab's own answer.
+			section "a profile the user layer defines"
+			{
+				echo "=== the profile's placeholder"
+				guest 'printenv IGLOO_VERIFY_TOKEN 2>&1'
+				echo
+				echo "=== a read the profile allows, sent with the key"
+				guest 'timeout 30 curl -sS -i "https://gitlab.com/api/v4/projects?per_page=1" 2>&1 | head -20'
+				echo
+				echo "=== a write no set allows"
+				guest 'timeout 30 curl -sS -i -X POST -d "{}" https://gitlab.com/api/v4/projects 2>&1 | head -20'
+				echo
+				echo "=== a read no rule covers, sent without the key"
+				guest 'timeout 30 curl -sS -o /dev/null -w "status %{http_code}\n" https://gitlab.com/api/v4/projects/278964 2>&1'
+				echo
+				echo "=== the broker's log for gitlab.com"
+				grep 'gitlab.com' "$(boot_log broker.log)" | grep -v '"tunnel-'
+				grep '"answered":true' "$(boot_log broker.log)" | grep 'gitlab.com'
+			} >"$out/artifacts/profile.txt" 2>&1
+
+			if grep -qx 'igloo-broker-holds-the-real-key' "$out/artifacts/profile.txt"; then
+				verdict PASS profile-guest "the guest holds the user layer profile's placeholder in the variable it names"
+			else
+				verdict FAIL profile-guest "read artifacts/profile.txt"
+			fi
+			if grep -q '"answered":true,"event":"tunnel-open","id":[0-9]*,"target":"gitlab.com:443"' "$out/artifacts/profile.txt"; then
+				verdict PASS profile-answered "the guest's connection to gitlab.com reached the broker's own TLS listener, which it trusted, though the host is the user layer's"
+			else
+				verdict FAIL profile-answered "read artifacts/profile.txt: a certificate error means the authority does not cover the profile's host"
+			fi
+			allowed_said=$(after_header "$out/artifacts/profile.txt" "=== a read the profile allows")
+			case $allowed_said in
+			*'HTTP/1.1 403'*'gitlab.com refused IGLOO_VERIFY_PROFILE'*)
+				verdict PASS profile-sends-key "a read the profile allows reaches gitlab.com with the key in PRIVATE-TOKEN, which GitLab refuses, and comes back as the broker's 403 naming the credential"
+				;;
+			*)
+				verdict FAIL profile-sends-key "read artifacts/profile.txt, then logs/up-broker/broker.log"
+				;;
+			esac
+			write_said=$(after_header "$out/artifacts/profile.txt" "=== a write no set allows")
+			case $write_said in
+			*'broker: POST /api/v4/projects is not something this VM may do through gitlab.com'*)
+				verdict PASS profile-refuses "a write no set allows is refused by the broker, with its reason, and never reaches GitLab"
+				;;
+			*)
+				verdict FAIL profile-refuses "read artifacts/profile.txt"
+				;;
+			esac
+			if grep -qx 'status 200' "$out/artifacts/profile.txt" &&
+				grep -q '"event":"allow","host":"gitlab.com","id":[0-9]*,"operation":"read"' "$out/artifacts/profile.txt"; then
+				verdict PASS profile-anonymous-read "a read no rule covers goes to gitlab.com without the key, where the project's tunnel reaches it, and GitLab answers it"
+			else
+				verdict FAIL profile-anonymous-read "read artifacts/profile.txt, then logs/up-broker/broker.log"
 			fi
 
 			# ------------------------------------------------- a model server --
@@ -3689,7 +3757,7 @@ EOF
 			# ------------------------------ with a real API key, opt-in, billable --
 			#
 			# The only check that exercises a *streaming* response, which is the
-			# half of the inference profiles nothing else reaches: everything
+			# half of the model provider profiles nothing else reaches: everything
 			# above stops at the broker's refusal of an invalid key, which has no
 			# event stream. It costs a handful of tokens.
 			#
@@ -3717,10 +3785,20 @@ EOF
       source = { file = "$broker_config/from-file"; };
       mode = "broker";
       profile = "openrouter";
+      hosts = [ "openrouter.ai" ];
+      allow = [ "models" ];
       projects = [ "$project" ];
     };
   };
 }
+EOF
+				# curl again, which the checks above had in their content layer,
+				# since the provider is reached by its own name over TLS.
+				cat >"$project/workspace/igloo-verify-curl.nix" <<'EOF'
+{ pkgs, ... }: { environment.systemPackages = [ pkgs.curl ]; }
+EOF
+				cat >"$project/igloo.nix" <<'EOF'
+{ ... }: { imports = [ ./workspace/igloo-verify-curl.nix ]; }
 EOF
 				step down-for-key -- "$repo/bin/igloo" down
 				if step up-key -- "$repo/bin/igloo" up; then
@@ -3729,7 +3807,7 @@ EOF
 					streamed='{"model":"'"$model"'","max_tokens":16,"stream":true,"messages":[{"role":"user","content":"Reply with the single word: brokered"}]}'
 					{
 						echo "=== a streaming model call with a real key, model $model"
-						guest "$(post_to_broker /openrouter.ai/api/v1/chat/completions "$streamed")" 2>&1 | head -40
+						guest "$(post_by_name https://openrouter.ai/api/v1/chat/completions "$streamed")" | head -40
 						echo
 						echo "=== and the key is still nowhere in the guest"
 						guest 'printenv OPENROUTER_API_KEY; ls /run/credentials/@system/ 2>&1'
@@ -3765,12 +3843,12 @@ EOF
 					# harnesses that speak them: omp and Codex CLI speak Responses,
 					# Claude Code and pi's Claude models Messages.
 					responded='{"model":"'"$model"'","max_output_tokens":16,"stream":true,"input":"Reply with the single word: brokered"}'
-					guest "$(post_to_broker /openrouter.ai/api/v1/responses "$responded")" \
+					guest "$(post_by_name https://openrouter.ai/api/v1/responses "$responded")" \
 						>"$out/artifacts/inference-stream-responses.txt" 2>&1
 					judge_stream inference-streams-responses inference-stream-responses.txt \
 						'response\.output_text\.delta' \
 						"a real key streams a Responses API call back through the broker"
-					guest "$(post_to_broker /openrouter.ai/api/v1/messages "$streamed")" \
+					guest "$(post_by_name https://openrouter.ai/api/v1/messages "$streamed")" \
 						>"$out/artifacts/inference-stream-messages.txt" 2>&1
 					judge_stream inference-streams-messages inference-stream-messages.txt \
 						'content_block_delta' \
@@ -3789,6 +3867,7 @@ EOF
 			else
 				verdict NOTE inference-streams "not run: export IGLOO_VERIFY_OPENROUTER_KEY to check that a valid key streams — it is the only case that exercises SSE, and it bills a few tokens"
 			fi
+			rm -f "$project/igloo.nix" "$project/workspace/igloo-verify-curl.nix"
 		fi
 
 		# ---------------------------------------------- the broker's teardown --

@@ -5,18 +5,18 @@ _mode_ that decides where the value goes.
 
 ## Broker or deliver
 
-|                       | `mode = "broker"`                                                   | `mode = "deliver"`                                      |
-| --------------------- | ------------------------------------------------------------------- | ------------------------------------------------------- |
-| Where the value is    | On the host, in the VM's broker process.                            | Inside the guest, at `/run/credentials/@system/<name>`. |
-| What the guest gets   | A base URL and a placeholder key, or for git an authority to trust. | The value.                                              |
-| What the agent can do | Make the requests its grant allows.                                 | Anything, anywhere the network allows.                  |
-| Needs a profile       | Yes.                                                                | No.                                                     |
+|                       | `mode = "broker"`                                                              | `mode = "deliver"`                                      |
+| --------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------- |
+| Where the value is    | On the host, in the VM's broker process.                                       | Inside the guest, at `/run/credentials/@system/<name>`. |
+| What the guest gets   | A placeholder key, and an authority to trust for the names the broker answers. | The value.                                              |
+| What the agent can do | Make the requests its grant allows.                                            | Anything, anywhere the network allows.                  |
+| Needs a profile       | Yes.                                                                           | No.                                                     |
 
 **Reach for `broker`.** A brokered credential never enters the guest. The broker makes each request
 on the guest's behalf, building it from the grant: this provider, these repositories. Nothing the
-guest sends reaches the upstream's URL, and the only credential the upstream sees is the broker's.
-An agent that is compromised can spend what the grant allows, but it cannot read the key, keep it,
-or use it for anything else.
+guest sends reaches the upstream's URL but what the grant's rules allow, and the only credential the
+upstream sees is the broker's. An agent that is compromised can spend what the grant allows, but it
+cannot read the key, keep it, or use it for anything else.
 
 **`deliver` is the escape hatch**, for a credential no broker profile covers. The value is written
 to a tmpfs inside the guest, readable by root — the agent. It can copy it into `/workspace` or
@@ -39,6 +39,8 @@ A project's `igloo-policy.nix` declares credentials for that project alone:
     source.file = "/run/secrets/anthropic-api-key";
     mode = "broker";
     profile = "anthropic-messages";
+    hosts = [ "api.anthropic.com" ];
+    allow = [ "messages" ];
   };
 }
 ```
@@ -77,20 +79,25 @@ holds its own TLS certificate and key under them.
 
 ### Fields
 
-| Field         | Applies to         | Value                                                                       |
-| ------------- | ------------------ | --------------------------------------------------------------------------- |
-| `source`      | every credential   | `{ file = "…"; }` or `{ command = [ … ]; }`                                 |
-| `mode`        | every credential   | `"broker"` or `"deliver"`                                                   |
-| `profile`     | brokered           | `"anthropic-messages"`, `"openrouter"`, `"github"` or `"runpod"`            |
-| `repos.read`  | brokered, `github` | Repositories to fetch and read, as `owner/repo`.                            |
-| `repos.write` | brokered, `github` | Repositories to push to and write through the API as well, as `owner/repo`. |
-| `projects`    | user layer only    | Absolute paths of the projects' root directories.                           |
+| Field         | Applies to          | Value                                                                       |
+| ------------- | ------------------- | --------------------------------------------------------------------------- |
+| `source`      | every credential    | `{ file = "…"; }` or `{ command = [ … ]; }`                                 |
+| `mode`        | every credential    | `"broker"` or `"deliver"`                                                   |
+| `profile`     | brokered            | A [profile](#profiles): one of igloo's, `"github"`, or one a layer defines. |
+| `hosts`       | brokered, a profile | Exactly the hosts the sets in `allow` reach.                                |
+| `allow`       | brokered, a profile | The profile's sets this credential allows, at least one.                    |
+| `repos.read`  | brokered, `github`  | Repositories to fetch and read, as `owner/repo`.                            |
+| `repos.write` | brokered, `github`  | Repositories to push to and write through the API as well, as `owner/repo`. |
+| `projects`    | user layer only     | Absolute paths of the projects' root directories.                           |
 
-A field that does not apply is refused rather than ignored: `repos` on a model grant, or `profile`
-on a delivered credential, would be someone believing they had narrowed something.
+A field that does not apply is refused rather than ignored: `repos` on a profile's grant, or
+`profile` on a delivered credential, would be someone believing they had narrowed something. A grant
+of a profile with neither `hosts` nor `allow`, as one was written before profiles had sets, is
+refused with the two lines that keep what it allowed: every set.
 
-A project has at most one brokered credential per profile. A request names no credential, and one to
-GitHub's API may name no repository, so the broker would have no way to choose between two.
+A project has at most one brokered credential per profile, and no two of its grants may reach one
+host. A request names no credential, and one to GitHub's API may name no repository, so the broker
+would have no way to choose between two.
 
 `models` and `maxOutputTokens` are refused. Which models a key may call and what it may spend are
 set on the key, at the provider: OpenRouter has a credit limit and guardrails per key, Anthropic a
@@ -150,32 +157,174 @@ refused if it takes longer than 120 seconds, prints nothing, or prints more than
 
 ## Profiles
 
-A brokered credential's `profile` decides its upstream, which is fixed: a grant names what is
-reachable there, never where "there" is. The one upstream policy places is a
+A brokered credential's `profile` says what its key may do at a service: the hosts it is sent to,
+how it is sent at each, and named **sets** of what it may do there. A profile is data the broker
+reads, never code it runs. igloo ships `anthropic-messages`, `openrouter` and `runpod` as profiles,
+and `github` as code of the broker's own (below). Anything else is a profile you define, or import
+from someone who published one. The one upstream policy places otherwise is a
 [model server on this machine](#model-servers-on-this-machine), and only by its port.
+
+### Defining and granting
+
+Two separate acts, both in a policy layer.
+
+**Defining** a profile makes it available by name and grants nothing:
+
+```nix
+{
+  profiles.example = {
+    placeholders = [ "EXAMPLE_API_KEY" ];
+    hosts."api.example.com".send = "bearer";
+    hosts."uploads.example.com".send.header = "x-upload-key";
+    allow.read."api.example.com" = [
+      {
+        method = [
+          "GET"
+          "HEAD"
+        ];
+        path = "v1/**";
+      }
+    ];
+    allow.write."api.example.com" = [
+      {
+        method = "POST";
+        path = "v1/items";
+      }
+    ];
+    allow.write."uploads.example.com" = [
+      {
+        method = "POST";
+        path = "files";
+      }
+    ];
+    deny."api.example.com" = [
+      {
+        method = "*";
+        path = "v1/keys/**";
+      }
+    ];
+  };
+}
+```
+
+igloo's own profiles are defined in its package. The user layer may define its own, import a
+published one (`programs.igloo.policy.profiles.example = inputs.someone.brokerProfiles.example;`),
+or replace one of igloo's by defining its name: it is your machine. A project may define profiles
+for itself and replace neither igloo's nor the user layer's, so a credential the user layer shares
+cannot have its rules changed from a project's file. A profile is defined once per layer;
+home-manager refuses a second definition of one name. igloo's are also the flake's `brokerProfiles`,
+for reading or copying.
+
+**Granting** is declaring a brokered credential for the profile, choosing its sets in `allow` and
+naming in `hosts` the hosts they reach:
+
+```nix
+{
+  secrets.example = {
+    source.command = [
+      "pass"
+      "show"
+      "example"
+    ];
+    mode = "broker";
+    profile = "example";
+    hosts = [ "api.example.com" ];
+    allow = [ "read" ];
+  };
+}
+```
+
+`hosts` has to be exactly the hosts the chosen sets reach, ignoring case, or the launch is refused
+and told which. It is written twice, in the profile and here, because where a key goes matters most:
+a profile whose update moves a host fails here rather than sending your key there. A host no chosen
+set reaches is not answered for the project at all. A credential the user layer declares may grant
+igloo's profiles and the user layer's; one a project declares may grant its own as well.
+
+### The format
+
+- **`hosts.<host>.send`**, how the key is sent at that host: `"bearer"` for
+  `Authorization: Bearer <key>`, `{ header = "<name>"; }` for one header whose whole value is the
+  key, or `{ basic = "<username>"; }` for `Authorization: Basic` with that username. Never in a
+  query or a path, which a server can echo into an error or a log. A header the broker drops, sets
+  or frames a request by — `Host`, `Content-Length`, `Content-Type`, `Transfer-Encoding`,
+  `Accept-Encoding`, the hop-by-hop ones — cannot carry a key. A host is a name with a dot, never an
+  address, and reached over HTTPS on 443.
+- **`placeholders`**, the variables the service's clients read a key from. Each is set in the guest
+  to `igloo-broker-holds-the-real-key` for a project granted the profile, and the broker sends the
+  real key in its place. A name ends in `_API_KEY`, `_KEY` or `_TOKEN`, so a profile cannot set
+  `PATH` or `LD_PRELOAD`.
+- **`allow.<set>.<host>`**, the rules of a set at one host. A set is what a grant chooses, so name
+  sets for what they let the guest do.
+- **`deny.<host>`**, rules that hold whatever sets are chosen. Deny wins over any set.
+- **A rule** is a `method`, one, a list or `"*"` for any, and a `path`, segments where `*` is any
+  one segment, a last `**` any number of them, none included, and `""` the host's root. Fixed
+  segments are compared as written, since services match them by case. The path is compared as the
+  request's is once every `.` and `..` is resolved; a path with a percent-escape or an empty segment
+  is refused. The request's query goes with it, each name and value encoded again.
+- **`graphql.withheld`** on a `POST` rule makes it a GraphQL request's: the broker reads the body
+  and sends it only if it holds queries alone, no mutation or subscription, and names none of the
+  fields listed, each one that would return a credential. The request has to be one JSON object of
+  `query`, `variables` and `operationName`, at most 256 KiB, and goes as the object the broker read,
+  written again as JSON, without the URL's query.
+
+A field the format does not have is refused, not ignored, as is anything above written otherwise.
+
+### Levels
+
+What a set allows is plain from its rules:
+
+- **The host alone:** `{ method = "*"; path = "**"; }`. Anything the key can do there.
+- **The host, less a refusal list:** that, with `deny` rules beside it.
+- **An allow-list:** anything narrower. igloo's profiles are allow-lists.
+
+The worst a careless or hostile profile can do is let the guest use the key freely at hosts you
+named in your own grant. That is the weakest level, and still better than `deliver`, where the guest
+can copy the key and use it anywhere. Reviewing a profile you did not write means reading what the
+sets you choose allow; reviewing an update means reading what changed.
+
+### What a profile cannot do
+
+- **Send a key anywhere you did not name.** Its hosts are checked against your grant's `hosts`.
+- **Reach past a `restricted` ceiling.** Where the user layer sets `networkCeiling = "restricted"`,
+  each host a project's grant reaches through a profile has to be in `tunnelCeiling`, whichever
+  layer defined the profile; igloo's own, as igloo ships them, are exempt.
+- **Name an address, a port, plain HTTP**, or any of the hosts `github` answers.
+- **Read a body**, but GraphQL's, or follow a redirect: a redirect is refused, and an upstream `401`
+  comes back as the broker's `403` naming the credential.
+- **Ask, budget or rate-limit.** A rule allows or denies.
+
+Every profile host is answered by its own name. A client keeps its default address and needs only a
+key, which the guest holds as a placeholder; see
+[pointing an agent at the broker](#pointing-an-agent-at-the-broker).
+
+## igloo's profiles
+
+The profiles igloo ships, by name. Each grant below chooses every set, which is what a grant of it
+did before profiles had sets; drop those a credential does not need.
 
 ### `anthropic-messages`
 
-- **Upstream:** `https://api.anthropic.com`, with an Anthropic API key sent as `x-api-key`.
-- **Endpoints:** `POST v1/messages` and `POST v1/messages/count_tokens`.
-- **Grant:** the profile alone; the key reaches whichever model a request names.
-- **In the guest:**
-  - `ANTHROPIC_BASE_URL=http://127.0.0.1:3128/api.anthropic.com`
-  - `ANTHROPIC_API_KEY=igloo-broker-holds-the-real-key`
+- **Hosts:** `api.anthropic.com`, with an Anthropic API key sent as `x-api-key`.
+- **Sets:** `messages`, `POST v1/messages` and `POST v1/messages/count_tokens`. The key reaches
+  whichever model a request names.
+- **Placeholder:** `ANTHROPIC_API_KEY`.
+- **Grant:** `hosts = [ "api.anthropic.com" ]; allow = [ "messages" ];`
 
 ### `openrouter`
 
-- **Upstream:** `https://openrouter.ai`, with an OpenRouter API key sent as a bearer token.
-- **Endpoints:** a model call in each of the three shapes agents speak:
+- **Hosts:** `openrouter.ai`, with an OpenRouter API key sent as a bearer token.
+- **Sets:** `models`, a model call in each of the three shapes agents speak:
   `POST api/v1/chat/completions`, `POST api/v1/responses` (OpenAI's Responses API, which OpenRouter
-  keeps no state for) and `POST api/v1/messages` (Anthropic's Messages API). Also the model listings
+  keeps no state for) and `POST api/v1/messages` (Anthropic's Messages API); and the model listings
   `GET api/v1/models`, `api/v1/images/models`, `api/v1/videos/models` and
-  `api/v1/embeddings/models`. A listing's query string is carried, so its filters work; no other
-  endpoint's is.
-- **Grant:** the profile alone; the key reaches whichever model a request names.
-- **In the guest:**
-  - `OPENROUTER_BASE_URL=http://127.0.0.1:3128/openrouter.ai/api/v1`
-  - `OPENROUTER_API_KEY=igloo-broker-holds-the-real-key`
+  `api/v1/embeddings/models`. The key reaches whichever model a request names.
+- **Placeholder:** `OPENROUTER_API_KEY`.
+- **Grant:** `hosts = [ "openrouter.ai" ]; allow = [ "models" ];`
+
+The broker answers `openrouter.ai` for a project granted this profile, and that name is also
+OpenRouter's website and documentation: a read no rule covers goes there without the key where the
+project's `tunnel` reaches `openrouter.ai`, and is refused where it does not
+([what the broker checks](#what-the-broker-checks)).
 
 ### `github`
 
@@ -292,38 +441,34 @@ name, as you.
 
 ### `runpod`
 
-- **Upstream:** Runpod's API, with a Runpod API key sent as a bearer token: its REST API at
-  `https://api.runpod.io/v2`, its GraphQL API at `https://api.runpod.io/graphql`, and the API a
-  serverless endpoint is called through, at `https://api.runpod.ai/v2`.
-- **Operations:**
-  - Reading, with `GET` or `HEAD`, anything under `v2/` at `api.runpod.io`, with its query: the GPU
+- **Hosts:** `api.runpod.io`, Runpod's REST API under `v2/` and its GraphQL API at `graphql`, and
+  `api.runpod.ai`, the API a serverless endpoint is called through. A Runpod API key is sent as a
+  bearer token at both.
+- **Sets:**
+  - `read`: with `GET` or `HEAD`, anything under `v2/` at `api.runpod.io`, with its query: the GPU
     catalog with prices and availability, pods and their logs, templates, volumes, serverless
-    endpoints, billing.
-  - Writing through the REST API what the account runs and what it is made from: creating, changing
-    and deleting pods, templates, serverless endpoints, network and global volumes, clusters,
-    registry logins and secrets; starting, stopping, restarting and resetting a pod
+    endpoints, billing. And a GraphQL query, `POST graphql`, that only reads: a mutation is refused,
+    since one can create an API key that the guest would then hold, and so is a query naming
+    `registryAuth`, which holds a registry's login.
+  - `pods`: creating, changing and deleting pods; starting, stopping, restarting and resetting one
     (`v2/pods/<id>/action`); running a command in a running pod, `POST v2/pods/<id>/exec`, which
     answers with its output and exit code after at most 25 seconds; and cancelling a queued pod.
-  - A GraphQL query, `POST graphql`, that only reads. The broker reads the request and sends it only
-    if every operation in it is a query. A mutation is refused, since one can create an API key that
-    the guest would then hold, and so is a query naming `registryAuth`, which holds a registry's
-    login. The request has to be one JSON object of `query`, `variables` and `operationName`, at
-    most 256 KiB: a batch, `extensions` (which carries a persisted query) and GraphQL over `GET` are
-    refused. What is sent is the object the broker read, written again as JSON.
-  - Calling a serverless endpoint: `GET` or `POST` anything under `v2/<endpoint>/` at
-    `api.runpod.ai`, so `run`, `runsync`, `status`, `stream`, `cancel`, `retry`, `health`,
+  - `clusters`, `serverless`, `templates`, `volumes` (network and global volumes), `registries`
+    (registry logins) and `secrets`: creating each, and changing and deleting one.
+  - `invoke`: calling a serverless endpoint, `GET`, `HEAD` or `POST` anything under `v2/<endpoint>/`
+    at `api.runpod.ai`, so `run`, `runsync`, `status`, `stream`, `cancel`, `retry`, `health`,
     `purge-queue`, and a vLLM worker's OpenAI-compatible API under `openai/v1/`.
-  - Everything else is refused: a write that reaches past what the account runs to who may use it,
+  - Refused whatever is chosen: a write that reaches past what the account runs to who may use it,
     an organization's invitations, members, groups and roles, the account's SSH keys, sign-in
     attempts (each ends in a new API key), tags (cost centres are tags), cost centres and ECR
-    delegations; any write the list above does not name; and any path outside `v2/` and `graphql`.
-- **Grant:** the profile alone. Creating pods takes a key with **All** permissions: a **Read only**
+    delegations; any write no set names; and any path outside `v2/` and `graphql`.
+- **Placeholder:** `RUNPOD_API_KEY`, which `runpodctl` and Runpod's other clients read their key
+  from. `runpodctl` is yours to install in the guest, as any package is.
+- **Grant:**
+  `hosts = [ "api.runpod.ai" "api.runpod.io" ]; allow = [ "clusters" "invoke" "pods" "read" "registries" "secrets" "serverless" "templates" "volumes" ];`.
+  A project that only watches the account chooses `allow = [ "read" ]` and
+  `hosts = [ "api.runpod.io" ]`. Creating pods takes a key with **All** permissions: a **Read only**
   key reads, and **Restricted** sets access per serverless endpoint and nothing else.
-- **In the guest:** `runpodctl`, and `RUNPOD_API_KEY=igloo-broker-holds-the-real-key`, the variable
-  `runpodctl` and Runpod's other clients read their key from. The broker answers `api.runpod.io` and
-  `api.runpod.ai` itself, as it answers GitHub's names
-  ([How the guest reaches GitHub](#how-the-guest-reaches-github)), so a client's ordinary Runpod
-  URLs reach it, under every network mode and with no `tunnel` entry.
 
 `runpodctl` 3.1.1 uses the REST API at `api.runpod.io/v2`, but writes a few things through GraphQL,
 and those commands are refused: `serverless create`, the parts of `serverless update` that change an
@@ -453,12 +598,13 @@ A key written in either file is not used: the broker drops it.
 
 ## What the broker checks
 
-The broker decides from a request's path where it goes and which credential it carries. It does not
-read the body, which it streams upstream as it arrives, but for a GraphQL request to Runpod, which
-it reads to refuse a mutation ([`runpod`](#runpod)). So **the model** is not checked: any model
-passes, or none, with whatever `max_tokens` the request sets. Nor are **the provider's own tools**:
-a request may ask for web search, web fetch, code execution or an MCP connector, use OpenRouter's
-plugins or a `:online` model, or give an image by URL for the provider to download, under every
+The broker decides from a request's method, its path and the name it was sent to where it goes and
+which credential it carries. It does not read the body, which it streams upstream as it arrives, but
+for a GraphQL request at a rule that reads one, as Runpod's does, to refuse a mutation
+([`runpod`](#runpod)). So **the model** is not checked: any model passes, or none, with whatever
+`max_tokens` the request sets. Nor are **the provider's own tools**: a request may ask for web
+search, web fetch, code execution or an MCP connector, use OpenRouter's plugins or a `:online`
+model, or give an image by URL for the provider to download, under every
 [network mode](network.md#network-modes).
 
 What a provider does on a model's behalf is the provider's. Under `restricted` that means workspace
@@ -469,7 +615,7 @@ On every brokered request:
 
 - The guest's `Authorization`, `x-api-key`, `Proxy-Authorization` and `Cookie` are dropped, and the
   broker sets its own credential.
-- On an inference profile, a model server, GitHub's API or Runpod's, the guest's other headers pass,
+- On a profile's host, a model server or GitHub's API, the guest's other headers pass,
   `anthropic-version`, `anthropic-beta`, `x-session-id` and `X-GitHub-Api-Version` included. Those
   about the guest's connection do not: `Host`, `Connection` and the headers it names, the other
   hop-by-hop ones, and `Expect`. Nor do those a server in front of the upstream could take another
@@ -478,35 +624,39 @@ On every brokered request:
   `-Proto`, and `X-Real-IP`. Nor do `Accept-Encoding` and `Content-Length`, which the broker sets
   itself: a body goes in chunks, but for a release's asset sent with a `Content-Length` and no
   `Transfer-Encoding`, which goes with that length and is cut off if it runs past it or ends short.
-  A request that sends no body, a model listing or a read, carries no `Content-Type` or
-  `Content-Encoding` either. On git's requests to `github.com`, the broker builds the headers and
-  carries over only git's protocol version and request-body encoding, each checked first. A GraphQL
-  request to Runpod goes as `Content-Type: application/json`, the body the broker wrote. A `github`
-  or `runpod` request arrives over TLS and names no host in its path, so the host it was sent to is
-  read instead, and only the names its grant is for are answered.
-- The response passes back with its status and body. On an inference profile, a model server,
-  GitHub's API or Runpod's, its headers pass too, `retry-after`, rate limits and request ids
-  included, except `Set-Cookie`, `WWW-Authenticate`, `Proxy-Authenticate`, `Alt-Svc`,
-  `Content-Length`, `Content-Encoding` and the hop-by-hop ones. On git's, `Content-Type` is its only
-  header.
-- An upstream `401` comes back saying the host's credential was refused: as a `403` on an inference
-  profile, a model server, GitHub's API or Runpod's, which a client reports at once rather than
-  retrying, and as a `502` on git's requests to `github.com`, so that git does not prompt for
-  credentials the guest must not have. A redirect is not followed. One from GitHub's API comes back
-  to the guest, which follows it to a signed URL elsewhere without the credential.
+  A `GET` or `HEAD` carries no `Content-Type` or `Content-Encoding` either. The broker's key is set
+  as the profile says, replacing a header of the same name the guest sent. On git's requests to
+  `github.com`, the broker builds the headers and carries over only git's protocol version and
+  request-body encoding, each checked first. A GraphQL request a rule reads goes as
+  `Content-Type: application/json`, the body the broker wrote. A request to a profile's host or
+  GitHub's arrives over TLS and names no host in its path, so the host it was sent to is read
+  instead, and only the names the project's grants reach are answered.
+- A read no rule covers at a name the broker answers, a `GET` or `HEAD` or git's fetch, goes on
+  without any credential where the project's `tunnel` reaches that name, as it would have had the
+  broker not answered it; so does a read a profile's `deny` rule matches. Where the tunnel does not
+  reach the name it is refused, as is a write no rule covers.
+- The response passes back with its status and body. On a profile's host, a model server or GitHub's
+  API, its headers pass too, `retry-after`, rate limits and request ids included, except
+  `Set-Cookie`, `WWW-Authenticate`, `Proxy-Authenticate`, `Alt-Svc`, `Content-Length`,
+  `Content-Encoding` and the hop-by-hop ones. On git's, `Content-Type` is its only header.
+- An upstream `401` comes back saying the host's credential was refused: as a `403` on a profile's
+  host, a model server or GitHub's API, which a client reports at once rather than retrying, and as
+  a `502` on git's requests to `github.com`, so that git does not prompt for credentials the guest
+  must not have. A redirect is not followed. One from GitHub's API comes back to the guest, which
+  follows it to a signed URL elsewhere without the credential.
 - A refusal the broker writes itself gives its reason as `broker: <reason>`, in text, which git
   prints as `remote: broker: …`. On GitHub's API, at `api.github.com` and `uploads.github.com`, and
-  at each of Runpod's names, it is JSON instead, `{"message":"broker: <reason>"}`, as GitHub writes
-  an error of its own, and `gh` shows it as `HTTP <status>: broker: <reason> (<URL>)`. `runpodctl`
+  at each profile host, it is JSON instead, `{"message":"broker: <reason>"}`, as GitHub writes an
+  error of its own, and `gh` shows it as `HTTP <status>: broker: <reason> (<URL>)`. `runpodctl`
   reads the same field.
 - Every refusal the broker writes itself carries `x-should-retry: false`, except the one that may
   pass: an upstream that did not answer.
-- No request body is refused for its size, but a GraphQL request to Runpod, which is read whole and
-  refused past 256 KiB. The upstream's own limit is the one a body meets, and on an inference
-  profile the upstream's refusal comes back as it gave it. A call is given up on when its upstream
-  has not answered within 10 minutes of a model call, a push, an asset's upload, a write through
-  Runpod's API or a call of a serverless endpoint, or 30 seconds of any other request, or when the
-  guest leaves before it answers; a body still being sent then is cut off.
+- No request body is refused for its size, but a GraphQL request a rule reads, which is read whole
+  and refused past 256 KiB. The upstream's own limit is the one a body meets, and at a profile's
+  host the upstream's refusal comes back as it gave it. A call is given up on when its upstream has
+  not answered within 10 minutes of any request to a profile's host or a model server, a push or an
+  asset's upload, or 30 seconds of any other request, or when the guest leaves before it answers; a
+  body still being sent then is cut off.
 - The broker serves as many requests and tunnels at once as the guest opens. Its memory is not
   bounded unless you set `brokerMem`; see [Configuration](configuration.md#policy-settings) and
   [when the broker is killed](troubleshooting.md#when-the-broker-is-killed).
@@ -539,30 +689,30 @@ On every brokered request:
 
 ## Pointing an agent at the broker
 
-For each inference grant, every login session in the guest gets the base URL and placeholder key
-listed under its profile. A model server is covered in
+The broker answers each host of a granted profile by that host's own name, as it answers GitHub's,
+so an agent keeps its default address: Claude Code reaches `api.anthropic.com`, an OpenRouter client
+`openrouter.ai`, `runpodctl` `api.runpod.io`. The tunnel hands a connection for one of those names
+to the broker, which answers with a certificate from an authority made for the project and trusted
+in the guest. An agent needs only a key, and the guest holds a placeholder in each variable the
+profile names (`ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `RUNPOD_API_KEY`), which the broker
+replaces with the real key. An agent that reads its key only from its own file needs any text there.
+A model server is covered in
 [pointing an agent at a model server](#pointing-an-agent-at-a-model-server), and a `github` grant
-needs no pointing: `git` and `gh` reach GitHub by its own names, which the broker answers, as
-[how the guest reaches GitHub](#how-the-guest-reaches-github) says. These agents need nothing more:
+needs no pointing: `git` and `gh` reach GitHub by its own names, as
+[how the guest reaches GitHub](#how-the-guest-reaches-github) says.
 
-- **Claude Code** reads `ANTHROPIC_BASE_URL`.
-- **opencode** reads the same base URLs from `/etc/igloo/opencode.json`, which `OPENCODE_CONFIG`
-  names and opencode merges over its own configuration.
-- **pi** and **omp** take a base URL only from a file in their own directory, so at boot the guest
-  writes `~/.pi/agent/models.json` and `~/.omp/agent/models.yml`, naming the broker as each granted
-  provider's base. Each is written only if that agent is installed and the file does not exist, so a
-  file of your own is never replaced; if you keep one, set its providers' `baseUrl` to the values
-  above yourself.
+The client has to trust the project's authority. Most read the system's store, which holds it; Node
+and Bun read `NODE_EXTRA_CA_CERTS`, which the guest sets to that store. A client that verifies
+against a list of its own and reads no variable does not reach the broker.
 
-Any other agent needs its base URL set to the same value, which `echo $OPENROUTER_BASE_URL` in the
-guest prints, and any non-empty key: the broker replaces it with the real one. That is so whether it
-speaks chat completions or the Responses API, as Codex CLI does. Its configuration file lives in
-`/root`, so it persists across boots.
+An agent that speaks Anthropic's Messages API can use an `openrouter` grant too: Claude Code, for
+one, with `ANTHROPIC_BASE_URL=https://openrouter.ai/api` and any key in `ANTHROPIC_API_KEY`, set in
+`~/.bash_profile`. With an `anthropic-messages` grant as well, Claude Code reaches Anthropic by its
+own name instead.
 
-An agent that speaks Anthropic's Messages API can use an `openrouter` grant too. Claude Code, for
-one, needs `ANTHROPIC_BASE_URL=http://127.0.0.1:3128/openrouter.ai/api`, without the `/v1`, and any
-key in `ANTHROPIC_API_KEY`. Set them in `~/.bash_profile`; the guest sets `ANTHROPIC_BASE_URL`
-itself only for an `anthropic-messages` grant.
+A project that brokers an Anthropic key uses it for all its Anthropic traffic: the broker answers
+`api.anthropic.com` for the guest, and Claude Code leaves a subscription login unused while
+`ANTHROPIC_API_KEY` is set. A project that wants the subscription does not broker the key.
 
 An agent's upstream needs no `tunnel` entry, even under `restricted`. The broker reaches it itself.
 
@@ -574,12 +724,13 @@ tail -f .igloo/logs/latest/broker.log
 
 The log is in the boot record of the launch that started the broker, which is usually `latest`. It
 has one JSON line per event: `listening` as the broker starts, with the credentials it holds by name
-and its grants, and `tunnel-listening` with the tunnel's destinations; `allow` with the credential
-if there is one, the operation, and the repository for git or the server for a model server; `deny`
-with the reason and status, and what the request asked for when the reason names it; `response` with
-the status, bytes and time taken; `error` when the upstream could not be reached or refused the
-credential; and `tunnel-open`, `tunnel-close` and `tunnel-deny` for each tunnel, with the
-destination it asked for. It never contains a credential's value.
+and its grants, a profile grant's sets and hosts among them, and `tunnel-listening` with the
+tunnel's destinations; `allow` with the credential if there is one, and the profile, the set and the
+rule that allowed it, or for git and GitHub's API the operation and the repository, or for a model
+server the server; `deny` with the reason and status, and what the request asked for when the reason
+names it; `response` with the status, bytes and time taken; `error` when the upstream could not be
+reached or refused the credential; and `tunnel-open`, `tunnel-close` and `tunnel-deny` for each
+tunnel, with the destination it asked for. It never contains a credential's value.
 
 ## Logins inside the guest
 
@@ -597,20 +748,14 @@ that way, since it never enters the guest.
 
 ## Known limits
 
-- There are four profiles, each with a fixed upstream, and model servers on this machine. Other
-  providers, and a model server on another machine, cannot be brokered.
-- Each profile serves only the endpoints listed. Anthropic's model listing, and file and batch
-  endpoints, are not served.
+- A service is brokered through a profile, igloo's or one a layer defines; a model server on another
+  machine cannot be brokered. A profile sends a key in a header, never signs a request or refreshes
+  a login, so a service whose key works only that way is out of reach.
+- Each of igloo's profiles serves only the endpoints listed. Anthropic's model listing, and file and
+  batch endpoints, are not served.
 - `restricted` stops at the provider. A model call can have the provider fetch a URL, search the web
   or connect to an MCP server, and the provider reaches any address it likes, so workspace data can
   leave that way.
-- opencode, omp and pi have completed sessions through `openrouter`, omp on the Responses API. pi's
-  Claude models on OpenRouter fail as the guest configures them: pi gives every model of a provider
-  the one base URL, and sends a Claude model to `<base>/v1/messages`, which makes
-  `api/v1/v1/messages`. A `models` entry for that model in `~/.pi/agent/models.json` with
-  `"baseUrl": "http://127.0.0.1:3128/openrouter.ai/api"` reaches the Messages endpoint. The entry
-  replaces pi's own description of the model, so give it `reasoning`, `input`, `contextWindow` and
-  `maxTokens` as well.
 - Claude Code through `anthropic-messages` is untested against Anthropic itself. The broker passes
   its requests on as described above, but none has yet been sent to Anthropic with a real key, so it
   may not work.
@@ -638,9 +783,12 @@ that way, since it never enters the guest.
 - A path holding a percent-escape is refused, so an API read naming a branch with a `/` in it, as
   `branches/feature%2Fx`, is refused.
 - A client that verifies against a list of certificate authorities of its own, rather than the
-  system's, does not trust the broker's, and fails to reach `github.com` from the guest. Node and
+  system's, does not trust the broker's, and fails to reach any name the broker answers. Node and
   Bun read `NODE_EXTRA_CA_CERTS`, which the guest sets; point any other at
   `/etc/ssl/certs/ca-certificates.crt`.
+- With a grant of a profile, nothing in the guest reaches its hosts but through the broker: a read
+  no rule covers goes without the key where `tunnel` reaches the host, and is refused where it does
+  not.
 - `runpod` reaches a pod by its API alone: a command runs in it through `POST v2/pods/<id>/exec`,
   and waits at most 25 seconds for it. SSH to a pod uses port 22 at an address, which the
   [tunnel](network.md#the-tunnel) does not carry, so `runpodctl ssh` does not connect, and neither
