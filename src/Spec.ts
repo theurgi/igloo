@@ -172,9 +172,6 @@ export const fromConfig = (
     iglooFlakePath: facts.iglooFlakePath,
     brokerAuthority: answered ? facts.tlsAuthority : undefined,
     brokerEnv,
-    brokerEtc: Broker.guestEtcFiles(grants, Vm.brokerGuestPort),
-    brokerFiles: Broker.guestClientFiles(grants, Vm.brokerGuestPort),
-    brokerPackages: Broker.guestPackages(grants),
     contentModules: config.content.map(({ file }) => file),
     credentials: credentials.map(({ hostPath, name }) => ({ hostPath, name })),
     disk: config.policy.disk === undefined ? undefined : { image: facts.diskImage },
@@ -204,9 +201,7 @@ export const fromConfig = (
           ? `${grant.profile} ${grant.name} port=${String(grant.port)}${grant.credential === undefined ? '' : ` ${grant.credential}`}`
           : Broker.isProfileGrant(grant)
             ? profileLine(grant)
-            : Broker.isGitGrant(grant)
-              ? `${grant.profile} ${grant.credential} repos=${grant.repos.toSorted().join(',')}${grant.write === undefined ? '' : ` write=${grant.write.toSorted().join(',')}`}`
-              : `${grant.profile} ${grant.credential}`,
+            : `${grant.profile} ${grant.credential} repos=${grant.repos.toSorted().join(',')}${grant.write === undefined ? '' : ` write=${grant.write.toSorted().join(',')}`}`,
       )
       .toSorted(),
     `brokerMem=${config.policy.brokerMem === undefined ? 'unbounded' : String(config.policy.brokerMem)}`,

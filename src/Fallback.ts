@@ -341,14 +341,14 @@ const enter = Effect.fnUntraced(function* (
       const scopeUnit = (yield* scopes(bins.systemdRun))
         ? `igloo-${session.id}-fallback-${boot.id}.scope`
         : undefined
-      const guestPackages = yield* guestProfile(session.runnerRootLink)
-      const shell = yield* onPath(searchPath(host, guestPackages), 'bash')
+      const guestSystem = yield* guestProfile(session.runnerRootLink)
+      const shell = yield* onPath(searchPath(host, guestSystem), 'bash')
       if (shell === undefined) {
         return yield* new FallbackError({
           message: 'no bash on PATH, so there is no shell for the sandbox to start',
         })
       }
-      const built = argv(layoutFor(session, host, guestPackages, shell))
+      const built = argv(layoutFor(session, host, guestSystem, shell))
       // The whole invocation, because a sandbox that will not open fails inside
       // bwrap's argument handling and the argv is the only account of why.
       yield* boot.record({
@@ -356,7 +356,7 @@ const enter = Effect.fnUntraced(function* (
         event: 'sandbox',
         scope: scopeUnit ?? null,
       })
-      return { args: built, bwrap: bwrapPath, guest: guestPackages, scope: scopeUnit }
+      return { args: built, bwrap: bwrapPath, guest: guestSystem, scope: scopeUnit }
     }),
   )
 

@@ -307,8 +307,6 @@ describe('Spec.fromConfig, for a profile grant', () => {
       plan.runner.brokerEnv['NODE_EXTRA_CA_CERTS'],
       '/etc/ssl/certs/ca-certificates.crt',
     )
-    // A service's clients are the user's to install, as any package is.
-    assert.deepStrictEqual(plan.runner.brokerPackages, [])
     assert.isUndefined(plan.runner.gitBroker)
     assert.notProperty(planFor({}).runner.brokerEnv, 'RUNPOD_API_KEY')
   })

@@ -12,9 +12,6 @@ const spec: Flake.RunnerSpec = {
   iglooFlakePath: '/home/you/src/igloo-next',
   brokerAuthority: undefined,
   brokerEnv: {},
-  brokerEtc: {},
-  brokerFiles: [],
-  brokerPackages: [],
   contentModules: [],
   credentials: [],
   disk: undefined,
@@ -114,51 +111,20 @@ describe('Flake.render', () => {
     assert.include(Flake.render(spec), 'brokerAuthority = null;')
   })
 
-  it('emits the environment that points a provider client at the broker', () => {
+  it('emits the environment that points a client at the broker', () => {
     const text = Flake.render({
       ...spec,
       brokerEnv: {
         ANTHROPIC_API_KEY: 'igloo-broker-holds-the-real-key',
-        ANTHROPIC_BASE_URL: 'http://127.0.0.1:3128/api.anthropic.com',
+        HTTPS_PROXY: 'http://127.0.0.1:3129',
       },
     })
-    assert.include(text, 'ANTHROPIC_BASE_URL = "http://127.0.0.1:3128/api.anthropic.com";')
+    assert.include(text, 'HTTPS_PROXY = "http://127.0.0.1:3129";')
     assert.include(text, 'ANTHROPIC_API_KEY = "igloo-broker-holds-the-real-key";')
   })
 
   it('says so when no provider grant exists either', () => {
     assert.include(Flake.render(spec), 'brokerEnv = { };')
-    assert.include(Flake.render(spec), 'brokerFiles = [ ];')
-    assert.include(Flake.render(spec), 'brokerEtc = { };')
-    assert.include(Flake.render(spec), 'brokerPackages = [ ];')
-  })
-
-  it('emits the packages the broker’s clients need, as Nix strings', () => {
-    assert.include(
-      Flake.render({ ...spec, brokerPackages: ['runpodctl'] }),
-      'brokerPackages = [ "runpodctl" ];',
-    )
-  })
-
-  it('emits the /etc files that point a client at the broker, escaped as Nix strings', () => {
-    const text = Flake.render({
-      ...spec,
-      brokerEtc: { 'igloo/opencode.json': '{"provider":{}}\n' },
-    })
-    assert.include(text, '"igloo/opencode.json" = "{\\"provider\\":{}}\n";')
-  })
-
-  it('emits the files that point a client at the broker, escaped as Nix strings', () => {
-    const text = Flake.render({
-      ...spec,
-      brokerFiles: [
-        { content: '{\n  "providers": {}\n}\n', path: '.pi/agent/models.json', program: 'pi' },
-      ],
-    })
-    assert.include(
-      text,
-      '{ path = ".pi/agent/models.json"; program = "pi"; content = "{\n  \\"providers\\": {}\n}\n"; }',
-    )
   })
 
   it('says so when no content layer was found', () => {
