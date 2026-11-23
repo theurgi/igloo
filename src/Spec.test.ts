@@ -115,12 +115,24 @@ describe('Spec.fromConfig, on the rest of what it decides', () => {
       source: file(`/${name}`),
     }) as const
   const inferenceGrant = {
-    grant: { profile: 'anthropic-messages' },
+    grant: {
+      definedBy: 'igloo',
+      hosts: {
+        'api.anthropic.com': {
+          allow: [{ method: ['POST'], path: 'v1/messages', set: 'messages' }],
+          deny: [],
+          send: { header: 'x-api-key' },
+        },
+      },
+      placeholders: ['ANTHROPIC_API_KEY'],
+      profile: 'anthropic-messages',
+    },
     layer: 'project',
     mode: 'broker',
     name: 'ANTHROPIC_KEY',
     source: file('/key'),
   } as const
+  const modelServer: Config.ModelServerDeclaration = { layer: 'user', name: 'local', port: 8080 }
 
   it('points git at the broker once per upstream, and not at all without a git grant', () => {
     assert.deepStrictEqual(
@@ -132,11 +144,16 @@ describe('Spec.fromConfig, on the rest of what it decides', () => {
   })
 
   it('has the guest trust the broker’s authority only when the broker answers a name', () => {
-    const git = planFor({ secrets: [gitGrant(['you/api'], 'ONE')] }).runner
-    assert.strictEqual(git.brokerAuthority, facts.tlsAuthority)
-    assert.strictEqual(git.brokerEnv['NODE_EXTRA_CA_CERTS'], '/etc/ssl/certs/ca-certificates.crt')
+    for (const answered of [gitGrant(['you/api'], 'ONE'), inferenceGrant]) {
+      const { runner } = planFor({ secrets: [answered] })
+      assert.strictEqual(runner.brokerAuthority, facts.tlsAuthority)
+      assert.strictEqual(
+        runner.brokerEnv['NODE_EXTRA_CA_CERTS'],
+        '/etc/ssl/certs/ca-certificates.crt',
+      )
+    }
     for (const runner of [
-      planFor({ secrets: [inferenceGrant] }).runner,
+      planFor({ modelServers: [modelServer] }).runner,
       planFor({ tunnel: 'any' }).runner,
     ]) {
       assert.isUndefined(runner.brokerAuthority)
@@ -148,7 +165,11 @@ describe('Spec.fromConfig, on the rest of what it decides', () => {
     const environment = planFor({ secrets: [gitGrant(['you/api'], 'ONE')], tunnel: [] }).runner
       .brokerEnv
     assert.strictEqual(environment['HTTPS_PROXY'], 'http://127.0.0.1:3129')
-    assert.notProperty(planFor({ secrets: [inferenceGrant] }).runner.brokerEnv, 'HTTPS_PROXY')
+    assert.strictEqual(
+      planFor({ secrets: [inferenceGrant] }).runner.brokerEnv['HTTPS_PROXY'],
+      'http://127.0.0.1:3129',
+    )
+    assert.notProperty(planFor({ modelServers: [modelServer] }).runner.brokerEnv, 'HTTPS_PROXY')
   })
 
   it('gives a VM a broker for a brokered credential or a tunnel, and none for neither', () => {
@@ -237,18 +258,37 @@ describe('Spec.fromConfig, on what the drift report hashes', () => {
   })
 })
 
-describe('Spec.fromConfig, for a runpod grant', () => {
-  const runpodGrant = {
-    grant: { profile: 'runpod' },
-    layer: 'project',
-    mode: 'broker',
-    name: 'RUNPOD_API_KEY',
-    source: file('/secrets/runpod'),
-  } as const
-  const plan = planFor({ secrets: [runpodGrant] })
+describe('Spec.fromConfig, for a profile grant', () => {
+  const rules = (over: Record<string, unknown> = {}) => ({
+    allow: [
+      { method: ['GET', 'HEAD'], path: 'v2/**', set: 'read' },
+      { method: ['POST'], path: 'v2/pods', set: 'pods' },
+    ],
+    deny: [],
+    send: 'bearer' as const,
+    ...over,
+  })
+  const runpodGrant = (
+    hosts: Record<string, ReturnType<typeof rules>> = { 'api.runpod.io': rules() },
+  ) =>
+    ({
+      grant: {
+        definedBy: 'igloo',
+        hosts,
+        placeholders: ['RUNPOD_API_KEY', 'RUNPOD_TOKEN'],
+        profile: 'runpod',
+      },
+      layer: 'project',
+      mode: 'broker',
+      name: 'RUNPOD_API_KEY',
+      source: file('/secrets/runpod'),
+    }) as const
+  const plan = planFor({ secrets: [runpodGrant()] })
 
-  it('grants the broker the account, and holds its key there', () => {
-    assert.deepStrictEqual(plan.grants, [{ credential: 'RUNPOD_API_KEY', profile: 'runpod' }])
+  it('grants the broker what it reads of the grant, and holds its key there', () => {
+    assert.deepStrictEqual(plan.grants, [
+      { credential: 'RUNPOD_API_KEY', hosts: { 'api.runpod.io': rules() }, profile: 'runpod' },
+    ])
     assert.deepStrictEqual(
       plan.brokered.map(each => each.name),
       ['RUNPOD_API_KEY'],
@@ -257,22 +297,49 @@ describe('Spec.fromConfig, for a runpod grant', () => {
     assert.isTrue(plan.broker)
   })
 
-  it('has the guest reach Runpod’s names through the tunnel, trusting the broker’s authority', () => {
+  it('sets the profile’s placeholders, and has the guest reach its hosts trusting the broker', () => {
     assert.strictEqual(plan.runner.brokerAuthority, facts.tlsAuthority)
-    assert.strictEqual(plan.runner.brokerEnv['RUNPOD_API_KEY'], 'igloo-broker-holds-the-real-key')
+    for (const name of ['RUNPOD_API_KEY', 'RUNPOD_TOKEN']) {
+      assert.strictEqual(plan.runner.brokerEnv[name], 'igloo-broker-holds-the-real-key')
+    }
     assert.strictEqual(plan.runner.brokerEnv['HTTPS_PROXY'], 'http://127.0.0.1:3129')
     assert.strictEqual(
       plan.runner.brokerEnv['NODE_EXTRA_CA_CERTS'],
       '/etc/ssl/certs/ca-certificates.crt',
     )
-    assert.deepStrictEqual(plan.runner.brokerPackages, ['runpodctl'])
+    // A service's clients are the user's to install, as any package is.
+    assert.deepStrictEqual(plan.runner.brokerPackages, [])
     assert.isUndefined(plan.runner.gitBroker)
-    assert.deepStrictEqual(planFor({}).runner.brokerPackages, [])
+    assert.notProperty(planFor({}).runner.brokerEnv, 'RUNPOD_API_KEY')
   })
 
-  it('records the grant as what the broker was started with', () => {
-    assert.include(plan.hostSide, 'runpod RUNPOD_API_KEY')
-    assert.notStrictEqual(plan.hostSide, planFor({}).hostSide)
+  it('records the profile, its sets and hosts, and a hash of the rules sent', () => {
+    assert.match(
+      plan.hostSide,
+      /^runpod RUNPOD_API_KEY sets=pods,read hosts=api\.runpod\.io rules=[0-9a-f]{64}$/m,
+    )
+    // The same rules in another order are the same grant.
+    const reordered = planFor({
+      secrets: [
+        runpodGrant({ 'api.runpod.io': rules({ allow: [...rules().allow].toReversed() }) }),
+      ],
+    })
+    assert.strictEqual(reordered.hostSide, plan.hostSide)
+    // A rule changed under the same sets and hosts is a change.
+    const widened = planFor({
+      secrets: [
+        runpodGrant({
+          'api.runpod.io': rules({
+            allow: [...rules().allow, { method: ['DELETE'], path: 'v2/pods/*', set: 'pods' }],
+          }),
+        }),
+      ],
+    })
+    assert.notStrictEqual(widened.hostSide, plan.hostSide)
+    const sentOtherwise = planFor({
+      secrets: [runpodGrant({ 'api.runpod.io': rules({ send: { header: 'x-key' } }) })],
+    })
+    assert.notStrictEqual(sentOtherwise.hostSide, plan.hostSide)
   })
 })
 

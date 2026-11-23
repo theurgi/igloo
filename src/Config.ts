@@ -1,5 +1,5 @@
 import type { Binaries } from './Binaries.ts'
-import type { Grant as BrokerGrant, ModelServerGrant, TunnelScope } from './broker.ts'
+import type { GitGrant, ProfileGrant, TunnelScope } from './broker.ts'
 import type { Publication } from './Vm.ts'
 
 import { Array as Arr, Effect, FileSystem, Predicate, Result, Schema } from 'effect'
@@ -7,21 +7,18 @@ import { ChildProcessSpawner } from 'effect/unstable/process'
 import * as path from 'node:path'
 
 import {
-  isCloudProfile,
   isHostname,
-  isInferenceProfile,
   isModelServerName,
-  isProfileName,
   isRepo,
   isTcpPort,
   normaliseRepo,
-  profileNames,
   profiles,
   tlsCertificateCredential,
   tlsKeyCredential,
 } from './broker.ts'
 import * as Evaluation from './Evaluation.ts'
 import { nixString } from './Flake.ts'
+import * as Profiles from './Profiles.ts'
 import * as Secrets from './Secrets.ts'
 
 export class ConfigError extends Schema.TaggedError<ConfigError>()('ConfigError', {
@@ -103,26 +100,34 @@ export const projectLayer = (projectRoot: string): LayerFiles => ({
 export type NetworkMode = 'internet' | 'none' | 'restricted'
 
 /**
- * What a brokered credential may be used for: an upstream profile, and for a git
- * profile the repositories it may reach. An inference profile reaches whichever
- * model a request names; the key's own limits at the provider bound that.
+ * What a brokered credential may be used for: `github` and the repositories it
+ * may reach, or a profile and what the sets it chose allow at the hosts they
+ * reach. The broker's own grant shape minus the credential name, which
+ * composition adds once it knows which credential the grant belongs to.
  *
- * The profile decides the upstream, so a grant names what is reachable there and
- * never where "there" is. This is the broker's own grant shape minus the
- * credential name, which composition adds once it knows which credential the
- * grant belongs to.
+ * A profile grant carries two facts the broker is not sent: `placeholders`,
+ * the variables the guest holds the placeholder key in, and `definedBy`, the
+ * layer whose definition it is, since one igloo ships, as it ships it, is
+ * exempt from a `restricted` ceiling and every other is held to it.
  *
- * Distributed over the union deliberately: a plain `Omit` of a union keeps only
- * the keys both members share, which would silently drop `repos` — the entire
- * content of a git grant. A model server's grant is not a credential's, so it
- * is not among them: `modelServers` declares those.
+ * A model server's grant is not a credential's, so it is not among them:
+ * `modelServers` declares those.
  */
 export type Grant =
-  Exclude<BrokerGrant, ModelServerGrant> extends infer T
-    ? T extends T
-      ? Omit<T, 'credential'>
-      : never
-    : never
+  | Omit<GitGrant, 'credential'>
+  | (Omit<ProfileGrant, 'credential'> & {
+      readonly definedBy: Layer
+      readonly placeholders: readonly string[]
+    })
+
+/** Where a profile is defined: igloo's own, the user layer, or a project's. */
+export type Layer = 'igloo' | 'project' | 'user'
+
+/** A profile, and the layer that defines it. */
+interface Defined {
+  readonly by: Layer
+  readonly profile: Profiles.Profile
+}
 
 /**
  * A model server on this machine's loopback that this project's broker may
@@ -253,6 +258,7 @@ const settings = new Map<string, 'both' | 'project' | 'user'>([
   ['network', 'both'],
   ['networkCeiling', 'user'],
   ['ports', 'project'],
+  ['profiles', 'both'],
   ['secrets', 'both'],
   ['tunnel', 'project'],
   ['tunnelCeiling', 'user'],
@@ -283,6 +289,8 @@ export interface PolicyLayer {
 }
 
 export interface Layers {
+  /** The profiles igloo ships, beneath the user layer's (`Profiles.shipped`). */
+  readonly igloo: ReadonlyMap<string, Profiles.Profile>
   readonly project: PolicyLayer | undefined
   /**
    * Other spellings of `projectRoot` that the user layer's `projects` lists
@@ -568,6 +576,86 @@ const refuseFlatRepos = (
   })
 
 /**
+ * The profiles a layer's credentials may grant: igloo's and the user layer's
+ * for the user layer, and a project's own besides for a project. `layer` is
+ * the declaring layer's, for a message.
+ */
+interface Available {
+  readonly layer: 'project' | 'user'
+  readonly profiles: ReadonlyMap<string, Defined>
+}
+
+/**
+ * A brokered credential's grant of a profile: the sets it allows, in `allow`,
+ * and the hosts those sets reach, in `hosts`, which have to be exactly those.
+ *
+ * The hosts are written twice, in the profile and here, because where a key
+ * goes is the decision that matters most and the one a profile someone else
+ * wrote could abuse: an update to it that moves a host fails here, rather than
+ * sending the key there on the broker's first request. Neither is defaulted,
+ * and a grant written before profiles had sets, with neither, is refused with
+ * the lines that keep what it allowed: every set the profile has.
+ */
+const readProfileGrant = (
+  where: string,
+  name: string,
+  entry: Record<string, unknown>,
+  profile: string,
+  defined: Defined,
+): Result.Result<Grant, ConfigError> =>
+  Result.gen(function* () {
+    const setting = `secrets.${name}`
+    const sets = Object.keys(defined.profile.allow).toSorted()
+    if ('repos' in entry) {
+      return yield* bad(
+        `${where}: \`${setting}.repos\` does not apply to the ${profile} profile, which has no repositories: a grant of it chooses its sets in \`allow\`.`,
+      )
+    }
+    if (!('hosts' in entry) && !('allow' in entry)) {
+      const every = Profiles.reached(defined.profile, sets).toSorted()
+      return yield* bad(
+        `${where}: \`${setting}\` grants the ${profile} profile without choosing from it. A grant names the sets it allows in \`allow\`, and the hosts they reach in \`hosts\`, so that a profile whose update moves a host fails here rather than sending the key there. To keep allowing everything the profile does, write:\n\n  hosts = ${nixList(every)};\n  allow = ${nixList(sets)};\n\nand drop the sets this credential does not need.`,
+      )
+    }
+    const allowed = yield* readStringList(where, `${setting}.allow`, entry['allow'] ?? [])
+    if (allowed.length === 0) {
+      return yield* bad(
+        `${where}: \`${setting}.allow\` chooses no set, so the grant would allow nothing. The ${profile} profile's sets: ${sets.join(', ')}.`,
+      )
+    }
+    for (const [at, set] of allowed.entries()) {
+      if (!Object.hasOwn(defined.profile.allow, set)) {
+        return yield* bad(
+          `${where}: \`${setting}.allow\` chooses ${set}, which is not one of the ${profile} profile's sets: ${sets.join(', ')}.`,
+        )
+      }
+      if (allowed.indexOf(set) !== at) {
+        return yield* bad(`${where}: \`${setting}.allow\` chooses ${set} twice.`)
+      }
+    }
+    const reaches = Profiles.reached(defined.profile, allowed)
+    const pinned = yield* readStringList(where, `${setting}.hosts`, entry['hosts'] ?? [])
+    const lowered = pinned.map(host => host.toLowerCase())
+    const unpinned = reaches.filter(host => !lowered.includes(host))
+    if (unpinned.length > 0) {
+      return yield* bad(
+        `${where}: \`${setting}.hosts\` does not name ${unpinned.join(', ')}, which the sets it allows reach. The key is sent only to hosts its own declaration names: add ${unpinned.length === 1 ? 'it' : 'them'} if it may go there, or drop the sets that reach ${unpinned.length === 1 ? 'it' : 'them'}. The sets chosen reach exactly:\n\n  hosts = ${nixList(reaches.toSorted())};`,
+      )
+    }
+    const unreached = pinned.filter(host => !reaches.includes(host.toLowerCase()))
+    if (unreached.length > 0) {
+      return yield* bad(
+        `${where}: \`${setting}.hosts\` names ${unreached.join(', ')}, which no set it allows reaches${unreached.some(host => Object.hasOwn(defined.profile.hosts, host.toLowerCase())) ? '' : ` or the ${profile} profile names`}. A host no chosen set reaches is not answered, so it is not one of the grant's: drop it, or allow a set that reaches it.`,
+      )
+    }
+    return {
+      ...Profiles.grantOf(profile, defined.profile, allowed),
+      definedBy: defined.by,
+      placeholders: defined.profile.placeholders,
+    }
+  })
+
+/**
  * A brokered credential's grant: which profile, and what it may reach.
  *
  * Required on a brokered credential rather than defaulted to something empty,
@@ -579,38 +667,28 @@ const readGrant = (
   where: string,
   name: string,
   entry: Record<string, unknown>,
+  available: Available,
 ): Result.Result<Grant, ConfigError> =>
   Result.gen(function* () {
     const profile = entry['profile']
-    if (!isProfileName(profile)) {
+    if (profile !== 'github') {
+      const defined = typeof profile === 'string' ? available.profiles.get(profile) : undefined
+      if (typeof profile !== 'string' || defined === undefined) {
+        const known = ['github', ...available.profiles.keys()].toSorted()
+        return yield* bad(
+          `${where}: \`secrets.${name}.profile\` must name a broker profile${typeof profile === 'string' ? `, and ${profile} is none ${available.layer === 'user' ? 'igloo or this layer defines' : 'igloo, the user layer or this project defines'}` : ''}. Defined: ${known.map(each => `"${each}"`).join(', ')}.${available.layer === 'user' ? " A project's own profiles are for that project's credentials alone." : ''} A brokered credential without a profile has no upstream the broker is allowed to construct a request to, so it could only refuse everything asked of it.`,
+        )
+      }
+      return yield* readProfileGrant(where, name, entry, profile, defined)
+    }
+
+    // GitHub's grant is still its code's: what it may do is by repository.
+    for (const key of ['allow', 'hosts']) {
+      if (!(key in entry)) continue
       return yield* bad(
-        `${where}: \`secrets.${name}.profile\` must name a broker profile. Built: ${profileNames
-          .map(known => `"${known}"`)
-          .join(
-            ', ',
-          )}. A brokered credential without a profile has no upstream the broker is allowed to construct a request to, so it could only refuse everything asked of it.`,
+        `${where}: \`secrets.${name}.${key}\` does not apply to the github profile, whose grant names repositories in \`repos\`, \`{ read = [ … ]; write = [ … ]; }\`.`,
       )
     }
-
-    // Refused rather than ignored: `repos` on a model grant is someone believing
-    // they narrowed something.
-    if (isInferenceProfile(profile)) {
-      if ('repos' in entry) {
-        return yield* bad(
-          `${where}: \`secrets.${name}.repos\` does not apply to the ${profile} profile, which calls whichever model a request names. ${KEY_LIMITS}`,
-        )
-      }
-      return { profile }
-    }
-    if (isCloudProfile(profile)) {
-      if ('repos' in entry) {
-        return yield* bad(
-          `${where}: \`secrets.${name}.repos\` does not apply to the ${profile} profile, which reaches the whole account the key is for: what it may change there is fixed by the profile, and what it may spend is the account's balance. Delete the line.`,
-        )
-      }
-      return { profile }
-    }
-
     if (Array.isArray(entry['repos'])) return yield* refuseFlatRepos(where, name, entry)
     const byAccess = entry['repos'] === undefined ? {} : asRecord(entry['repos'])
     if (byAccess === undefined) {
@@ -639,7 +717,7 @@ const readGrant = (
     for (const repo of [...repos, ...write]) {
       if (!isRepo(repo)) {
         return yield* bad(
-          `${where}: \`${repo}\` is not a repository. Write \`owner/repo\` — ${profiles[profile].host} is decided by the profile, so it is not part of the name.`,
+          `${where}: \`${repo}\` is not a repository. Write \`owner/repo\` — ${profiles.github.host} is decided by the profile, so it is not part of the name.`,
         )
       }
     }
@@ -667,9 +745,10 @@ interface Shared {
   readonly projects: readonly string[]
 }
 
-const BODY_KEYS = new Set(['mode', 'profile', 'repos', 'source'])
+const BODY_KEYS = new Set(['allow', 'hosts', 'mode', 'profile', 'repos', 'source'])
 
-const BODY_SHAPE = 'plus `profile` when the mode is "broker", and `repos` for a git profile'
+const BODY_SHAPE =
+  'plus `profile` when the mode is "broker", and `hosts` and `allow` for a profile, or `repos` for github'
 
 /** A declaration's fields that are gone, and what to do instead. */
 const removedFromBody = new Map<string, string>([
@@ -714,6 +793,7 @@ const readBody = (
   where: string,
   name: string,
   entry: Record<string, unknown>,
+  available: Available,
 ): Result.Result<Body, ConfigError> =>
   Result.gen(function* () {
     const mode = entry['mode']
@@ -725,7 +805,7 @@ const readBody = (
 
     const source = yield* readSource(where, `secrets.${name}.source`, entry['source'])
     if (mode === 'deliver') {
-      for (const key of ['profile', 'repos']) {
+      for (const key of ['allow', 'hosts', 'profile', 'repos']) {
         if (key in entry) {
           return yield* bad(
             `${where}: \`secrets.${name}.${key}\` only means something for a brokered credential. A delivered one is handed to the guest whole, so there is nothing left to scope — set \`mode = "broker"\` to have the host hold it and make the requests.`,
@@ -734,7 +814,7 @@ const readBody = (
       }
       return { mode, source }
     }
-    return { grant: yield* readGrant(where, name, entry), mode, source }
+    return { grant: yield* readGrant(where, name, entry, available), mode, source }
   })
 
 /**
@@ -762,6 +842,7 @@ const readProjects = (
 const readShared = (
   where: string,
   raw: unknown,
+  available: Available,
 ): Result.Result<ReadonlyMap<string, Shared>, ConfigError> =>
   Result.gen(function* () {
     const entries = asRecord(raw)
@@ -780,7 +861,7 @@ const readShared = (
           )
         }
       }
-      const body = yield* readBody(where, name, entry)
+      const body = yield* readBody(where, name, entry, available)
       const projects = yield* readProjects(where, `secrets.${name}`, entry['projects'])
       shared.set(name, { body, projects })
     }
@@ -791,6 +872,7 @@ const readShared = (
 const readOwn = (
   where: string,
   raw: unknown,
+  available: Available,
 ): Result.Result<ReadonlyMap<string, Body>, ConfigError> =>
   Result.gen(function* () {
     const entries = asRecord(raw)
@@ -814,7 +896,7 @@ const readOwn = (
           )
         }
       }
-      own.set(name, yield* readBody(where, name, entry))
+      own.set(name, yield* readBody(where, name, entry, available))
     }
     return own
   })
@@ -850,17 +932,18 @@ const composeSecrets = (
   userValues: Record<string, unknown>,
   userPath: string,
   project: ProjectPolicy | undefined,
+  available: { readonly project: Available; readonly user: Available },
 ): Result.Result<readonly SecretDeclaration[], ConfigError> =>
   Result.gen(function* () {
     const fromUser =
       'secrets' in userValues
-        ? yield* readShared(userPath, userValues['secrets'])
+        ? yield* readShared(userPath, userValues['secrets'], available.user)
         : new Map<string, Shared>()
     if (project === undefined) return []
 
     const own =
       'secrets' in project.values
-        ? yield* readOwn(project.path, project.values['secrets'])
+        ? yield* readOwn(project.path, project.values['secrets'], available.project)
         : new Map<string, Body>()
 
     const listsThis = listing(project)
@@ -895,6 +978,23 @@ const composeSecrets = (
         )
       }
       calling.set(secret.grant.profile, secret)
+    }
+
+    // The broker routes a profile's request by the name it was addressed to,
+    // so a host is one grant's.
+    const reaching = new Map<string, SecretDeclaration>()
+    for (const secret of secrets) {
+      if (secret.mode !== 'broker' || !('hosts' in secret.grant)) continue
+      for (const host of Object.keys(secret.grant.hosts)) {
+        const first = reaching.get(host)
+        if (first !== undefined && first.mode === 'broker') {
+          const elsewhere = fileOf(first) === fileOf(secret) ? '' : ` (in ${fileOf(first)})`
+          return yield* bad(
+            `${fileOf(secret)}: \`${secret.name}\` grants the ${secret.grant.profile} profile and \`${first.name}\`${elsewhere} the ${first.grant.profile} profile, and both reach ${host}. The broker answers a host for one grant, chosen by the name a request is addressed to: keep one of them, or drop the sets that reach it from one.`,
+          )
+        }
+        reaching.set(host, secret)
+      }
     }
 
     // The broker holds its TLS certificate and key beside the credentials,
@@ -1148,8 +1248,59 @@ export const compose = (layers: Layers): Result.Result<Composed, ConfigError> =>
             root: layers.projectRoot,
             values: project.values,
           }
-    const secrets = yield* composeSecrets(userValues, userPath, projectPolicy)
+    // igloo's profiles, beneath the user layer's, which replace one of the
+    // same name: it is the user's machine. Then a project's, for itself alone,
+    // which replace nothing, so that a credential the user layer shares cannot
+    // have its rules changed from a project's file.
+    const definedIn = (where: string, values: Record<string, unknown>) =>
+      'profiles' in values
+        ? Result.mapError(
+            Profiles.read(where, values['profiles']),
+            message => new ConfigError({ message }),
+          )
+        : Result.succeed(new Map<string, Profiles.Profile>())
+    const userProfiles = yield* definedIn(userPath, userValues)
+    const projectProfiles =
+      project === undefined
+        ? new Map<string, Profiles.Profile>()
+        : yield* definedIn(project.path, project.values)
+    const defined = (by: Layer, from: ReadonlyMap<string, Profiles.Profile>) =>
+      [...from].map(([name, profile]): [string, Defined] => [name, { by, profile }])
+    const forUser = new Map([...defined('igloo', layers.igloo), ...defined('user', userProfiles)])
+    for (const name of projectProfiles.keys()) {
+      const taken = forUser.get(name)
+      if (project === undefined || taken === undefined) continue
+      return yield* bad(
+        `${project.path}: \`profiles.${name}\` is ${taken.by === 'igloo' ? "one of igloo's" : `defined in ${userPath}`} already. A project may define profiles of its own and replace none, so that a credential the user layer shares cannot have its rules changed from a project's file. Give this one another name.`,
+      )
+    }
+    const forProject = new Map([...forUser, ...defined('project', projectProfiles)])
+
+    const secrets = yield* composeSecrets(userValues, userPath, projectPolicy, {
+      project: { layer: 'project', profiles: forProject },
+      user: { layer: 'user', profiles: forUser },
+    })
     const modelServers = yield* composeModelServers(userValues, userPath, projectPolicy)
+
+    // A profile's hosts count as destinations under a `restricted` ceiling,
+    // whichever layer defined it or declared the credential, since a profile
+    // that allows everything at a host would otherwise reach past the
+    // ceiling. One igloo ships, as it ships it, is exempt: igloo chose its
+    // hosts. Under `none` a brokered credential is refused below already.
+    if (ceiling === 'restricted') {
+      for (const secret of secrets) {
+        if (secret.mode !== 'broker' || !('hosts' in secret.grant)) continue
+        if (secret.grant.definedBy === 'igloo') continue
+        const outside = Object.keys(secret.grant.hosts).find(
+          host => !ceilingHosts.some(allowed => allowed.toLowerCase() === host),
+        )
+        if (outside === undefined) continue
+        const file = secret.layer === 'user' ? userPath : (project?.path ?? userPath)
+        return yield* bad(
+          `${file}: \`secrets.${secret.name}\` grants the ${secret.grant.profile} profile${secret.grant.definedBy === 'user' ? ` that ${userPath} defines` : ''}, which sends its key to ${outside}, and ${userPath} sets \`networkCeiling = "restricted"\` with ${outside} not in its \`tunnelCeiling\`${ceilingHosts.length === 0 ? '' : ` (${ceilingHosts.join(', ')})`}. Under a restricted ceiling a profile's hosts count as destinations, as any \`tunnel\` entry does: add it there, or drop the sets that reach it here.`,
+        )
+      }
+    }
 
     // A model server's key is held beside the brokered credentials, under a
     // name of its own that a secret could also take.
@@ -1396,6 +1547,8 @@ const auditWorkspace = Effect.fnUntraced(function* (
 export const resolve = Effect.fn('Config.resolve')(function* (
   bins: Binaries,
   input: {
+    /** The profiles igloo ships (`Profiles.shipped`). */
+    readonly igloo: ReadonlyMap<string, Profiles.Profile>
     readonly project: { readonly root: string; readonly workspaceDir: string } | undefined
     readonly userLayerDir: string | undefined
   },
@@ -1428,6 +1581,7 @@ export const resolve = Effect.fn('Config.resolve')(function* (
   const layers = yield* readPolicyFiles(bins, policyFiles)
   const { notes, policy } = yield* Effect.fromResult(
     compose({
+      igloo: input.igloo,
       project: layers.project,
       projectAliases: yield* aliasesOf(layers.user?.values, input.project?.root),
       projectRoot: input.project?.root,

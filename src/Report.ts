@@ -15,6 +15,7 @@ import * as path from 'node:path'
 import * as BootLog from './BootLog.ts'
 import { profiles, tlsNamesCovered } from './broker.ts'
 import * as Flake from './Flake.ts'
+import * as Profiles from './Profiles.ts'
 import * as Project from './Project.ts'
 
 export class ReportError extends Schema.TaggedError<ReportError>()('ReportError', {
@@ -97,37 +98,57 @@ const ordinary = [
 ]
 
 /**
- * The hosts igloo itself names: the binary cache every guest is built from,
- * each broker profile's upstream, and every name the broker answers for one.
- * A URL keeps one of these.
+ * The profiles igloo itself has, by name and host: those its broker's code
+ * answers, and those it ships. A user's or a project's profile is not among
+ * them, and its hosts are replaced in a report like any other host.
  */
-const namedHosts: ReadonlySet<string> = new Set([
-  'cache.nixos.org',
-  ...Object.values(profiles).map(profile => profile.host),
-  ...tlsNamesCovered,
-])
+export interface Named {
+  readonly hosts: readonly string[]
+  readonly names: readonly string[]
+}
 
 /**
- * What igloo itself calls things. A field holding one keeps it, and text keeps
- * every occurrence, so that a credential named after its profile, or a project
- * called `api`, does not take `api.anthropic.com` with it.
+ * igloo's own profiles, from those it ships, or its code's alone where they
+ * could not be read: a report is for what went wrong, which may be that.
  */
-const vocabulary: ReadonlySet<string> = new Set([
-  ...ordinary,
-  ...namedHosts,
-  ...Object.keys(profiles),
-  'model-server',
-  // A tunnel's destinations when it may reach any public name.
-  'any',
-])
+export const namedBy = (shipped: ReadonlyMap<string, Profiles.Profile> | undefined): Named => ({
+  hosts: [
+    ...Object.values(profiles).map(profile => profile.host),
+    ...tlsNamesCovered,
+    ...(shipped === undefined ? [] : Profiles.hostsOf(shipped)),
+  ],
+  names: [...Object.keys(profiles), ...(shipped?.keys() ?? [])],
+})
 
-/** Kept wherever they occur as whole names, before any value is looked for. */
-const kept: readonly string[] = [...namedHosts, '/nix/store'].toSorted(
-  // Longest first, so a name is kept whole before any name inside it, such as
-  // `github.com` in `api.github.com`, settles part of it and leaves the rest
-  // to be read as a value.
-  (one, other) => other.length - one.length,
-)
+/** What a report keeps as igloo's own, for the profiles in `named`. */
+const vocabularyOf = (named: Named) => {
+  /**
+   * The hosts igloo itself names: the binary cache every guest is built from,
+   * and every host of igloo's profiles. A URL keeps one of these.
+   */
+  const hosts: ReadonlySet<string> = new Set(['cache.nixos.org', ...named.hosts])
+  /**
+   * What igloo itself calls things. A field holding one keeps it, and text
+   * keeps every occurrence, so that a credential named after its profile, or a
+   * project called `api`, does not take `api.anthropic.com` with it.
+   */
+  const words: ReadonlySet<string> = new Set([
+    ...ordinary,
+    ...hosts,
+    ...named.names,
+    'model-server',
+    // A tunnel's destinations when it may reach any public name.
+    'any',
+  ])
+  /** Kept wherever they occur as whole names, before any value is looked for. */
+  const kept: readonly string[] = [...hosts, '/nix/store'].toSorted(
+    // Longest first, so a name is kept whole before any name inside it, such
+    // as `github.com` in `api.github.com`, settles part of it and leaves the
+    // rest to be read as a value.
+    (one, other) => other.length - one.length,
+  )
+  return { hosts, kept, words }
+}
 
 /** `host` and `:port` of an authority, a bracketed IPv6 address's brackets kept. */
 const splitHostPort = (hostPort: string): { readonly host: string; readonly port: string } => {
@@ -183,7 +204,8 @@ interface Redacted {
  * value across the whole report, whichever file it is in and whichever way it
  * was found.
  */
-const makeValues = () => {
+const makeValues = (named: Named) => {
+  const vocabulary = vocabularyOf(named)
   const byValue = new Map<string, string>()
   const kindOf = new Map<string, Kind>()
   const numbered = new Map<Kind, number>()
@@ -219,7 +241,7 @@ const makeValues = () => {
       ? false
       : isPathKind(kind)
         ? value !== '/' && value !== '/root'
-        : value.length >= 3 && !vocabulary.has(key)
+        : value.length >= 3 && !vocabulary.words.has(key)
     if (replaced) {
       // Paths before names, and longer before shorter, so that no value
       // replaces part of another: a project's root before the home directory
@@ -234,6 +256,7 @@ const makeValues = () => {
   return {
     add,
     inText: () => inText,
+    vocabulary,
     kindOf: (placeholder: string): Kind | undefined => kindOf.get(placeholder),
   }
 }
@@ -368,7 +391,7 @@ function* urls(values: Values, text: string): Generator<Span> {
     const { host, port } = splitHostPort(hostPort)
     const bare = unbracketed(host)
     const hostStart = hostAt + login + 1
-    if (bare !== '' && !namedHosts.has(bare.toLowerCase()) && !isLoopback(hostPort)) {
+    if (bare !== '' && !values.vocabulary.hosts.has(bare.toLowerCase()) && !isLoopback(hostPort)) {
       const placeholder = values.add(isIPv4(bare) || isIPv6(bare) ? 'ip' : 'host', bare)
       yield { end: hostStart + host.length, placeholder, start: hostStart, text: placeholder }
     } else if (hostPort !== '') {
@@ -419,7 +442,7 @@ const redactText = (values: Values, text: string): Redacted => {
     }
   })
 
-  for (const name of kept) {
+  for (const name of values.vocabulary.kept) {
     pieces = settle(pieces, (piece, before, after) =>
       occurrences(piece, before, after, name, false),
     )
@@ -483,7 +506,8 @@ const fieldText = (
   if (kind === undefined) return redactText(values, text)
   const port = field === 'target' ? (/:\d+$/.exec(text)?.[0] ?? '') : ''
   const value = text.slice(0, text.length - port.length)
-  if (vocabulary.has(value.toLowerCase()) || isLoopback(value)) return { placed: new Map(), text }
+  if (values.vocabulary.words.has(value.toLowerCase()) || isLoopback(value))
+    return { placed: new Map(), text }
   const placeholder = values.add(kind, value)
   return { placed: new Map([[placeholder, 1]]), text: `${placeholder}${port}` }
 }
@@ -668,6 +692,8 @@ export interface BootRecord {
 export interface Parts {
   readonly doctor: string
   readonly known: Known
+  /** igloo's own profiles, whose names and hosts a report keeps. */
+  readonly named: Named
   /** The boot record, or why there is none. */
   readonly record: BootRecord | string
   /** The commit igloo was built from, when its flake recorded one. */
@@ -685,7 +711,7 @@ export interface Parts {
  * one too.
  */
 export const render = (parts: Parts): string => {
-  const values = makeValues()
+  const values = makeValues(parts.named)
   const { known } = parts
   if (known.project !== undefined) values.add('project-root', known.project.root)
   for (const home of known.home) values.add('home', home)
@@ -804,6 +830,8 @@ export interface Request {
   readonly cwd: string
   readonly doctor: string
   readonly host: Host
+  /** igloo's own profiles, whose names and hosts a report keeps. */
+  readonly named: Named
   /** A boot id, or a boot record's directory; the latest launch's when `undefined`. */
   readonly record: string | undefined
   readonly revision: string | undefined
@@ -878,6 +906,7 @@ export const run = Effect.fn('Report.run')(function* (request: Request) {
           : { cid: found.project.cid, label: found.project.label, root: found.project.root },
       user: request.host.user,
     },
+    named: request.named,
     record: 'dir' in found ? yield* read(found.dir) : found.missing,
     revision: request.revision,
     version: request.version,
