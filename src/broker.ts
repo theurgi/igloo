@@ -1020,11 +1020,21 @@ const routeProfile = (
   const matching = at.allow.filter(rule => ruleMatches(rule, method, rest))
   const rule = matching.find(each => each.graphql === undefined) ?? matching[0]
   if (rule === undefined) {
-    // A path a chosen rule names, by another method.
-    if (at.allow.some(each => pathMatches(each.path, rest))) {
-      return deny(405, `${method} is not how ${path} is requested through ${lowered}`, {
-        host: lowered,
-      })
+    // A path a chosen rule names, by other methods: a `*` rule would have
+    // matched any.
+    const methods = [
+      ...new Set(
+        at.allow.flatMap(each =>
+          each.method !== '*' && pathMatches(each.path, rest) ? each.method : [],
+        ),
+      ),
+    ]
+    if (methods.length > 0) {
+      return deny(
+        405,
+        `${method} ${path} is not something this VM may do through ${lowered}, which allows ${methods.join(', ')} there`,
+        { host: lowered },
+      )
     }
     return deny(403, `${method} ${path} is not something this VM may do through ${lowered}`, {
       host: lowered,

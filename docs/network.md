@@ -55,15 +55,17 @@ changes, rather than rewriting it, a running broker keeps the nameservers it sta
 - **`restricted`** reaches the destinations the project lists and whatever its brokered grants
   allow. A brokered credential's upstream does not need to be listed, because the broker reaches it
   itself rather than through the tunnel. `github.com`, `api.github.com` and `uploads.github.com`,
-  for a `github` grant, and `api.runpod.io` and `api.runpod.ai`, for a `runpod` grant, are reached
-  through the tunnel but answered by the broker, so they need no listing either; each one listed
-  also lets through the reads the grant does not cover there, with no credential. A model server is
-  reached the same way as an upstream, so `restricted` with no `tunnel` and a model server reaches
-  that server and nothing else. With no destinations, no brokered credential and no model server,
-  `restricted` reaches nothing, and igloo prints a note saying `none` says so more plainly.
-  `restricted` bounds the VM's own connections, not what a provider does for a model: a model call
-  may use the provider's own tools, such as web search, web fetch or an MCP connector, and through
-  them workspace data can reach any address
+  for a `github` grant, and each host a granted profile's chosen sets reach, such as
+  `api.anthropic.com`, `openrouter.ai` or `api.runpod.io`, are reached through the tunnel but
+  answered by the broker, so they need no listing either; each one listed also lets through the
+  reads the grant does not cover there, with no credential. Under a user layer's `restricted`
+  ceiling, the hosts of a profile a layer defined have to be in `tunnelCeiling`; igloo's own are
+  exempt. A model server is reached the same way as an upstream, so `restricted` with no `tunnel`
+  and a model server reaches that server and nothing else. With no destinations, no brokered
+  credential and no model server, `restricted` reaches nothing, and igloo prints a note saying
+  `none` says so more plainly. `restricted` bounds the VM's own connections, not what a provider
+  does for a model: a model call may use the provider's own tools, such as web search, web fetch or
+  an MCP connector, and through them workspace data can reach any address
   ([what the broker checks](credentials.md#what-the-broker-checks)).
 - **`internet`** reaches any public hostname. `tunnel` has no effect under it, and igloo prints a
   note if a project lists destinations anyway.
@@ -85,12 +87,15 @@ connection inside it is end-to-end TLS between the guest and the destination, so
 read it, and polices only where it goes.
 
 The exception is a name the broker answers: `github.com`, `api.github.com` and `uploads.github.com`,
-for a [`github` grant](credentials.md#how-the-guest-reaches-github), and `api.runpod.io` and
-`api.runpod.ai`, for a [`runpod` grant](credentials.md#runpod). A `CONNECT` to one reaches the
-broker rather than the host, under every mode, and the broker is the other end of the TLS, with a
-certificate from an authority the guest trusts. A read the grant does not cover is sent on to the
-host with no credential where the tunnel would have reached that name: under `internet`, or listed
-under `restricted`.
+for a [`github` grant](credentials.md#how-the-guest-reaches-github), and each host of a granted
+[profile](credentials.md#profiles) that its chosen sets reach: `api.anthropic.com` for
+`anthropic-messages`, `openrouter.ai` for `openrouter`, `api.runpod.io` and `api.runpod.ai` for
+[`runpod`](credentials.md#runpod), and those of a profile you define. A host no chosen set reaches
+is not answered. Each is answered by its name alone; there is no path of the broker's port that
+reaches one. A `CONNECT` to one reaches the broker rather than the host, under every mode, and the
+broker is the other end of the TLS, with a certificate from an authority the guest trusts. A read
+the grant does not cover is sent on to the host with no credential where the tunnel would have
+reached that name: under `internet`, or listed under `restricted`.
 
 - **Port 443 only.** No other port, no plain HTTP, no SSH, no UDP, no DNS and no ICMP, so `ping`,
   `dig` and `git` over SSH do not work. A [`github` grant](credentials.md#github) rewrites GitHub's

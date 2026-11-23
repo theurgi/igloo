@@ -215,6 +215,7 @@ generated file.
 | `tunnelCeiling`  | user             | unset: none allowed | The destinations a project may list in `tunnel`.         |
 | `ports`          | project          | `[ ]`               | Guest ports published on the host's loopback.            |
 | `secrets`        | user and project | none                | Credentials, brokered or delivered.                      |
+| `profiles`       | user and project | igloo's own         | What a brokered credential may do at a service.          |
 | `modelServers`   | user and project | none                | Model servers on this machine the broker may call.       |
 
 **`mem`** and **`vcpu`** are positive whole numbers. Set in the user layer, they are the default for
@@ -277,7 +278,18 @@ sides or as `{ guest = 5173; host = 5174; }`. It is the project's alone.
 [Network](network.md#published-ports) has the details.
 
 **`secrets`** declares credentials. A project's own go to that project. The user layer's go to the
-projects each one lists. [Credentials](credentials.md) covers both.
+projects each one lists. [Credentials](credentials.md) covers both. A brokered credential names its
+`profile`, and for any but `github` the sets it allows in `allow` and the hosts those sets reach in
+`hosts`, which have to be exactly those: a profile whose update moves a host is refused rather than
+sending the key there.
+
+**`profiles`** defines broker profiles by name, each the hosts a service's key goes to, how it is
+sent at each, the variables its clients read a key from, and named sets of rules
+([Profiles](credentials.md#profiles)). Defining one grants nothing: a credential chooses its sets.
+igloo's own sit beneath both layers. The user layer may define its own, import one, or replace one
+of igloo's by its name; a project may define its own, for itself, and replace neither igloo's nor
+the user layer's. Under a user layer's `networkCeiling = "restricted"`, each host a project's grants
+reach through a profile has to be in `tunnelCeiling`, but for igloo's own, as igloo ships them.
 
 **`modelServers`** names model servers listening on this machine's loopback, such as llama-server or
 Ollama, that the VM may call through the broker. Like `secrets`, a project's own go to that project,
@@ -307,6 +319,8 @@ and the user layer's to the projects each one lists.
       ];
       mode = "broker";
       profile = "openrouter";
+      hosts = [ "openrouter.ai" ];
+      allow = [ "models" ];
       projects = [ "${config.home.homeDirectory}/projects/demo" ];
     };
   };

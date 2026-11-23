@@ -13,10 +13,11 @@ checked there, and a claim here that the code does not bear out is a bug in one 
 - **The CLI**, `igloo` (`src/index.ts`). TypeScript on Bun, written with Effect. The flake compiles
   it with `bun build --compile` and wraps it (`cli` in `nix/packages.nix`) with `IGLOO_FLAKE` set to
   the flake's own store path, `IGLOO_REVISION` to its commit when it has one, and an `IGLOO_*`
-  variable naming each helper below, so an installed igloo builds VMs from the store and runs the
-  helpers it was built with. The home-manager module wraps it once more with `IGLOO_USER_LAYER`, the
-  user layer it builds into the store. The CLI runs on the host as the user, starts a VM's units,
-  and exits; the VM does not depend on it afterwards.
+  variable naming each helper below, and `IGLOO_PROFILES` the broker profiles it ships, so an
+  installed igloo builds VMs from the store and runs the helpers and reads the profiles it was built
+  with. The home-manager module wraps it once more with `IGLOO_USER_LAYER`, the user layer it builds
+  into the store. The CLI runs on the host as the user, starts a VM's units, and exits; the VM does
+  not depend on it afterwards.
 - **The runner flake**, one per project (`.igloo/runner/flake.nix`, written by `Flake.render`). It
   takes igloo's flake as a `path:` input and calls `lib.mkRunner`, with the composed policy as
   arguments and the content layers as `contentModules`. `mkRunner` (`nix/runner.nix`) evaluates the
@@ -25,9 +26,9 @@ checked there, and a claim here that the code does not bear out is a bug in one 
 - **The broker**, `igloo-broker` (`src/broker.ts`). One process per VM that holds a grant or has a
   tunnel destination. It holds that VM's credentials, serves brokered requests on one Unix socket
   and an HTTPS tunnel on another, and constructs every upstream request itself. For the hosts its
-  git and cloud grants reach, it answers TLS on a third socket, which the tunnel hands those
-  connections to. It is packaged from that one file and Bun, and imports nothing: not Effect, and
-  nothing else in `src/`.
+  git and profile grants reach, it answers TLS on a third socket, which the tunnel hands those
+  connections to. What a profile grant allows is data it is sent, never code it runs. It is packaged
+  from that one file and Bun, and imports nothing: not Effect, and nothing else in `src/`.
 - **`igloo-landlock`** (`src/landlock.c`). Runs a command under a Landlock ruleset: TCP connections
   only to the ports named, TCP binds only on the ports named, no abstract Unix socket, and, given
   paths, reads and writes only beneath them; and under a seccomp filter that refuses the sockets
@@ -136,6 +137,7 @@ Every module but `index.ts` has its tests beside it, in `src/<Module>.test.ts`.
 | `Templates.ts`                 | A new project's starting files: the user layer's templates, filled in and written by `init`.  |
 | `Cid.ts`                       | The vsock CID, a hash of the project's canonical root.                                        |
 | `Config.ts`                    | Finding, evaluating and composing the layers: the policy, and the content modules.            |
+| `Profiles.ts`                  | Broker profiles as the CLI reads them: a layer's `profiles`, igloo's own, and a grant's sets. |
 | `Evaluation.ts`                | The confinement for every nix evaluation of a layer or policy file, and locked inputs' paths. |
 | `Spec.ts`                      | What a composed configuration means for a VM: credentials, grants, the runner's arguments.    |
 | `Flake.ts`                     | The runner flake.                                                                             |
@@ -169,6 +171,7 @@ defines it; `flake.nix` wires them together:
 | `packages.testVm`           | `nix/test-vm.nix`  | A runner that is built and never booted. Building it checks the pins and the boot files.                                                            |
 | `checks`                    | `nix/checks.nix`   | The packages, and `testVm` with content modules that have to be refused, change nothing, or disable the core.                                       |
 | `lib.mkRunner`              | `nix/runner.nix`   | One VM's runner, from policy arguments and content modules.                                                                                         |
+| `brokerProfiles`            | `nix/profiles/`    | The broker profiles igloo ships, as data, one file each; the package carries them as JSON, `IGLOO_PROFILES`.                                        |
 | `nixosModules.default`      | `nix/host.nix`     | The host side: lingering for the users who run igloo.                                                                                               |
 | `nixosModules.guest`        | `nix/guest.nix`    | The guest core every VM starts from, with the packages in `nix/core-packages.nix` and the `igloo.writableStore` option in `nix/writable-store.nix`. |
 | `homeModules.default`       | `nix/home.nix`     | The user layer and templates, built into the store, and the CLI wrapped with `IGLOO_USER_LAYER` naming it.                                          |
@@ -204,6 +207,14 @@ workspace, so the guest cannot write it, and whoever does owns the machine the V
 (`Config.compose`, through `readSize`). A credential or a model server the user layer declares
 reaches only the projects its `projects` lists (`Config.compose`). Which directories are shared is
 not a setting (`Spec.fromConfig`, `mkRunner`).
+
+What a brokered credential may do at a service is a profile, `profiles` in either layer, beneath
+which igloo's own sit, read from its package rather than from any layer (`Profiles.shipped`). The
+user layer may replace one of igloo's; a project may add its own and replace neither igloo's nor the
+user layer's, so a credential the user layer shares cannot have its rules changed from a project's
+file, and a credential the user layer declares may name no project's profile. A grant names, in its
+own `hosts`, exactly the hosts its chosen sets reach, so a profile whose update moves a host is
+refused rather than sending the key there (`Config.compose`, through `readProfileGrant`).
 
 Policy reaches the guest's build as `mkRunner`'s arguments, every one applied from one `pins`
 attrset at `mkOverride 10`, above `mkForce`. That priority and `pins` are both in `nix/runner.nix`,
@@ -251,42 +262,47 @@ store are as they were.
 ### The broker constructs every upstream request from its grants
 
 A request is authorized by its method and its path, with git's `service` parameter for a ref
-advertisement, and by nothing else it carries (`decide`), but for a cloud account's GraphQL request,
-below. On the TLS listener, the name a request was addressed to is read as well, and only as one of
-the hosts the broker's git and cloud grants reach: it stands where the path form puts the host, and
-the rest is `decide`'s (`decideAddressed`). The upstream URL is built from the profile's fixed host
-and the grant's own copy of what it allows: a git request for the repository as the grant spells it,
-a push only for one in its `write` (`routeGit`), a read through a git grant's API under `repos/` and
-that repository or of the API's root, a write there for one in its `write` at a path `apiWrites`
-lists and `apiWritesRefused` does not, or a `POST` to the API's fixed `graphql` path (`routeApi`),
-an upload of a release's asset for one in its `write` at the fixed path its API takes one at
-(`routeUploads`), a model provider's request for an endpoint its profile lists in
-`inferenceEndpoints` (`routeInference`), a cloud account's read under its REST API's version, a
-write there at a path `cloudWrites` lists, a `POST` to its fixed `graphql` path, and a call of one
-of its serverless endpoints under `v2/<endpoint>/` (`routeCloud`), and a model server's on loopback,
-at the port its grant names (`routeModelServer`). Nothing the guest sends reaches the upstream URL
-but an OpenRouter model listing's query, an API request's path past its repository and its query,
-and a cloud account's request's path past its version or endpoint and its query: each query rebuilt
-so that each name and value is encoded, and the path's segments as the URL parser left them, with
-every `.` and `..` resolved, so that none leaves the repository, the version or the endpoint. A path
-holding a percent-escape or an empty segment is refused, but for the one ending a host's root, and
-so is a push or a REST write for a repository no grant's `write` lists, a push at its ref
-advertisement as well as at the push, a REST write `apiWrites` does not list or `apiWritesRefused`
-does, a Codespace made from a pull request among them, and a cloud account's write `cloudWrites`
-does not list: for Runpod, what reaches past what the account runs to who may use it, its
-organization's members, invitations, groups and roles, the account's SSH keys, cost centres and ECR
-delegations.
+advertisement, and by nothing else it carries (`decide`), but for a GraphQL request at a rule with
+GraphQL's reader, below. On the TLS listener, the name a request was addressed to is read as well,
+and only as one of the hosts the broker's grants reach: it stands where the path form puts the host,
+and the rest is `decide`'s (`decideAddressed`). The upstream URL is built from the grant's own copy
+of what it allows. For `github`, still code of its own: a git request for the repository as the
+grant spells it, a push only for one in its `write` (`routeGit`), a read through its API under
+`repos/` and that repository or of the API's root, a write there for one in its `write` at a path
+`apiWrites` lists and `apiWritesRefused` does not, or a `POST` to the API's fixed `graphql` path
+(`routeApi`), and an upload of a release's asset for one in its `write` at the fixed path its API
+takes one at (`routeUploads`). For a profile grant, a request to one of its hosts, by name alone,
+that a rule of a chosen set allows and no `deny` rule matches, to the host and the request's path
+(`routeProfile`); a rule is methods and a path whose fixed segments are compared as written. For a
+model server, a request on loopback, at the port its grant names (`routeModelServer`). Nothing the
+guest sends reaches the upstream URL but an API request's path past its repository and its query,
+and a profile request's path and its query: each query rebuilt so that each name and value is
+encoded, and the path's segments as the URL parser left them, with every `.` and `..` resolved, so
+that the path sent is the one the rule or the repository was matched against. A GraphQL request at a
+profile's rule goes without its query, since a server may take an operation from it in place of the
+body that was read. A path holding a percent-escape or an empty segment is refused, but for the one
+ending a host's root, and so is a push or a REST write for a repository no grant's `write` lists, a
+push at its ref advertisement as well as at the push, a REST write `apiWrites` does not list or
+`apiWritesRefused` does, a Codespace made from a pull request among them, and a profile request no
+chosen rule allows: for igloo's `runpod`, what reaches past what the account runs to who may use it,
+its organization's members, invitations, groups and roles, the account's SSH keys, sign-in attempts,
+tags, cost centres and ECR delegations. Which sets a profile grant holds, and so which hosts and
+rules, is the credential's choice, made in policy (`Config.compose`); a set not chosen and a host no
+chosen set reaches never reach the broker (`Profiles.grantOf`). A grant is read strictly: a field
+the broker does not read, a host that is an address or one label, a key sent in a header the broker
+drops, sets or frames a request by, and a host two grants name are refused, and the broker does not
+start (`parseGrants`).
 
-A cloud account's GraphQL request is the one body the broker reads, since a query and a mutation
-share its path, and a mutation can mint the account a key the guest would then hold. It is read
-whole, up to `graphqlBodyLimit`, and sent only if it is one JSON object of `query`, `variables` and
-`operationName` alone, whose document holds queries and fragments and no other definition, and names
-no field in `graphqlWithheld`, which return a credential the account holds (`graphqlQuery`,
-`graphqlRefusal`). The document is read with the GraphQL spec's lexer, so a word in a string or a
-comment decides nothing; where it reads more loosely than the spec, the server refuses the document
-whole. What is sent is the object it read, written again as `application/json`, so a second parser
-reading the text differently cannot matter, and `extensions`, which can carry a persisted query, is
-refused with anything else. A query is trusted to read, as GraphQL defines it.
+A GraphQL request at a rule with GraphQL's reader is the one body the broker reads, since a query
+and a mutation share its path, and a mutation can mint the account a key the guest would then hold.
+It is read whole, up to `graphqlBodyLimit`, and sent only if it is one JSON object of `query`,
+`variables` and `operationName` alone, whose document holds queries and fragments and no other
+definition, and names no field in the rule's `withheld`, which return a credential the account holds
+(`graphqlQuery`, `graphqlRefusal`). The document is read with the GraphQL spec's lexer, so a word in
+a string or a comment decides nothing; where it reads more loosely than the spec, the server refuses
+the document whole. What is sent is the object it read, written again as `application/json`, so a
+second parser reading the text differently cannot matter, and `extensions`, which can carry a
+persisted query, is refused with anything else. A query is trusted to read, as GraphQL defines it.
 
 A GraphQL query through a git grant's API is the one request a grant's repositories do not bound. It
 names what it reads and writes in its body, much of it by node IDs that say which repository they
@@ -295,32 +311,35 @@ sent with the credential, its body unread, and the token's own scope is its boun
 push is bounded to its repository but not to its refs, which it names in its body: which branches
 and tags it updates is the repository's rulesets' to bound. A REST write is bounded to its
 repository and its path, and what it sets, a merge's base branch or a release's tag and commit, is
-in its body, for the rulesets to bound as they bound a push.
+in its body, for the rulesets to bound as they bound a push. A profile request's body is bounded by
+nothing the broker reads, but for GraphQL's: what a rule allows at its path is what a service does
+with whatever body it is sent.
 
 On the TLS listener, a read no grant serves — a GET or HEAD, or git's fetch — is sent to the host it
 was addressed to, with its path and query as the guest sent them and no credential at all, when the
-tunnel's destinations take in that host (`decideAddressed`). The guest could have sent the same
-request through the tunnel had the broker not answered the name. Anything else no grant serves is
-refused.
+tunnel's destinations take in that host (`decideAddressed`); so is a read a profile's `deny` rule
+matches, since `deny` says what the key may not do. The guest could have sent the same request
+through the tunnel had the broker not answered the name. Anything else no grant serves is refused.
 
 The credential is always the broker's. A git request's headers are built, carrying of the guest's
 only git's protocol version, checked against a pattern, and its body's gzip encoding
-(`upstreamHeaders`). A model request carries the guest's headers less its credentials, the
+(`upstreamHeaders`). A profile's request carries the guest's headers less its credentials, the
 hop-by-hop ones and any its `Connection` names, `Host`, `Expect`, `Content-Length` and
 `Accept-Encoding`, and those a front end could take another method, path or origin from, such as
-`X-HTTP-Method-Override`, `Forwarded` and `X-Original-URL` (`unforwardedRequestHeaders`), and a
-listing carries no body headers (`bodyHeaders`); the broker's credential is set after the guest's
-are dropped. No proxy or trusted certificate set in the user manager's environment carries the
-broker's requests or vouches for their upstream, since none of that environment reaches it
-(`Systemd.start`). A cloud account's request is built as a model request is, its GraphQL request
-described as the JSON the broker wrote for it. An anonymous read is built as a model request is, and
-no credential is set. A redirect is never followed, a 401 becomes the broker's own refusal
-(`relay`), and an answer loses its cookies and authentication challenges on the way back
-(`responseHeaders`). The redirects of an API request and an anonymous read alone go back to the
-guest as they came: an API's leads to a signed URL for a log or an asset, and the broker neither
-follows it nor sends its credential there. An API answer's `Link` naming a page by the repository's
-number is put back in the `repos/<owner>/<repo>/` form (`pagesOf`), so a client following it stays
-within the grant.
+`X-HTTP-Method-Override`, `Forwarded` and `X-Original-URL` (`unforwardedRequestHeaders`), and a GET
+or HEAD carries no body headers (`bodyHeaders`); the key is then set as the profile's host says, as
+`Authorization: Bearer`, the whole value of one named header, or `Authorization: Basic` with a fixed
+username, replacing a header of that name the guest sent. A model server's request, one through a
+forge's API and an anonymous read are built as a profile's is, an anonymous read with no credential
+set. No proxy or trusted certificate set in the user manager's environment carries the broker's
+requests or vouches for their upstream, since none of that environment reaches it (`Systemd.start`).
+A GraphQL request is described as the JSON the broker wrote for it. A redirect is never followed, a
+401 becomes the broker's own refusal (`relay`), and an answer loses its cookies and authentication
+challenges on the way back (`responseHeaders`). The redirects of an API request and an anonymous
+read alone go back to the guest as they came: an API's leads to a signed URL for a log or an asset,
+and the broker neither follows it nor sends its credential there. An API answer's `Link` naming a
+page by the repository's number is put back in the `repos/<owner>/<repo>/` form (`pagesOf`), so a
+client following it stays within the grant.
 
 Every other body is streamed upstream as it arrives, in chunks, never read and never refused for its
 size (`handle`, `serveRequests`). An asset's upload sent with a `Content-Length` and no
@@ -328,14 +347,15 @@ size (`handle`, `serveRequests`). An asset's upload sent with a `Content-Length`
 ends short of it ends the request and its connection, so that no byte past the stated length reaches
 the upstream, which would read it as the start of another request (`uploadLength`, `heldTo`).
 `headerTimeoutMs` ends a request whose upstream has not answered in time, a body that never ends
-among them. What a provider does for a model, its hosted tools included, is the provider's, so under
-`restricted` workspace data can leave through one to any address. So is what a cloud account runs: a
-pod the guest creates reaches whatever its own network does, with whatever the guest put in it.
+among them; every request a profile serves is given the long wait. What a provider does for a model,
+its hosted tools included, is the provider's, so under `restricted` workspace data can leave through
+one to any address. So is what a cloud account runs: a pod the guest creates reaches whatever its
+own network does, with whatever the guest put in it.
 
-**Held by:** `broker.ts`: `decide`, `decideAddressed`, `routeApi`, `routeCloud`, `routeGit`,
-`routeInference`, `routeModelServer`, `routeUploads`, `graphqlQuery`, `graphqlRefusal`,
-`upstreamHeaders`, `uploadLength`, `heldTo`, `relay`, `responseHeaders`, `pagesOf`, `handle`;
-`Systemd.start`.
+**Held by:** `broker.ts`: `parseGrants`, `decide`, `decideAddressed`, `routeProfile`, `routeApi`,
+`routeGit`, `routeModelServer`, `routeUploads`, `graphqlQuery`, `graphqlRefusal`, `upstreamHeaders`,
+`uploadLength`, `heldTo`, `relay`, `responseHeaders`, `pagesOf`, `handle`; `Profiles.grantOf`;
+`Config.compose`; `Systemd.start`.
 
 ### The tunnel reaches only public addresses, on port 443
 
@@ -367,15 +387,20 @@ it. Under `internet` no hello is read, since any public name could be the `CONNE
 A listed name that resolves to a routable address private to a VPN this host is on passes every
 check here, and is reached.
 
-The one exception is a host the broker's git and cloud grants reach, `tlsNames`. A `CONNECT` to one
-is not tunnelled anywhere: whatever the destinations, it is joined to the broker's own TLS listener
-(`serveTunnel`), where each request is decided and constructed as on the broker's port, and a read
-no grant serves is sent on without a credential where the destinations take in the host
-(`serveTls`). That listener answers with a certificate for those hosts from an authority made for
-the project, which the guest trusts (`mkRunner`'s `brokerAuthority`). The authority's name
-constraints limit it to the hosts any profile's grant can reach (`tlsNamesCovered`), and its key is
-deleted once it has signed (`Tls.ensure`), so what the project keeps can answer those hosts to its
-own guest and sign nothing.
+The one exception is a host the broker's grants reach, `tlsNames`: `github`'s three, and each host
+of a profile grant. A `CONNECT` to one is not tunnelled anywhere: whatever the destinations, it is
+joined to the broker's own TLS listener (`serveTunnel`), where each request is decided and
+constructed as on the broker's port, and a read no grant serves is sent on without a credential
+where the destinations take in the host (`serveTls`). That listener answers with a certificate for
+those hosts from an authority made for the project, which the guest trusts (`mkRunner`'s
+`brokerAuthority`). The authority's name constraints limit it to `github`'s hosts and every host of
+a profile igloo ships, whether granted or not (`tlsNamesCovered`, `Profiles.hostsOf`), so granting
+one of igloo's changes neither the certificate nor the authority, and to the hosts of the user
+layer's and the project's profiles that the project's grants reach, so a change to those makes both
+again (`index.ts`'s `specFor`). Its key is deleted once it has signed (`Tls.ensure`), so what the
+project keeps can answer those hosts to its own guest and sign nothing. A profile's hosts are
+reached whatever the destinations list, so under a user layer's `restricted` ceiling each has to be
+in its `tunnelCeiling`, but for a profile igloo ships, as it ships it (`Config.compose`).
 
 **Held by:** `broker.ts`: `parseConnect`, `allowTunnel`, `isReachableAddress`, `isHostAddress`,
 `publicDestinations`, `serveTunnel`, `serveTls`; `Tls.ensure`.

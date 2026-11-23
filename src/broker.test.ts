@@ -5459,6 +5459,11 @@ describe('Broker.decideAddressed, for a profile grant', () => {
   it('refuses what no chosen rule matches, by its path or by its method', () => {
     assert.strictEqual(outcome(addressed('POST', 'https://api.example.com/v2/other')), 403)
     assert.strictEqual(outcome(addressed('POST', 'https://api.example.com/v1/other')), 405)
+    const other = addressed('POST', 'https://api.example.com/v1/other')
+    assert.strictEqual(
+      other._tag === 'Deny' ? other.reason : '',
+      'POST /v1/other is not something this VM may do through api.example.com, which allows GET, HEAD there',
+    )
     assert.strictEqual(outcome(addressed('PUT', 'https://api.example.com/v1/items')), 405)
     assert.strictEqual(outcome(addressed('GET', 'https://uploads.example.com/files')), 405)
     assert.strictEqual(outcome(addressed('GET', 'https://api.example.com/v2/items')), 403)
