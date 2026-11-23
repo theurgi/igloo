@@ -5,6 +5,7 @@ import * as path from 'node:path'
 import * as Broker from './broker.ts'
 import * as Config from './Config.ts'
 import * as Flake from './Flake.ts'
+import * as LaunchInputs from './LaunchInputs.ts'
 import * as Vm from './Vm.ts'
 
 /** What a VM's launch depends on besides its configuration: the host's facts about its project. */
@@ -44,12 +45,17 @@ export interface Plan {
 
 /**
  * What a project's broker is granted: one grant per brokered credential, and
- * one per model server, its key held under a name of its own.
+ * one per model server, its key held under a name of its own. A profile grant
+ * is sent what the broker reads of it and no more: its hosts, each with how
+ * the key is sent there, the chosen sets' rules and the `deny` rules there.
  */
 export const grantsOf = (policy: Config.Policy): readonly Broker.Grant[] => [
-  ...policy.secrets
-    .filter(secret => secret.mode === 'broker')
-    .map(secret => ({ credential: secret.name, ...secret.grant })),
+  ...policy.secrets.flatMap((secret): readonly Broker.Grant[] => {
+    if (secret.mode !== 'broker') return []
+    if (!('hosts' in secret.grant)) return [{ credential: secret.name, ...secret.grant }]
+    const { hosts, profile } = secret.grant
+    return [{ credential: secret.name, hosts, profile }]
+  }),
   ...policy.modelServers.map(server => ({
     ...(server.key === undefined ? {} : { credential: Config.modelServerKeyName(server.name) }),
     name: server.name,
@@ -118,6 +124,15 @@ export const fromConfig = (
   const gitHosts = [
     ...new Set(grants.filter(Broker.isGitGrant).map(grant => Broker.profiles[grant.profile].host)),
   ]
+  // Every profile granted names the variables its clients read a key from,
+  // each set to the placeholder: the broker sets the real one.
+  const placeholders = Object.fromEntries(
+    config.policy.secrets.flatMap(secret =>
+      secret.mode === 'broker' && 'placeholders' in secret.grant
+        ? secret.grant.placeholders.map(name => [name, Broker.guestPlaceholderKey])
+        : [],
+    ),
+  )
   const answered = Broker.tlsNames(grants).length > 0
   const tunnel = config.policy.tunnel
   // A broker exists for a project that holds a grant, a credential's or a
@@ -128,6 +143,7 @@ export const fromConfig = (
   const broker = grants.length > 0 || Broker.tunnels(tunnel)
   const brokerEnv = {
     ...Broker.guestEnvironment(grants, Vm.brokerGuestPort),
+    ...placeholders,
     // Both spellings, because half the ecosystem reads one and half the other,
     // and `NODE_USE_ENV_PROXY` because Node's own `fetch` ignores the variables
     // without it — which is most of what an agent's tooling is built on. Set
@@ -186,9 +202,11 @@ export const fromConfig = (
       .map(grant =>
         Broker.isModelServerGrant(grant)
           ? `${grant.profile} ${grant.name} port=${String(grant.port)}${grant.credential === undefined ? '' : ` ${grant.credential}`}`
-          : Broker.isGitGrant(grant)
-            ? `${grant.profile} ${grant.credential} repos=${grant.repos.toSorted().join(',')}${grant.write === undefined ? '' : ` write=${grant.write.toSorted().join(',')}`}`
-            : `${grant.profile} ${grant.credential}`,
+          : Broker.isProfileGrant(grant)
+            ? profileLine(grant)
+            : Broker.isGitGrant(grant)
+              ? `${grant.profile} ${grant.credential} repos=${grant.repos.toSorted().join(',')}${grant.write === undefined ? '' : ` write=${grant.write.toSorted().join(',')}`}`
+              : `${grant.profile} ${grant.credential}`,
       )
       .toSorted(),
     `brokerMem=${config.policy.brokerMem === undefined ? 'unbounded' : String(config.policy.brokerMem)}`,
@@ -203,4 +221,28 @@ export const fromConfig = (
   ].join('\n')
 
   return { broker, brokered, credentials, grants, hostSide, runner }
+}
+
+/**
+ * A profile grant as the drift report hashes it: its profile, credential, sets
+ * and hosts, and a hash of every rule the broker is sent, so that a profile
+ * whose rules changed under a running VM shows as a change. Sorted throughout,
+ * since sets chosen in another order, or a profile's rules written in one, are
+ * the same grant.
+ */
+const profileLine = (grant: Broker.ProfileGrant): string => {
+  const hosts = Object.keys(grant.hosts).toSorted()
+  const sets = [
+    ...new Set(Object.values(grant.hosts).flatMap(at => at.allow.map(rule => rule.set))),
+  ].toSorted()
+  const rules = hosts.map(host => {
+    const at = grant.hosts[host]
+    return {
+      allow: (at?.allow ?? []).map(rule => JSON.stringify(rule)).toSorted(),
+      deny: (at?.deny ?? []).map(rule => JSON.stringify(rule)).toSorted(),
+      host,
+      send: at?.send ?? null,
+    }
+  })
+  return `${grant.profile} ${grant.credential} sets=${sets.join(',')} hosts=${hosts.join(',')} rules=${LaunchInputs.digest(JSON.stringify(rules))}`
 }

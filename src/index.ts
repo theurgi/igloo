@@ -18,6 +18,7 @@ import * as Flake from './Flake.ts'
 import * as Format from './Format.ts'
 import * as LaunchInputs from './LaunchInputs.ts'
 import * as Preflight from './Preflight.ts'
+import * as Profiles from './Profiles.ts'
 import * as Project from './Project.ts'
 import * as Report from './Report.ts'
 import * as Spec from './Spec.ts'
@@ -166,16 +167,26 @@ const specFor = Effect.fnUntraced(function* (input: { readonly cid: Option.Optio
   // Core, then the user layer, then this project's. Content reaches the guest as
   // NixOS modules the flake imports; policy never reaches it at all — it is
   // emitted as `mkRunner` arguments, at a priority no module can override.
+  const shipped = yield* Profiles.shipped(env['IGLOO_PROFILES'])
   const config = yield* Config.resolve(bins, {
+    igloo: shipped,
     project: { root: project.root, workspaceDir: project.workspaceDir },
     userLayerDir,
   })
   const runtime = yield* runtimeDir(project.id)
   // Made, or found, only for a broker that answers a name: its authority is
-  // built into the runner, so it has to exist before the plan does.
+  // built into the runner, so it has to exist before the plan does. It covers
+  // every name igloo's own code and profiles are answered at, granted or not,
+  // so granting one of them changes neither the certificate nor the
+  // authority; and the hosts of the user layer's and the project's profiles
+  // this project grants, so a change to those makes both again, which
+  // rebuilds the guest once.
+  const answered = Broker.tlsNames(Spec.grantsOf(config.policy))
   const tls =
-    Broker.tlsNames(Spec.grantsOf(config.policy)).length > 0
-      ? yield* Tls.ensure(project.tlsDir, Broker.tlsNamesCovered)
+    answered.length > 0
+      ? yield* Tls.ensure(project.tlsDir, [
+          ...new Set([...Broker.tlsNamesCovered, ...Profiles.hostsOf(shipped), ...answered]),
+        ])
       : undefined
   const plan = Spec.fromConfig(config, {
     iglooFlakePath,
@@ -328,6 +339,9 @@ const report = Command.make(
       cwd: process.cwd(),
       doctor: Preflight.report(checks),
       host: { home: env['HOME'], hostName: hostname(), user: env['USER'] },
+      named: Report.namedBy(
+        Option.getOrUndefined(yield* Effect.option(Profiles.shipped(env['IGLOO_PROFILES']))),
+      ),
       record: Option.getOrUndefined(config.record),
       // Set by the package from its flake's commit; a `path:` input has none.
       revision:

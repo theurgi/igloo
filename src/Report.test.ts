@@ -1,10 +1,26 @@
 import { BunServices } from '@effect/platform-bun'
 import { assert, describe, it } from '@effect/vitest'
-import { Effect, Exit, FileSystem } from 'effect'
+import { Effect, Exit, FileSystem, Result } from 'effect'
+import { readFileSync } from 'node:fs'
 
 import * as Cid from './Cid.ts'
+import * as Profiles from './Profiles.ts'
 import * as Project from './Project.ts'
 import * as Report from './Report.ts'
+
+/**
+ * igloo's own profiles, from those it ships, read from the JSON the package
+ * carries: `IGLOO_PROFILES`, which the devshell sets.
+ */
+const igloos = ((): Report.Named => {
+  const file = process.env['IGLOO_PROFILES']
+  if (file === undefined || file === '') {
+    throw new Error('IGLOO_PROFILES is not set: run the tests in `nix develop`')
+  }
+  return Report.namedBy(
+    Result.getOrThrow(Profiles.read(file, JSON.parse(readFileSync(file, 'utf8')))),
+  )
+})()
 
 const home = '/home/alice'
 const root = `${home}/src/acme-widgets`
@@ -169,6 +185,7 @@ const doctor = [
 ].join('\n')
 
 const report = Report.render({
+  named: igloos,
   doctor,
   known,
   record,
@@ -295,6 +312,7 @@ describe('Report.render', () => {
 
   it('leaves a user name that is an ordinary word, and the paths that hold it', () => {
     const ordinary = Report.render({
+      named: igloos,
       doctor: 'loginctl enable-linger dev',
       known: { home: ['/home/dev'], hostName: 'nixos', project: undefined, user: 'dev' },
       record: {
@@ -311,6 +329,7 @@ describe('Report.render', () => {
 
   it('keeps a host igloo names whole when a value is part of it', () => {
     const named = Report.render({
+      named: igloos,
       doctor: '',
       known: {
         home: [],
@@ -352,6 +371,7 @@ describe('Report.render', () => {
       json({ event: 'response', id: at, ms: 3, status: 200, t: String(at) }),
     )
     const large = Report.render({
+      named: igloos,
       doctor,
       known,
       record: {
@@ -418,6 +438,7 @@ describe('Report.run', () => {
     cwd,
     doctor: 'All 16 checks passed.',
     host: { home: undefined, hostName: 'alices-laptop', user: 'alice' },
+    named: igloos,
     record: named,
     revision: undefined,
     version: '0.1.0',

@@ -2,10 +2,12 @@ import { BunServices } from '@effect/platform-bun'
 import { assert, describe, it } from '@effect/vitest'
 import { Effect, FileSystem, Result, Scope } from 'effect'
 import { ChildProcessSpawner } from 'effect/unstable/process'
+import { readFileSync } from 'node:fs'
 import * as path from 'node:path'
 
 import * as Binaries from './Binaries.ts'
 import * as Config from './Config.ts'
+import * as Profiles from './Profiles.ts'
 
 const provided = <A, E>(
   effect: Effect.Effect<
@@ -19,11 +21,23 @@ const userPolicyName = 'programs.igloo.policy'
 const projectRoot = '/home/you/projects/api'
 const projectPolicyPath = `${projectRoot}/igloo-policy.nix`
 
+/**
+ * The profiles igloo ships, read as the CLI reads them, from the JSON the
+ * package carries: `IGLOO_PROFILES`, which the devshell sets.
+ */
+const shipped = ((): ReadonlyMap<string, Profiles.Profile> => {
+  const file = process.env['IGLOO_PROFILES']
+  if (file === undefined || file === '')
+    throw new Error('IGLOO_PROFILES is not set: run the tests in `nix develop`')
+  return Result.getOrThrow(Profiles.read(file, JSON.parse(readFileSync(file, 'utf8'))))
+})()
+
 const layers = (input: {
   readonly aliases?: readonly string[]
   readonly project?: Record<string, unknown>
   readonly user?: Record<string, unknown>
 }): Config.Layers => ({
+  igloo: shipped,
   project:
     input.project === undefined ? undefined : { path: projectPolicyPath, values: input.project },
   projectAliases: input.aliases ?? [],
@@ -324,6 +338,7 @@ describe('Config.resolve', () => {
         yield* fs.makeDirectory(path.join(root, 'workspace'), { recursive: true })
 
         const config = yield* Config.resolve(binaries(nix), {
+          igloo: shipped,
           project: { root, workspaceDir: path.join(root, 'workspace') },
           userLayerDir: undefined,
         })
@@ -357,6 +372,7 @@ describe('Config.resolve', () => {
         yield* fs.writeFileString(project.content, '{ }')
 
         const config = yield* Config.resolve(binaries(nix), {
+          igloo: shipped,
           project: { root, workspaceDir: path.join(root, 'workspace') },
           userLayerDir,
         })
@@ -426,6 +442,7 @@ describe('Config.resolve', () => {
         yield* fs.writeFileString(project.policy, '{ network = "none"; }')
 
         yield* Config.resolve(binaries(nix), {
+          igloo: shipped,
           project: { root, workspaceDir: path.join(root, 'workspace') },
           userLayerDir,
         })
@@ -451,6 +468,7 @@ describe('Config.resolve', () => {
 
         const result = yield* Effect.result(
           Config.resolve(binaries(nix), {
+            igloo: shipped,
             project: { root, workspaceDir },
             userLayerDir: undefined,
           }),
@@ -476,7 +494,11 @@ describe('Config.resolve', () => {
         yield* fs.makeDirectory(userLayerDir)
         yield* fs.writeFileString(user.policy, '{ mem = 8192; }')
 
-        const config = yield* Config.resolve(binaries(nix), { project: undefined, userLayerDir })
+        const config = yield* Config.resolve(binaries(nix), {
+          igloo: shipped,
+          project: undefined,
+          userLayerDir,
+        })
 
         assert.strictEqual(config.policy.mem, 8192)
         assert.notInclude(yield* fs.readFileString(log), 'project = import')
@@ -493,7 +515,11 @@ describe('Config.resolve', () => {
         const missing = path.join(dir, 'gone')
 
         const result = yield* Effect.result(
-          Config.resolve(binaries(nix), { project: undefined, userLayerDir: missing }),
+          Config.resolve(binaries(nix), {
+            igloo: shipped,
+            project: undefined,
+            userLayerDir: missing,
+          }),
         )
 
         // Named explicitly and absent is a mistake, not a user with no layer:
@@ -521,7 +547,7 @@ describe('Config.resolve', () => {
         yield* fs.writeFileString(user.policy, '{ pkgs, ... }: { }')
 
         const result = yield* Effect.result(
-          Config.resolve(binaries(nix), { project: undefined, userLayerDir }),
+          Config.resolve(binaries(nix), { igloo: shipped, project: undefined, userLayerDir }),
         )
 
         assert.isTrue(Result.isFailure(result))
@@ -941,6 +967,8 @@ describe('Config.compose: grants', () => {
   const calling = (over: Record<string, unknown> = {}) => ({
     secrets: {
       ANTHROPIC_API_KEY: {
+        allow: ['messages'],
+        hosts: ['api.anthropic.com'],
         mode: 'broker',
         profile: 'anthropic-messages',
         projects: [projectRoot],
@@ -950,9 +978,21 @@ describe('Config.compose: grants', () => {
     },
   })
 
-  it('carries a model grant through as its profile alone', () => {
+  it('carries a model grant through as the rules of the sets it chose, and where they are', () => {
     const [secret] = composed({ project: {}, user: calling() }).secrets
     assert.deepStrictEqual(secret?.mode === 'broker' ? secret.grant : undefined, {
+      definedBy: 'igloo',
+      hosts: {
+        'api.anthropic.com': {
+          allow: [
+            { method: ['POST'], path: 'v1/messages', set: 'messages' },
+            { method: ['POST'], path: 'v1/messages/count_tokens', set: 'messages' },
+          ],
+          deny: [],
+          send: { header: 'x-api-key' },
+        },
+      },
+      placeholders: ['ANTHROPIC_API_KEY'],
       profile: 'anthropic-messages',
     })
   })
@@ -971,6 +1011,8 @@ describe('Config.compose: grants', () => {
           project: {
             secrets: {
               OWN: {
+                allow: ['models'],
+                hosts: ['openrouter.ai'],
                 mode: 'broker',
                 profile: 'openrouter',
                 source: { file: '/k' },
@@ -987,22 +1029,24 @@ describe('Config.compose: grants', () => {
     }
   })
 
-  it('refuses `repos` on a model grant, which narrows nothing', () => {
+  it('refuses `repos` on a profile grant, which has no repositories', () => {
     assert.include(
       refused({ project: {}, user: calling({ repos: { read: ['you/api'] } }) }),
-      'does not apply to the anthropic-messages profile',
-    )
-    assert.include(
-      refused({ project: {}, user: calling({ repos: { write: ['you/api'] } }) }),
-      '`secrets.ANTHROPIC_API_KEY.repos` does not apply',
+      '`secrets.ANTHROPIC_API_KEY.repos` does not apply to the anthropic-messages profile',
     )
   })
 
-  it('refuses two credentials for one inference profile, which a request could not choose between', () => {
+  it('refuses two credentials for one profile, which a request could not choose between', () => {
     const message = refused({
       project: {
         secrets: {
-          SECOND: { mode: 'broker', profile: 'anthropic-messages', source: { file: '/k' } },
+          SECOND: {
+            allow: ['messages'],
+            hosts: ['api.anthropic.com'],
+            mode: 'broker',
+            profile: 'anthropic-messages',
+            source: { file: '/k' },
+          },
         },
       },
       user: calling(),
@@ -1010,12 +1054,21 @@ describe('Config.compose: grants', () => {
     assert.include(message, `${projectPolicyPath}: \`SECOND\` and \`ANTHROPIC_API_KEY\``)
     assert.include(message, `(in ${userPolicyName})`)
     assert.include(message, 'keep one')
+    assert.include(message, 'A request names no credential')
   })
 
   it('takes one credential for each profile', () => {
     const policy = composed({
       project: {
-        secrets: { OPENROUTER: { mode: 'broker', profile: 'openrouter', source: { file: '/k' } } },
+        secrets: {
+          OPENROUTER: {
+            allow: ['models'],
+            hosts: ['openrouter.ai'],
+            mode: 'broker',
+            profile: 'openrouter',
+            source: { file: '/k' },
+          },
+        },
       },
       user: { secrets: { ...calling().secrets, ...brokered().secrets } },
     })
@@ -1044,23 +1097,39 @@ describe('Config.compose: grants', () => {
     assert.include(message, 'list every repository in it')
   })
 
+  it('refuses `hosts` and `allow` on a github grant, which names repositories instead', () => {
+    for (const key of ['allow', 'hosts']) {
+      assert.include(
+        refused({ project: {}, user: brokered({ [key]: ['x'] }) }),
+        `\`secrets.GITHUB_TOKEN.${key}\` does not apply to the github profile`,
+      )
+    }
+  })
+
   const driving = (over: Record<string, unknown> = {}) => ({
     secrets: {
-      RUNPOD_API_KEY: { mode: 'broker', profile: 'runpod', source: { file: '/k' }, ...over },
+      RUNPOD_API_KEY: {
+        allow: ['read', 'pods'],
+        hosts: ['api.runpod.io'],
+        mode: 'broker',
+        profile: 'runpod',
+        source: { file: '/k' },
+        ...over,
+      },
     },
   })
 
-  it('carries a runpod grant through as its profile alone', () => {
+  it('sends a runpod grant only the sets it chose, at the hosts they reach', () => {
     const [secret] = composed({ project: driving() }).secrets
-    assert.deepStrictEqual(secret?.mode === 'broker' ? secret.grant : undefined, {
-      profile: 'runpod',
-    })
-  })
-
-  it('refuses `repos` on a runpod grant, and says what bounds it instead', () => {
-    const message = refused({ project: driving({ repos: { read: ['you/api'] } }) })
-    assert.include(message, '`secrets.RUNPOD_API_KEY.repos` does not apply to the runpod profile')
-    assert.include(message, "the account's balance")
+    const grant = secret?.mode === 'broker' ? secret.grant : undefined
+    assert.isTrue(grant !== undefined && 'hosts' in grant)
+    if (grant === undefined || !('hosts' in grant)) return
+    assert.deepStrictEqual(Object.keys(grant.hosts), ['api.runpod.io'])
+    assert.deepStrictEqual(
+      [...new Set(grant.hosts['api.runpod.io']?.allow.map(rule => rule.set))],
+      ['read', 'pods'],
+    )
+    assert.deepStrictEqual(grant.placeholders, ['RUNPOD_API_KEY'])
   })
 
   it('refuses a second runpod credential, which a request could not choose between', () => {
@@ -1068,7 +1137,7 @@ describe('Config.compose: grants', () => {
       project: {
         secrets: {
           ...driving().secrets,
-          OTHER: { mode: 'broker', profile: 'runpod', source: { file: '/j' } },
+          OTHER: { ...driving().secrets.RUNPOD_API_KEY, source: { file: '/j' } },
         },
       },
     })
@@ -1329,5 +1398,402 @@ describe('Config.compose: modelServers', () => {
       composed({ project: { ...ownServer(), network: 'restricted' } }).tunnel,
       [],
     )
+  })
+})
+
+/** A profile at one host, with a read set and a write set, for a layer to define. */
+const exampleProfile = (over: Record<string, unknown> = {}) => ({
+  allow: {
+    read: { 'api.example.com': [{ method: ['GET', 'HEAD'], path: 'v1/**' }] },
+    write: {
+      'api.example.com': [{ method: 'POST', path: 'v1/items' }],
+      'uploads.example.com': [{ method: 'POST', path: 'files' }],
+    },
+  },
+  deny: { 'api.example.com': [{ method: '*', path: 'v1/keys/**' }] },
+  hosts: {
+    'api.example.com': { send: 'bearer' },
+    'uploads.example.com': { send: { header: 'x-upload-key' } },
+  },
+  placeholders: ['EXAMPLE_API_KEY'],
+  ...over,
+})
+
+/** A brokered credential granting `profile`, choosing `allow` and pinning `hosts`. */
+const granting = (
+  profile: string,
+  allow: readonly string[],
+  hosts: readonly string[],
+  over: Record<string, unknown> = {},
+) => ({ allow, hosts, mode: 'broker', profile, source: { file: '/k' }, ...over })
+
+/** The profile grant a composed policy holds, by credential. */
+const grantNamed = (policy: Config.Policy, name: string) => {
+  const secret = policy.secrets.find(each => each.name === name)
+  return secret?.mode === 'broker' && 'hosts' in secret.grant ? secret.grant : undefined
+}
+
+describe('Config.compose, on profiles', () => {
+  it('grants a project’s own profile to its own credential, with some of its sets', () => {
+    const grant = grantNamed(
+      composed({
+        project: {
+          profiles: { example: exampleProfile() },
+          secrets: { EXAMPLE: granting('example', ['read'], ['api.example.com']) },
+        },
+      }),
+      'EXAMPLE',
+    )
+    assert.deepStrictEqual(grant, {
+      definedBy: 'project',
+      hosts: {
+        'api.example.com': {
+          allow: [{ method: ['GET', 'HEAD'], path: 'v1/**', set: 'read' }],
+          deny: [{ method: '*', path: 'v1/keys/**' }],
+          send: 'bearer',
+        },
+      },
+      placeholders: ['EXAMPLE_API_KEY'],
+      profile: 'example',
+    })
+  })
+
+  it('grants a user layer profile to a project’s credential, and to one the user layer shares', () => {
+    const user = { profiles: { example: exampleProfile() } }
+    const asked = composed({
+      project: {
+        secrets: {
+          EXAMPLE: granting('example', ['write'], ['uploads.example.com', 'API.example.com']),
+        },
+      },
+      user,
+    })
+    assert.deepStrictEqual(Object.keys(grantNamed(asked, 'EXAMPLE')?.hosts ?? {}), [
+      'api.example.com',
+      'uploads.example.com',
+    ])
+    assert.strictEqual(grantNamed(asked, 'EXAMPLE')?.definedBy, 'user')
+    const shared = composed({
+      project: {},
+      user: {
+        ...user,
+        secrets: {
+          EXAMPLE: granting('example', ['read'], ['api.example.com'], { projects: [projectRoot] }),
+        },
+      },
+    })
+    assert.strictEqual(grantNamed(shared, 'EXAMPLE')?.profile, 'example')
+  })
+
+  it('lets the user layer replace one of igloo’s, and grants the replacement', () => {
+    const replaced = composed({
+      project: { secrets: { RUNPOD: granting('runpod', ['read'], ['api.example.com']) } },
+      user: { profiles: { runpod: exampleProfile() } },
+    })
+    assert.strictEqual(grantNamed(replaced, 'RUNPOD')?.definedBy, 'user')
+    assert.deepStrictEqual(Object.keys(grantNamed(replaced, 'RUNPOD')?.hosts ?? {}), [
+      'api.example.com',
+    ])
+  })
+
+  it('refuses a project defining a name igloo or the user layer defines', () => {
+    const igloos = refused({ project: { profiles: { runpod: exampleProfile() } } })
+    assert.include(igloos, `${projectPolicyPath}: \`profiles.runpod\` is one of igloo's already`)
+    const users = refused({
+      project: { profiles: { example: exampleProfile() } },
+      user: { profiles: { example: exampleProfile() } },
+    })
+    assert.include(users, `\`profiles.example\` is defined in ${userPolicyName} already`)
+    assert.include(users, 'replace none')
+  })
+
+  it('refuses a user layer credential naming a profile only a project defines', () => {
+    const message = refused({
+      project: { profiles: { example: exampleProfile() } },
+      user: {
+        secrets: {
+          EXAMPLE: granting('example', ['read'], ['api.example.com'], { projects: [projectRoot] }),
+        },
+      },
+    })
+    assert.include(
+      message,
+      `${userPolicyName}: \`secrets.EXAMPLE.profile\` must name a broker profile`,
+    )
+    assert.include(message, "A project's own profiles are for that project's credentials alone")
+  })
+
+  it('refuses `hosts` that leave out a host the chosen sets reach, or name one they do not', () => {
+    const missing = refused({
+      project: {
+        profiles: { example: exampleProfile() },
+        secrets: { EXAMPLE: granting('example', ['write'], ['api.example.com']) },
+      },
+    })
+    assert.include(missing, 'does not name uploads.example.com')
+    assert.include(missing, 'hosts = [ "api.example.com" "uploads.example.com" ];')
+    const extra = refused({
+      project: {
+        profiles: { example: exampleProfile() },
+        secrets: {
+          EXAMPLE: granting('example', ['read'], ['api.example.com', 'uploads.example.com']),
+        },
+      },
+    })
+    assert.include(extra, 'names uploads.example.com, which no set it allows reaches')
+    const elsewhere = refused({
+      project: {
+        profiles: { example: exampleProfile() },
+        secrets: { EXAMPLE: granting('example', ['read'], ['api.example.com', 'evil.example']) },
+      },
+    })
+    assert.include(elsewhere, 'or the example profile names')
+  })
+
+  it('refuses a grant choosing no set, a set the profile lacks, or one set twice', () => {
+    const project = (allow: readonly string[]) => ({
+      project: {
+        profiles: { example: exampleProfile() },
+        secrets: { EXAMPLE: granting('example', allow, ['api.example.com']) },
+      },
+    })
+    assert.include(refused(project([])), 'chooses no set')
+    assert.include(refused(project(['admin'])), 'chooses admin, which is not one of')
+    assert.include(refused(project(['read', 'read'])), 'chooses read twice')
+  })
+
+  it('refuses two of a project’s grants that reach one host', () => {
+    const message = refused({
+      project: {
+        profiles: {
+          example: exampleProfile(),
+          mirror: exampleProfile({ placeholders: [] }),
+        },
+        secrets: {
+          ONE: granting('example', ['read'], ['api.example.com']),
+          TWO: granting('mirror', ['read'], ['api.example.com']),
+        },
+      },
+    })
+    assert.include(message, 'both reach api.example.com')
+  })
+
+  it('refuses each of the old shapes, writing out the grant that keeps what it allowed', () => {
+    for (const [profile, hosts, allow] of [
+      [
+        'runpod',
+        '[ "api.runpod.ai" "api.runpod.io" ]',
+        '[ "clusters" "invoke" "pods" "read" "registries" "secrets" "serverless" "templates" "volumes" ]',
+      ],
+      ['openrouter', '[ "openrouter.ai" ]', '[ "models" ]'],
+      ['anthropic-messages', '[ "api.anthropic.com" ]', '[ "messages" ]'],
+    ] as const) {
+      const message = refused({
+        project: { secrets: { KEY: { mode: 'broker', profile, source: { file: '/k' } } } },
+      })
+      assert.include(
+        message,
+        `\`secrets.KEY\` grants the ${profile} profile without choosing from it`,
+      )
+      assert.include(message, `  hosts = ${hosts};\n  allow = ${allow};`)
+    }
+  })
+
+  it('refuses `hosts` and `allow` on a delivered credential', () => {
+    assert.include(
+      refused({
+        project: { secrets: { KEY: { allow: ['read'], mode: 'deliver', source: { file: '/k' } } } },
+      }),
+      'only means something for a brokered credential',
+    )
+  })
+})
+
+describe('Config.compose, on a profile’s definition', () => {
+  /** What defining `profile` as `example` in a project comes to. */
+  const defining = (profile: unknown) => refused({ project: { profiles: { example: profile } } })
+
+  it('refuses a field a profile does not have, part 2’s and MCP’s among them', () => {
+    for (const field of ['repository', 'ask', 'mcp', 'via']) {
+      assert.include(
+        defining(exampleProfile({ [field]: {} })),
+        `\`profiles.example.${field}\` is not a profile's field`,
+      )
+    }
+    assert.include(
+      defining(
+        exampleProfile({
+          hosts: { 'api.example.com': { pages: 'github', send: 'bearer' } },
+          allow: { read: { 'api.example.com': [{ method: 'GET', path: '' }] } },
+          deny: {},
+        }),
+      ),
+      "is not a host's field",
+    )
+    assert.include(
+      defining(
+        exampleProfile({
+          allow: { read: { 'api.example.com': [{ length: 'kept', method: 'GET', path: '' }] } },
+        }),
+      ),
+      "`length` is not a rule's field",
+    )
+  })
+
+  it('refuses a host without `send`, and a key sent in a header the broker frames by', () => {
+    assert.include(
+      defining(
+        exampleProfile({
+          hosts: { 'api.example.com': {}, 'uploads.example.com': { send: 'bearer' } },
+        }),
+      ),
+      'says how the key is sent there',
+    )
+    assert.include(
+      defining(
+        exampleProfile({
+          hosts: {
+            'api.example.com': { send: { header: 'Transfer-Encoding' } },
+            'uploads.example.com': { send: 'bearer' },
+          },
+        }),
+      ),
+      'cannot carry a key',
+    )
+  })
+
+  it('refuses a host that is an address, has no dot, or is one of github’s', () => {
+    for (const host of ['10.0.0.1', 'localhost', 'https://api.example.com']) {
+      assert.include(
+        defining(exampleProfile({ hosts: { [host]: { send: 'bearer' } } })),
+        'is not a host',
+        host,
+      )
+    }
+    assert.include(
+      defining(exampleProfile({ hosts: { 'api.github.com': { send: 'bearer' } } })),
+      "one of the github profile's hosts",
+    )
+  })
+
+  it('refuses an empty set, and a rule at a host the profile does not name', () => {
+    assert.include(defining(exampleProfile({ allow: { read: {} } })), 'is empty')
+    assert.include(
+      defining(exampleProfile({ allow: { read: { 'api.example.com': [] } } })),
+      'non-empty list of rules',
+    )
+    assert.include(
+      defining(
+        exampleProfile({ allow: { read: { 'www.example.com': [{ method: 'GET', path: '' }] } } }),
+      ),
+      'which is not in `profiles.example.hosts`',
+    )
+    assert.include(defining(exampleProfile({ allow: {} })), 'names the sets')
+  })
+
+  it('refuses a method that is not one, and a path with ** anywhere but last', () => {
+    for (const method of ['FETCH', 'get', [], ['GET', '*']]) {
+      assert.include(
+        defining(
+          exampleProfile({ allow: { read: { 'api.example.com': [{ method, path: 'v1' }] } } }),
+        ),
+        'Write one of',
+        JSON.stringify(method),
+      )
+    }
+    for (const written of ['v1/**/items', '**/x', '/v1', 'v1/x*', 'repos/{repo}/**']) {
+      assert.include(
+        defining(
+          exampleProfile({
+            allow: { read: { 'api.example.com': [{ method: 'GET', path: written }] } },
+          }),
+        ),
+        'A path is segments',
+        written,
+      )
+    }
+  })
+
+  it('refuses a placeholder that is not a key’s variable', () => {
+    for (const name of ['PATH', 'LD_PRELOAD', 'example_key', 'KEY', 'NODE_OPTIONS']) {
+      assert.include(
+        defining(exampleProfile({ placeholders: [name] })),
+        "is not a key's variable",
+        name,
+      )
+    }
+  })
+
+  it('refuses a GraphQL reader on a rule other than a POST, or in a deny rule', () => {
+    assert.include(
+      defining(
+        exampleProfile({
+          allow: {
+            read: {
+              'api.example.com': [{ graphql: { withheld: [] }, method: 'GET', path: 'graphql' }],
+            },
+          },
+        }),
+      ),
+      'is "POST" alone',
+    )
+    assert.include(
+      defining(
+        exampleProfile({
+          deny: { 'api.example.com': [{ graphql: {}, method: 'POST', path: 'g' }] },
+        }),
+      ),
+      'no place in a `deny` rule',
+    )
+  })
+
+  it('refuses a name the broker’s code takes', () => {
+    for (const name of ['github', 'model-server']) {
+      assert.include(
+        refused({ project: { profiles: { [name]: exampleProfile() } } }),
+        'Name the profile something else',
+      )
+    }
+  })
+})
+
+describe('Config.compose, on a profile under a restricted ceiling', () => {
+  const ceiling = (hosts: readonly string[]) => ({
+    networkCeiling: 'restricted',
+    profiles: { example: exampleProfile() },
+    tunnelCeiling: hosts,
+  })
+  const project = { secrets: { EXAMPLE: granting('example', ['read'], ['api.example.com']) } }
+
+  it('takes a profile whose hosts the ceiling lists', () => {
+    assert.isDefined(
+      grantNamed(composed({ project, user: ceiling(['api.example.com']) }), 'EXAMPLE'),
+    )
+  })
+
+  it('refuses one whose host it does not, naming both files', () => {
+    const message = refused({ project, user: ceiling(['pypi.org']) })
+    assert.include(message, `${projectPolicyPath}: \`secrets.EXAMPLE\` grants the example profile`)
+    assert.include(message, `that ${userPolicyName} defines`)
+    assert.include(message, `${userPolicyName} sets \`networkCeiling = "restricted"\``)
+    assert.include(message, 'api.example.com not in its `tunnelCeiling` (pypi.org)')
+  })
+
+  it('exempts a profile igloo ships, and holds the user layer’s replacement of one to it', () => {
+    const runpod = {
+      secrets: {
+        RUNPOD: granting('runpod', ['read', 'invoke'], ['api.runpod.io', 'api.runpod.ai']),
+      },
+    }
+    assert.strictEqual(
+      grantNamed(composed({ project: runpod, user: { networkCeiling: 'restricted' } }), 'RUNPOD')
+        ?.definedBy,
+      'igloo',
+    )
+    const replaced = refused({
+      project: { secrets: { RUNPOD: granting('runpod', ['read'], ['api.example.com']) } },
+      user: { ...ceiling([]), profiles: { runpod: exampleProfile() } },
+    })
+    assert.include(replaced, 'grants the runpod profile that')
   })
 })
