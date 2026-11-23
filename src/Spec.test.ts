@@ -1,7 +1,10 @@
-import type * as Config from './Config.ts'
-
 import { assert, describe, it } from '@effect/vitest'
+import { Result } from 'effect'
+import { readFileSync } from 'node:fs'
 
+import * as Broker from './broker.ts'
+import * as Config from './Config.ts'
+import * as Profiles from './Profiles.ts'
 import * as Spec from './Spec.ts'
 
 const facts: Spec.Facts = {
@@ -400,5 +403,106 @@ describe('Spec.fromConfig, for a model server', () => {
       planFor({ modelServers: [keyless, keyed] }).hostSide,
       planFor({ modelServers: [keyed, keyless] }).hostSide,
     )
+  })
+})
+
+describe('a profile, from its definition to the broker', () => {
+  /** igloo's profiles, from the JSON the package carries: `IGLOO_PROFILES`, which the devshell sets. */
+  const shipped = (): ReadonlyMap<string, Profiles.Profile> => {
+    const at = process.env['IGLOO_PROFILES']
+    if (at === undefined || at === '') {
+      throw new Error('IGLOO_PROFILES is not set: run the tests in `nix develop`')
+    }
+    return Result.getOrThrow(Profiles.read(at, JSON.parse(readFileSync(at, 'utf8'))))
+  }
+  const root = '/home/you/api'
+  const example = {
+    allow: {
+      read: { 'api.example.com': [{ method: 'GET', path: 'v1/**' }] },
+      write: { 'api.example.com': [{ method: 'POST', path: 'v1/items' }] },
+    },
+    hosts: { 'api.example.com': { send: { header: 'x-example-key' } } },
+    placeholders: ['EXAMPLE_API_KEY'],
+  }
+  const reading = {
+    allow: ['read'],
+    hosts: ['api.example.com'],
+    mode: 'broker',
+    profile: 'example',
+    source: { file: '/k' },
+  }
+
+  /**
+   * The grants the broker is started with for these layers, read back as it
+   * reads its `--grants`, and its decision on a request addressed by name.
+   */
+  const served = (layers: {
+    readonly project: Record<string, unknown>
+    readonly user?: Record<string, unknown>
+  }) => {
+    const composed = Result.getOrThrow(
+      Config.compose({
+        igloo: shipped(),
+        project: { path: `${root}/igloo-policy.nix`, values: layers.project },
+        projectAliases: [],
+        projectRoot: root,
+        user:
+          layers.user === undefined
+            ? undefined
+            : { path: 'programs.igloo.policy', values: layers.user },
+        userPolicyName: 'programs.igloo.policy',
+      }),
+    )
+    const plan = Spec.fromConfig({ content: [], policy: composed.policy }, facts)
+    const parsed = Broker.parseGrants(JSON.stringify(plan.grants))
+    if ('message' in parsed) throw new Error(parsed.message)
+    return {
+      decide: (method: string, url: string) =>
+        Broker.decideAddressed(parsed.grants, method, url)._tag,
+      plan,
+    }
+  }
+
+  it('serves what a project’s own profile’s chosen sets allow, and nothing else', () => {
+    const { decide, plan } = served({
+      project: { profiles: { example }, secrets: { EXAMPLE: reading } },
+    })
+    assert.strictEqual(decide('GET', 'https://api.example.com/v1/items'), 'Profile')
+    assert.strictEqual(decide('POST', 'https://api.example.com/v1/items'), 'Deny')
+    assert.strictEqual(plan.runner.brokerEnv['EXAMPLE_API_KEY'], Broker.guestPlaceholderKey)
+  })
+
+  it('serves a user layer’s profile, granted by the project or by the user layer', () => {
+    for (const layers of [
+      { project: { secrets: { EXAMPLE: reading } }, user: { profiles: { example } } },
+      {
+        project: {},
+        user: { profiles: { example }, secrets: { EXAMPLE: { ...reading, projects: [root] } } },
+      },
+    ]) {
+      const { decide } = served(layers)
+      assert.strictEqual(decide('GET', 'https://api.example.com/v1/items'), 'Profile')
+      assert.strictEqual(decide('POST', 'https://api.example.com/v1/items'), 'Deny')
+    }
+  })
+
+  it('serves one of igloo’s, with the sets chosen and none other', () => {
+    const { decide, plan } = served({
+      project: {
+        secrets: {
+          RUNPOD: {
+            allow: ['read'],
+            hosts: ['api.runpod.io'],
+            mode: 'broker',
+            profile: 'runpod',
+            source: { file: '/k' },
+          },
+        },
+      },
+    })
+    assert.strictEqual(decide('GET', 'https://api.runpod.io/v2/pods'), 'Profile')
+    assert.strictEqual(decide('POST', 'https://api.runpod.io/v2/pods'), 'Deny')
+    assert.strictEqual(decide('POST', 'https://api.runpod.ai/v2/ep1/run'), 'Deny')
+    assert.strictEqual(plan.runner.brokerEnv['RUNPOD_API_KEY'], Broker.guestPlaceholderKey)
   })
 })
