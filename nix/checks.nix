@@ -4,9 +4,11 @@
 # runner. Each is held to one of three outcomes: refused while
 # evaluating, refused while building, or no effect on the runner at all.
 # One more case disables the guest core, which content may do, and has to
-# leave the core gone and every pin held.
+# leave the core gone and every pin held. And one is the user layer's: a
+# broker profile it defines once per name.
 {
   guest,
+  homeModule,
   lib,
   mkRunner,
   overridden,
@@ -456,4 +458,45 @@ lib.mapAttrs refusedOnEvaluation {
       !(builtins.tryEval (mkRunner (withContent enabled)).drvPath).success
     ) "writable-store: mkRunner returned a runner with the store on a disk the VM does not have";
     pkgs.runCommandLocal "igloo-check-writable-store" { } "touch $out";
+
+  # Two modules defining one profile name would otherwise have their sets
+  # joined into a profile neither wrote, which igloo, reading the merged
+  # JSON, could not tell from one definition.
+  profile-defined-once =
+    let
+      policyOf =
+        definitions:
+        (lib.evalModules {
+          modules = [
+            homeModule
+            {
+              options.assertions = lib.mkOption {
+                type = lib.types.anything;
+                default = [ ];
+              };
+              options.home.packages = lib.mkOption {
+                type = lib.types.anything;
+                default = [ ];
+              };
+              config._module.args.pkgs = pkgs;
+            }
+          ]
+          ++ definitions;
+        }).config.programs.igloo.policy;
+      definingRead = {
+        programs.igloo.policy.profiles.example.allow.read."api.example.com" = [ ];
+      };
+      definingWrite = {
+        programs.igloo.policy.profiles.example.allow.write."api.example.com" = [ ];
+      };
+      evaluates = definitions: (builtins.tryEval (builtins.deepSeq (policyOf definitions) true)).success;
+    in
+    assert lib.assertMsg (evaluates [ definingRead ]) "profile-defined-once: one definition is refused";
+    assert lib.assertMsg (
+      !(evaluates [
+        definingRead
+        definingWrite
+      ])
+    ) "profile-defined-once: two definitions of one profile were merged";
+    pkgs.runCommandLocal "igloo-check-profile-defined-once" { } "touch $out";
 }
