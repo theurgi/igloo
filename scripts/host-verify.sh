@@ -2899,10 +2899,10 @@ EOF
 				guest 'printenv IGLOO_VERIFY_TOKEN 2>&1'
 				echo
 				echo "=== a read the profile allows, sent with the key"
-				guest 'timeout 30 curl -sS -i "https://gitlab.com/api/v4/projects?per_page=1" 2>&1 | head -20'
+				guest 'timeout 30 curl -sS -w " status %{http_code}\n" "https://gitlab.com/api/v4/projects?per_page=1" 2>&1 | head -c 600'
 				echo
 				echo "=== a write no set allows"
-				guest 'timeout 30 curl -sS -i -X POST -d "{}" https://gitlab.com/api/v4/projects 2>&1 | head -20'
+				guest 'timeout 30 curl -sS -w " status %{http_code}\n" -X POST -d "{}" https://gitlab.com/api/v4/projects 2>&1 | head -c 600'
 				echo
 				echo "=== a read no rule covers, sent without the key"
 				guest 'timeout 30 curl -sS -o /dev/null -w "status %{http_code}\n" https://gitlab.com/api/v4/projects/278964 2>&1'
@@ -2924,7 +2924,7 @@ EOF
 			fi
 			allowed_said=$(after_header "$out/artifacts/profile.txt" "=== a read the profile allows")
 			case $allowed_said in
-			*'HTTP/1.1 403'*'gitlab.com refused IGLOO_VERIFY_PROFILE'*)
+			*'gitlab.com refused IGLOO_VERIFY_PROFILE'*' status 403')
 				verdict PASS profile-sends-key "a read the profile allows reaches gitlab.com with the key in PRIVATE-TOKEN, which GitLab refuses, and comes back as the broker's 403 naming the credential"
 				;;
 			*)
@@ -2933,7 +2933,7 @@ EOF
 			esac
 			write_said=$(after_header "$out/artifacts/profile.txt" "=== a write no set allows")
 			case $write_said in
-			*'broker: POST /api/v4/projects is not something this VM may do through gitlab.com'*)
+			*'broker: POST /api/v4/projects is not something this VM may do through gitlab.com, which allows GET there'*' status 405')
 				verdict PASS profile-refuses "a write no set allows is refused by the broker, with its reason, and never reaches GitLab"
 				;;
 			*)
@@ -2990,42 +2990,34 @@ EOF
 			# MB goes to the provider, whether its length is declared or it arrives
 			# in chunks, and the provider's answer comes back. With the invalid key
 			# that is the key refused or the provider's own 413, whichever it finds
-			# first. The body is written in the guest and sent while the answer is
-			# read, since the provider may answer before the body has all arrived.
+			# first. The body is written to a file in the guest and sent by name,
+			# as a client sends it, through the tunnel the broker answers.
 			section "the size of a body"
-			send_sized() { # send_sized <path> <bytes> length|chunked
-				guest "bash -s $1 $2 $3" <<'GUEST'
-trap '' PIPE
+			send_sized() { # send_sized <bytes> length|chunked
+				guest "bash -s $1 $2" <<'GUEST'
 start='{"messages":[],"model":"claude-opus-5","max_tokens":1,"pad":"' end='"}'
-pad=$(($2 - ${#start} - ${#end}))
-body() { printf %s "$start"; head -c "$pad" /dev/zero | tr '\0' a; printf %s "$end"; }
-exec 3<>/dev/tcp/127.0.0.1/3128
-if [ "$3" = length ]; then
-	{
-		printf 'POST %s HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\n\r\n' "$1" "$2"
-		body
-	} >&3 2>/dev/null &
-else
-	{
-		printf 'POST %s HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n%x\r\n' "$1" "$2"
-		body
-		printf '\r\n0\r\n\r\n'
-	} >&3 2>/dev/null &
-fi
-timeout 120 cat <&3 | head -c 600
+pad=$(($1 - ${#start} - ${#end}))
+body=$(mktemp)
+{ printf %s "$start"; head -c "$pad" /dev/zero | tr '\0' a; printf %s "$end"; } >"$body"
+chunked=()
+if [ "$2" = chunked ]; then chunked=(-H 'Transfer-Encoding: chunked'); fi
+timeout 120 curl -sS -w ' status %{http_code}\n' -H 'Content-Type: application/json' \
+	-H 'anthropic-version: 2023-06-01' "${chunked[@]}" --data-binary "@$body" \
+	https://api.anthropic.com/v1/messages 2>&1 | head -c 600
+rm -f "$body"
 GUEST
 			}
 			{
 				echo "=== past Anthropic's 32 MB, declared"
-				send_sized /api.anthropic.com/v1/messages 40000000 length 2>&1
+				send_sized 40000000 length 2>&1
 				echo
 				echo "=== past Anthropic's 32 MB, in chunks"
-				send_sized /api.anthropic.com/v1/messages 40000000 chunked 2>&1
+				send_sized 40000000 chunked 2>&1
 			} >"$out/artifacts/inference-size.txt" 2>&1
 
-			# One line per answer: the broker's refusal of the key, or the status
-			# line of the provider's 413.
-			if [ "$(grep -cE 'refused IGLOO_VERIFY_INFERENCE|^HTTP/1.1 413' "$out/artifacts/inference-size.txt")" = 2 ]; then
+			# One line per answer: the broker's refusal of the key, or the
+			# provider's 413, whose status ends its last line.
+			if [ "$(grep -cE 'refused IGLOO_VERIFY_INFERENCE| status 413$' "$out/artifacts/inference-size.txt")" = 2 ]; then
 				verdict PASS inference-size-past "a body past Anthropic's 32 MB reaches api.anthropic.com through the broker, declared or chunked, and its answer comes back"
 			else
 				verdict FAIL inference-size-past "a body past the provider's limit did not reach it, or its answer did not come back — read artifacts/inference-size.txt, then logs/up-broker/broker.log"
