@@ -559,11 +559,10 @@ server is the server's to decide:
 
 ### Pointing an agent at a model server
 
-- **omp** reads `LLAMA_CPP_BASE_URL`, which the guest sets to the server's base URL when one model
-  server is declared, and finds the server's models through `v1/models` itself. With several servers
-  the variable is not set, and omp has to be pointed at them in `~/.omp/agent/models.yml`. omp also
-  asks a llama.cpp server for `/props` and `/models` to learn its context size; the broker refuses
-  both, and omp then assumes 128,000 tokens.
+An agent reaches a model server at `http://127.0.0.1:3128/local/<name>/v1`, where `<name>` is the
+server's name in `modelServers`. The guest sets no variable for it; each agent is given the base in
+its own configuration:
+
 - **pi** takes the server, with its models listed, from `~/.pi/agent/models.json`. Add it beside
   what the file already holds:
 

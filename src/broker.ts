@@ -819,30 +819,13 @@ export const guestPlaceholderKey = 'igloo-broker-holds-the-real-key'
 const modelServerPrefix = 'local'
 
 /**
- * Where a model server is reached from the guest: the base an OpenAI-shaped
- * client appends `chat/completions`, `responses` or `models` to.
- */
-export const modelServerBase = (name: string, port: number): string =>
-  `http://127.0.0.1:${String(port)}/${modelServerPrefix}/${name}/v1`
-
-/**
  * The variables the guest is given for `grants` beside a profile's
  * placeholders, which composition sets from the profile. Every value is plain
  * text with no `"` or `\`: NixOS writes these into a shell script and a PAM
  * file inside double quotes, unescaped, so a quote in a value ends it.
  */
-export const guestEnvironment = (
-  grants: readonly Grant[],
-  port: number,
-): Record<string, string> => {
+export const guestEnvironment = (grants: readonly Grant[]): Record<string, string> => {
   const environment: Record<string, string> = {}
-  // omp's built-in llama.cpp provider takes its base from this variable and
-  // finds the server's models itself. It holds one URL, so with several
-  // servers none is chosen for it.
-  const [server, ...others] = grants.filter(isModelServerGrant)
-  if (server !== undefined && others.length === 0) {
-    environment['LLAMA_CPP_BASE_URL'] = modelServerBase(server.name, port)
-  }
   // GitHub's CLI reaches its API by name, which the broker answers, and makes
   // no request without a token. Its own name for one, ahead of `GITHUB_TOKEN`.
   if (grants.some(grant => isGitGrant(grant) && grant.profile === 'github')) {
