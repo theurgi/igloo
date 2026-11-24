@@ -2949,8 +2949,8 @@ EOF
 
 			# ------------------------------------------------- a model server --
 			#
-			# The stand-in on this machine's loopback, reached the way omp would reach
-			# it: the guest's own variable, the tether, and the broker under Landlock.
+			# The stand-in on this machine's loopback, reached the way an agent in the
+			# guest reaches it: the tether, and the broker under Landlock.
 			# That the broker reaches this port and no other beyond 443 and 53 is its
 			# ExecStart above, under the helper landlock-keeps shows allows exactly
 			# the ports it is given.
@@ -2960,9 +2960,6 @@ EOF
 					"'GET $1 HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n'"
 			}
 			{
-				echo "=== the variable omp reads"
-				guest 'printenv LLAMA_CPP_BASE_URL 2>&1'
-				echo
 				echo "=== the model listing, through the broker"
 				guest "$(get_from_broker /local/igloo-verify/v1/models)" 2>&1 | head -20
 				echo
@@ -2972,12 +2969,6 @@ EOF
 				echo "=== what reached the server: method, path, Authorization"
 				cat "$scratch/model-server.log" 2>&1
 			} >"$out/artifacts/model-server.txt" 2>&1
-
-			if grep -qx 'http://127.0.0.1:3128/local/igloo-verify/v1' "$out/artifacts/model-server.txt"; then
-				verdict PASS model-server-guest-env "the guest's LLAMA_CPP_BASE_URL names the model server through the broker"
-			else
-				verdict FAIL model-server-guest-env "read artifacts/model-server.txt"
-			fi
 
 			if grep -q 'igloo-verify-model' "$out/artifacts/model-server.txt" &&
 				grep -qx 'GET /v1/models -' "$scratch/model-server.log"; then
@@ -3840,8 +3831,8 @@ EOF
 						"a real key streams SSE events back through the broker"
 
 					# The other two shapes OpenRouter takes a model call in, for the
-					# harnesses that speak them: omp and Codex CLI speak Responses,
-					# Claude Code and pi's Claude models Messages.
+					# harnesses that speak them: Codex CLI speaks Responses, Claude
+					# Code and pi's Claude models Messages.
 					responded='{"model":"'"$model"'","max_output_tokens":16,"stream":true,"input":"Reply with the single word: brokered"}'
 					guest "$(post_by_name https://openrouter.ai/api/v1/responses "$responded")" \
 						>"$out/artifacts/inference-stream-responses.txt" 2>&1

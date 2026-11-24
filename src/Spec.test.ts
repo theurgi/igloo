@@ -378,17 +378,6 @@ describe('Spec.fromConfig, for a model server', () => {
     assert.notInclude(JSON.stringify(plan.runner), 'broker-credentials')
   })
 
-  it('points omp at the one server, through the broker', () => {
-    assert.strictEqual(
-      planFor({ modelServers: [keyless] }).runner.brokerEnv['LLAMA_CPP_BASE_URL'],
-      'http://127.0.0.1:3128/local/llama-swap/v1',
-    )
-    assert.notProperty(
-      planFor({ modelServers: [keyless, keyed] }).runner.brokerEnv,
-      'LLAMA_CPP_BASE_URL',
-    )
-  })
-
   it('records the server, its port and its key’s name as what the broker was started with', () => {
     const base = planFor({ modelServers: [keyless] })
     assert.include(base.hostSide, 'model-server llama-swap port=8080')

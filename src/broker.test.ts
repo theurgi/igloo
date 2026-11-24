@@ -1542,7 +1542,7 @@ describe('Broker.responseHeaders', () => {
 
 describe('Broker.guestEnvironment', () => {
   it('adds nothing for a profile grant, whose placeholders composition sets from the profile', () => {
-    assert.deepStrictEqual(Broker.guestEnvironment([...inference, ...runpod], 3128), {})
+    assert.deepStrictEqual(Broker.guestEnvironment([...inference, ...runpod]), {})
   })
 
   it('holds no value a session variable cannot carry', () => {
@@ -1550,14 +1550,14 @@ describe('Broker.guestEnvironment', () => {
     // value ends it.
     const [server] = servers
     for (const [name, value] of Object.entries(
-      Broker.guestEnvironment([...grants, ...(server === undefined ? [] : [server])], 3128),
+      Broker.guestEnvironment([...grants, ...(server === undefined ? [] : [server])]),
     )) {
       assert.notMatch(value, /["\\]/, name)
     }
   })
 
   it('gives a github grant only the token GitHub’s CLI needs before it asks for anything', () => {
-    assert.deepStrictEqual(Broker.guestEnvironment(grants, 3128), {
+    assert.deepStrictEqual(Broker.guestEnvironment(grants), {
       GH_TOKEN: Broker.guestPlaceholderKey,
     })
   })
@@ -1786,30 +1786,15 @@ describe('Broker.relay, for a model server', () => {
   })
 })
 
-describe('Broker.guestEnvironment, for a model server', () => {
-  it('points omp at the one server there is, and opencode at nothing', () => {
-    const only = servers.slice(0, 1)
-    assert.deepStrictEqual(Broker.guestEnvironment(only, 3128), {
-      LLAMA_CPP_BASE_URL: 'http://127.0.0.1:3128/local/llama-swap/v1',
-    })
+describe('Broker, for a model server', () => {
+  it('gives the guest no variable for one', () => {
+    assert.deepStrictEqual(Broker.guestEnvironment(servers.slice(0, 1)), {})
   })
 
-  it('chooses none of several servers for omp', () => {
-    assert.notProperty(Broker.guestEnvironment(servers, 3128), 'LLAMA_CPP_BASE_URL')
-  })
-
-  it('sets it beside a profile grant', () => {
-    const environment = Broker.guestEnvironment([...inference, ...servers.slice(0, 1)], 3128)
-    assert.strictEqual(
-      environment['LLAMA_CPP_BASE_URL'],
-      'http://127.0.0.1:3128/local/llama-swap/v1',
-    )
-  })
-
-  it('builds a base each endpoint hangs off', () => {
-    // An OpenAI-shaped client appends these to its base; each has to be a path
+  it('routes each endpoint an OpenAI-shaped client hangs off its base', () => {
+    // A client appends these to the base it is given; each has to be a path
     // `decide` routes.
-    const baseUrl = Broker.modelServerBase('llama-swap', 3128)
+    const baseUrl = 'http://127.0.0.1:3128/local/llama-swap/v1'
     for (const [endpoint, method] of [
       ['chat/completions', 'POST'],
       ['responses', 'POST'],

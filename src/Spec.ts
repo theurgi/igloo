@@ -142,7 +142,7 @@ export const fromConfig = (
   // the whole of its egress.
   const broker = grants.length > 0 || Broker.tunnels(tunnel)
   const brokerEnv = {
-    ...Broker.guestEnvironment(grants, Vm.brokerGuestPort),
+    ...Broker.guestEnvironment(grants),
     ...placeholders,
     // Both spellings, because half the ecosystem reads one and half the other,
     // and `NODE_USE_ENV_PROXY` because Node's own `fetch` ignores the variables
