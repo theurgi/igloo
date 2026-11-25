@@ -2899,10 +2899,10 @@ EOF
 				guest 'printenv IGLOO_VERIFY_TOKEN 2>&1'
 				echo
 				echo "=== a read the profile allows, sent with the key"
-				guest 'timeout 30 curl -sS -w " status %{http_code}\n" "https://gitlab.com/api/v4/projects?per_page=1" 2>&1 | head -c 600'
+				guest 'timeout 30 curl -sS -o /tmp/answer -w "status %{http_code} " "https://gitlab.com/api/v4/projects?per_page=1" 2>&1; head -c 600 /tmp/answer'
 				echo
 				echo "=== a write no set allows"
-				guest 'timeout 30 curl -sS -w " status %{http_code}\n" -X POST -d "{}" https://gitlab.com/api/v4/projects 2>&1 | head -c 600'
+				guest 'timeout 30 curl -sS -o /tmp/answer -w "status %{http_code} " -X POST -d "{}" https://gitlab.com/api/v4/projects 2>&1; head -c 600 /tmp/answer'
 				echo
 				echo "=== a read no rule covers, sent without the key"
 				guest 'timeout 30 curl -sS -o /dev/null -w "status %{http_code}\n" https://gitlab.com/api/v4/projects/278964 2>&1'
@@ -2924,7 +2924,7 @@ EOF
 			fi
 			allowed_said=$(after_header "$out/artifacts/profile.txt" "=== a read the profile allows")
 			case $allowed_said in
-			*'gitlab.com refused IGLOO_VERIFY_PROFILE'*' status 403')
+			'status 403 '*'gitlab.com refused IGLOO_VERIFY_PROFILE'*)
 				verdict PASS profile-sends-key "a read the profile allows reaches gitlab.com with the key in PRIVATE-TOKEN, which GitLab refuses, and comes back as the broker's 403 naming the credential"
 				;;
 			*)
@@ -2933,7 +2933,7 @@ EOF
 			esac
 			write_said=$(after_header "$out/artifacts/profile.txt" "=== a write no set allows")
 			case $write_said in
-			*'broker: POST /api/v4/projects is not something this VM may do through gitlab.com, which allows GET there'*' status 405')
+			'status 405 '*'broker: POST /api/v4/projects is not something this VM may do through gitlab.com, which allows GET there'*)
 				verdict PASS profile-refuses "a write no set allows is refused by the broker, with its reason, and never reaches GitLab"
 				;;
 			*)
