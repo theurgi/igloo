@@ -415,7 +415,7 @@ certificate of its own, so the guest has to trust what issued it, and answers Ru
 authority for the project with `openssl`, and a certificate signed by it for the names the broker
 answers for any profile. It keeps both in `.igloo/tls/`, with the certificate's key, readable only
 by you. The guest is built trusting that authority beside the system's own, and
-`NODE_EXTRA_CA_CERTS` points Node and Bun at the same list.
+`NODE_EXTRA_CA_CERTS` and `NIX_SSL_CERT_FILE` point Node, Bun and Python at the same list.
 
 - The authority can sign for `github.com`, `api.runpod.io` and `api.runpod.ai`, and their
   subdomains, and nothing else: its name constraints say so, and its own key is deleted once it has
@@ -700,9 +700,14 @@ A model server is covered in
 needs no pointing: `git` and `gh` reach GitHub by its own names, as
 [how the guest reaches GitHub](#how-the-guest-reaches-github) says.
 
-The client has to trust the project's authority. Most read the system's store, which holds it; Node
-and Bun read `NODE_EXTRA_CA_CERTS`, which the guest sets to that store. A client that verifies
+The client has to trust the project's authority. Most read the system's store, which holds it. Node
+and Bun read `NODE_EXTRA_CA_CERTS`, and Python clients that use certifi's list, as `requests` and
+`httpx` do, read `NIX_SSL_CERT_FILE`; the guest sets both to that store. A client that verifies
 against a list of its own and reads no variable does not reach the broker.
+
+A login and a service the guest's NixOS configuration defines, in `systemd.services` or
+`systemd.user.services`, are given the same variables: the proxy's, the two above, and the
+placeholders. A process started some other way, by `systemd-run` say, inherits only what started it.
 
 An agent that speaks Anthropic's Messages API can use an `openrouter` grant too: Claude Code, for
 one, with `ANTHROPIC_BASE_URL=https://openrouter.ai/api` and any key in `ANTHROPIC_API_KEY`, set in
@@ -783,8 +788,8 @@ that way, since it never enters the guest.
   `branches/feature%2Fx`, is refused.
 - A client that verifies against a list of certificate authorities of its own, rather than the
   system's, does not trust the broker's, and fails to reach any name the broker answers. Node and
-  Bun read `NODE_EXTRA_CA_CERTS`, which the guest sets; point any other at
-  `/etc/ssl/certs/ca-certificates.crt`.
+  Bun read `NODE_EXTRA_CA_CERTS`, and certifi `NIX_SSL_CERT_FILE`, which the guest sets; point any
+  other at `/etc/ssl/certs/ca-certificates.crt`.
 - With a grant of a profile, nothing in the guest reaches its hosts but through the broker: a read
   no rule covers goes without the key where `tunnel` reaches the host, and is refused where it does
   not.

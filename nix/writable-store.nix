@@ -3,6 +3,10 @@
 # The store the host shares stays read-only and becomes the lower layer of
 # an overlay. What the guest fetches or builds lands in the upper layer, on
 # /persist, beside Nix's database, so both outlive a stop.
+#
+# Nix reaches a substituter through the tunnel alone, whose variables the
+# runner gives every service the configuration defines, the daemon and the
+# reconciling unit below among them.
 {
   config,
   lib,
@@ -12,18 +16,6 @@ let
   cfg = config.igloo.writableStore;
 
   state = "/persist/nix";
-
-  # The tunnel, where the VM has one. A unit does not get session
-  # variables, and Nix reaches a substituter through nothing else.
-  proxyEnv = lib.filterAttrs (
-    name: _:
-    lib.elem name [
-      "HTTPS_PROXY"
-      "https_proxy"
-      "NO_PROXY"
-      "no_proxy"
-    ]
-  ) config.environment.sessionVariables;
 in
 {
   options.igloo.writableStore.enable = lib.mkEnableOption ''
@@ -60,10 +52,6 @@ in
       "flakes"
     ];
 
-    # Root uses the store directly. The daemon serves any other user, and
-    # fetches on their behalf.
-    systemd.services.nix-daemon.environment = proxyEnv;
-
     # The database outlives the closure it was filled from. After a change
     # to the VM's configuration, paths the old closure supplied are gone
     # from the lower layer and still recorded as valid, so whatever in the
@@ -80,7 +68,6 @@ in
         "/nix/store"
         "/nix/var"
       ];
-      environment = proxyEnv;
       path = [ config.nix.package ];
       serviceConfig = {
         Type = "oneshot";

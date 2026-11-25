@@ -163,9 +163,16 @@ export const fromConfig = (
           NO_PROXY: '127.0.0.1,localhost,::1',
           no_proxy: '127.0.0.1,localhost,::1',
         }),
-    // Node and Bun verify against the authorities they carry rather than the
-    // system's, which is where the guest trusts the broker's.
-    ...(answered ? { NODE_EXTRA_CA_CERTS: '/etc/ssl/certs/ca-certificates.crt' } : {}),
+    // Some runtimes verify against authorities of their own rather than the
+    // system's, which is where the guest trusts the broker's: Node and Bun add
+    // the file `NODE_EXTRA_CA_CERTS` names to theirs, and Python's certifi
+    // reads `NIX_SSL_CERT_FILE` in place of its own list.
+    ...(answered
+      ? {
+          NIX_SSL_CERT_FILE: '/etc/ssl/certs/ca-certificates.crt',
+          NODE_EXTRA_CA_CERTS: '/etc/ssl/certs/ca-certificates.crt',
+        }
+      : {}),
   }
 
   const runner: Flake.RunnerSpec = {
