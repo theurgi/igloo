@@ -214,7 +214,7 @@ in
         default = [ ];
         example = lib.literalExpression ''
           (with pkgs; [ bun git ripgrep ])
-          ++ (with inputs.llm-agents.packages.''${system}; [ claude-code opencode ])
+          ++ [ inputs.some-flake.packages.''${system}.default ]
         '';
         description = ''
           Packages every VM this user runs gets. Evaluated here and

@@ -49,13 +49,14 @@ let
       # makes a client refuse the broker's certificate and fail. It cannot
       # make a credential reachable.
       brokerAuthority ? null,
-      # Environment pointing the guest's model-provider clients at the
-      # host's broker: a base URL per provider, and a placeholder where each
-      # client expects a key. `{ }` for a VM with no such grant.
+      # Environment the guest's clients reach the host's broker by: the
+      # proxy, the trust a client verifies the broker's names by, and a
+      # placeholder where each profile's client expects a key. `{ }` for a
+      # VM with no broker.
       #
       # Content, not policy, for the same reason `gitBroker` is: removing it
-      # makes a client reach the provider directly with a placeholder key and
-      # fail. It cannot make a credential reachable.
+      # makes a client fail to reach the broker, or send no key, which the
+      # broker sets regardless. It cannot make a credential reachable.
       brokerEnv ? { },
       # NixOS modules composing the guest environment — the content plane.
       # They compose by normal module semantics and may override anything in
@@ -174,13 +175,16 @@ let
           security.pki.certificates = [ brokerAuthority ];
         };
 
-      # Point the guest's clients at the broker. Session variables reach
-      # every login: the proxy, the trust a client verifies the broker's
-      # names by, and every placeholder key.
+      # Point the guest's clients at the broker: the proxy, the trust a
+      # client verifies the broker's names by, and every placeholder key.
+      # Session variables reach every login; the global environment reaches
+      # every service the configuration defines, which a login's variables
+      # never do.
       brokerEnvModule =
         { ... }:
         {
           environment.sessionVariables = brokerEnv;
+          systemd.globalEnvironment = brokerEnv;
         };
 
       # The serial QEMU gives the disk, which is how the guest finds it:

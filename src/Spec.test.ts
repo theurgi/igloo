@@ -150,16 +150,16 @@ describe('Spec.fromConfig, on the rest of what it decides', () => {
     for (const answered of [gitGrant(['you/api'], 'ONE'), inferenceGrant]) {
       const { runner } = planFor({ secrets: [answered] })
       assert.strictEqual(runner.brokerAuthority, facts.tlsAuthority)
-      assert.strictEqual(
-        runner.brokerEnv['NODE_EXTRA_CA_CERTS'],
-        '/etc/ssl/certs/ca-certificates.crt',
-      )
+      for (const name of ['NIX_SSL_CERT_FILE', 'NODE_EXTRA_CA_CERTS']) {
+        assert.strictEqual(runner.brokerEnv[name], '/etc/ssl/certs/ca-certificates.crt')
+      }
     }
     for (const runner of [
       planFor({ modelServers: [modelServer] }).runner,
       planFor({ tunnel: 'any' }).runner,
     ]) {
       assert.isUndefined(runner.brokerAuthority)
+      assert.notProperty(runner.brokerEnv, 'NIX_SSL_CERT_FILE')
       assert.notProperty(runner.brokerEnv, 'NODE_EXTRA_CA_CERTS')
     }
   })

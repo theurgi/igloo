@@ -96,8 +96,10 @@ In `$XDG_RUNTIME_DIR/igloo/`, a tmpfs:
    layers that exist.
 2. For a broker that answers a name, `Tls.ensure` makes or finds the project's certificate.
    `Spec.fromConfig` decides where each credential goes, the broker's grants, what the guest is told
-   about the broker, and the runner's arguments, the authority the guest trusts among them.
-   `Flake.write` writes the runner flake.
+   about the broker, and the runner's arguments, the authority the guest trusts among them. What the
+   guest is told, the proxy, the trust variables and the placeholders, is given to a login and to
+   every service the guest's configuration defines (`mkRunner`'s `brokerEnv`). `Flake.write` writes
+   the runner flake.
 3. If the VM is already running, nothing is built: `up` says which of its inputs changed since it
    launched (`LaunchInputs`) and makes sure its broker, tether and ports are up. Otherwise:
 4. The slice is stopped, and the runtime directory and the broker's removed. A launch that cannot
