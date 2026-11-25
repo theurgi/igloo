@@ -1,5 +1,5 @@
 import type { Binaries } from './Binaries.ts'
-import type { GitGrant, ProfileGrant, TunnelScope } from './broker.ts'
+import type { ProfileGrant, Repository, TunnelScope } from './broker.ts'
 import type { Publication } from './Vm.ts'
 
 import { Array as Arr, Effect, FileSystem, Predicate, Result, Schema } from 'effect'
@@ -12,7 +12,6 @@ import {
   isRepo,
   isTcpPort,
   normaliseRepo,
-  profiles,
   tlsCertificateCredential,
   tlsKeyCredential,
 } from './broker.ts'
@@ -100,9 +99,9 @@ export const projectLayer = (projectRoot: string): LayerFiles => ({
 export type NetworkMode = 'internet' | 'none' | 'restricted'
 
 /**
- * What a brokered credential may be used for: `github` and the repositories it
- * may reach, or a profile and what the sets it chose allow at the hosts they
- * reach. The broker's own grant shape minus the credential name, which
+ * What a brokered credential may be used for: a profile, and what the sets it
+ * chose allow at the hosts they reach, for the whole account and per
+ * repository. The broker's own grant shape minus the credential name, which
  * composition adds once it knows which credential the grant belongs to.
  *
  * A profile grant carries two facts the broker is not sent: `placeholders`,
@@ -113,12 +112,10 @@ export type NetworkMode = 'internet' | 'none' | 'restricted'
  * A model server's grant is not a credential's, so it is not among them:
  * `modelServers` declares those.
  */
-export type Grant =
-  | Omit<GitGrant, 'credential'>
-  | (Omit<ProfileGrant, 'credential'> & {
-      readonly definedBy: Layer
-      readonly placeholders: readonly string[]
-    })
+export type Grant = Omit<ProfileGrant, 'credential'> & {
+  readonly definedBy: Layer
+  readonly placeholders: readonly string[]
+}
 
 /** Where a profile is defined: igloo's own, the user layer, or a project's. */
 export type Layer = 'igloo' | 'project' | 'user'
@@ -542,36 +539,69 @@ const KEY_LIMITS =
 const nixList = (items: readonly string[]): string =>
   `[ ${items.map(item => `"${nixString(item)}" `).join('')}]`
 
+/** Whether `entry` grants `github` in a shape it had before profiles, by access rather than by set. */
+const isOldGithub = (entry: Record<string, unknown>): boolean => {
+  if (Array.isArray(entry['repos']) || 'write' in entry) return true
+  const byAccess = asRecord(entry['repos'])
+  const keys = byAccess === undefined ? [] : Object.keys(byAccess)
+  return keys.length > 0 && keys.every(key => key === 'read' || key === 'write')
+}
+
 /**
- * Refuses a grant listing its repositories in a list `repos`, a `write` beside
- * it, or both, with the line that lists the same ones as `repos` takes them, to
- * be copied in their place.
+ * Refuses a `github` grant in a shape it had before profiles — repositories
+ * by access, in `repos.read` and `repos.write`, or earlier in a list `repos`
+ * with `write` beside it — with the grant that keeps what it allowed written
+ * out in its place: GraphQL, which every grant of it passed, in `allow`; each
+ * repository it read with `fetch` and `read`; and each it wrote with every
+ * set that names a repository.
  */
-const refuseFlatRepos = (
+const refuseOldGithub = (
   where: string,
   name: string,
   entry: Record<string, unknown>,
+  github: Profiles.Profile | undefined,
 ): Result.Result<never, ConfigError> =>
   Result.gen(function* () {
-    const read = Array.isArray(entry['repos'])
-      ? yield* readStringList(where, `secrets.${name}.repos`, entry['repos'])
-      : undefined
-    const write =
-      'write' in entry
-        ? yield* readStringList(where, `secrets.${name}.write`, entry['write'])
-        : undefined
-    const line =
-      read === undefined
-        ? `repos.write = ${nixList(write ?? [])};`
-        : write === undefined
-          ? `repos.read = ${nixList(read)};`
-          : `repos = { read = ${nixList(read)}; write = ${nixList(write)}; };`
-    const fields = [
-      ...(read === undefined ? [] : ['`repos`']),
-      ...(write === undefined ? [] : ['`write`']),
+    const setting = `secrets.${name}`
+    const flat = Array.isArray(entry['repos'])
+    const byAccess = flat ? undefined : asRecord(entry['repos'])
+    const listed = (key: string, raw: unknown) =>
+      raw === undefined ? Result.succeed([]) : readStringList(where, `${setting}.${key}`, raw)
+    const read = yield* flat
+      ? listed('repos', entry['repos'])
+      : listed('repos.read', byAccess?.['read'])
+    const write = yield* 'write' in entry
+      ? listed('write', entry['write'])
+      : listed('repos.write', byAccess?.['write'])
+    const slotted = github === undefined ? [] : Profiles.repoSets(github).toSorted()
+    const whole =
+      github === undefined
+        ? []
+        : Object.keys(github.allow)
+            .filter(set => !slotted.includes(set))
+            .toSorted()
+    const reading = ['fetch', 'read'].filter(set => slotted.includes(set))
+    const chosen = [
+      ...whole,
+      ...(read.length > 0 ? reading : []),
+      ...(write.length > 0 ? slotted : []),
     ]
+    const hosts = github === undefined ? [] : Profiles.reached(github, chosen).toSorted()
+    const lines = [
+      `hosts = ${nixList(hosts)};`,
+      `allow = ${nixList(whole)};`,
+      ...read.map(repo => `repos."${nixString(repo)}" = ${nixList(reading)};`),
+      ...write.map(repo => `repos."${nixString(repo)}" = ${nixList(slotted)};`),
+    ]
+    const fields = flat
+      ? ['`repos`', ...('write' in entry ? ['`write`'] : [])]
+      : 'write' in entry
+        ? ['`write`']
+        : Object.keys(byAccess ?? {})
+            .toSorted()
+            .map(key => `\`repos.${key}\``)
     return yield* bad(
-      `${where}: \`secrets.${name}\` lists its repositories in ${fields.join(' and ')}, and \`repos\` takes them by access now, as \`read\` and \`write\`. Write \`${line}\` in ${fields.length === 1 ? 'its' : 'their'} place.`,
+      `${where}: \`${setting}\` lists its repositories in ${fields.join(' and ')}, and a github grant chooses sets now: \`graphql\` in \`allow\`, and in \`repos\` each repository with the sets that apply there. To keep allowing what it did, write in ${fields.length === 1 ? 'its' : 'their'} place:\n\n  ${lines.join('\n  ')}\n\nand drop the sets a repository does not need.`,
     )
   })
 
@@ -585,9 +615,17 @@ interface Available {
   readonly profiles: ReadonlyMap<string, Defined>
 }
 
+/** How a repository of `repository` is written, for a message. */
+const repoForm = (repository: Repository): string =>
+  repository.segments === 2
+    ? '`owner/repo`'
+    : `${String(repository.segments)} names joined by \`/\``
+
 /**
- * A brokered credential's grant of a profile: the sets it allows, in `allow`,
- * and the hosts those sets reach, in `hosts`, which have to be exactly those.
+ * A brokered credential's grant of a profile: the sets it allows for the whole
+ * account, in `allow`; for a profile with a repository, the sets that apply
+ * per repository, in `repos`; and the hosts those sets reach, in `hosts`,
+ * which have to be exactly those.
  *
  * The hosts are written twice, in the profile and here, because where a key
  * goes is the decision that matters most and the one a profile someone else
@@ -595,6 +633,10 @@ interface Available {
  * sending the key there on the broker's first request. Neither is defaulted,
  * and a grant written before profiles had sets, with neither, is refused with
  * the lines that keep what it allowed: every set the profile has.
+ *
+ * A set whose rules name a repository is chosen per repository, and one whose
+ * rules name none in `allow` alone: it reaches whatever the key reaches in the
+ * whole account, and listing it under one repository would hide that.
  */
 const readProfileGrant = (
   where: string,
@@ -605,24 +647,35 @@ const readProfileGrant = (
 ): Result.Result<Grant, ConfigError> =>
   Result.gen(function* () {
     const setting = `secrets.${name}`
+    const { repository } = defined.profile
     const sets = Object.keys(defined.profile.allow).toSorted()
-    if ('repos' in entry) {
+    const slotted = Profiles.repoSets(defined.profile).toSorted()
+    const whole = sets.filter(set => !slotted.includes(set))
+    if (repository === undefined && 'repos' in entry) {
       return yield* bad(
         `${where}: \`${setting}.repos\` does not apply to the ${profile} profile, which has no repositories: a grant of it chooses its sets in \`allow\`.`,
       )
     }
-    if (!('hosts' in entry) && !('allow' in entry)) {
+    if (profile === 'github' && isOldGithub(entry)) {
+      return yield* refuseOldGithub(where, name, entry, defined.profile)
+    }
+    if (!('hosts' in entry) && !('allow' in entry) && !('repos' in entry)) {
       const every = Profiles.reached(defined.profile, sets).toSorted()
+      const lines = [
+        `hosts = ${nixList(every)};`,
+        `allow = ${nixList(whole)};`,
+        ...(repository === undefined
+          ? []
+          : [
+              `repos."${repository.segments === 2 ? 'owner/repo' : 'name'}" = ${nixList(slotted)};`,
+            ]),
+      ]
       return yield* bad(
-        `${where}: \`${setting}\` grants the ${profile} profile without choosing from it. A grant names the sets it allows in \`allow\`, and the hosts they reach in \`hosts\`, so that a profile whose update moves a host fails here rather than sending the key there. To keep allowing everything the profile does, write:\n\n  hosts = ${nixList(every)};\n  allow = ${nixList(sets)};\n\nand drop the sets this credential does not need.`,
+        `${where}: \`${setting}\` grants the ${profile} profile without choosing from it. A grant names the sets it allows in \`allow\`${repository === undefined ? '' : ', and those it allows per repository in `repos`'}, and the hosts they reach in \`hosts\`, so that a profile whose update moves a host fails here rather than sending the key there. To keep allowing everything the profile does, write:\n\n  ${lines.join('\n  ')}\n\n${repository === undefined ? '' : 'with a line in `repos` for each repository it may reach, '}and drop the sets this credential does not need.`,
       )
     }
+
     const allowed = yield* readStringList(where, `${setting}.allow`, entry['allow'] ?? [])
-    if (allowed.length === 0) {
-      return yield* bad(
-        `${where}: \`${setting}.allow\` chooses no set, so the grant would allow nothing. The ${profile} profile's sets: ${sets.join(', ')}.`,
-      )
-    }
     for (const [at, set] of allowed.entries()) {
       if (!Object.hasOwn(defined.profile.allow, set)) {
         return yield* bad(
@@ -632,8 +685,69 @@ const readProfileGrant = (
       if (allowed.indexOf(set) !== at) {
         return yield* bad(`${where}: \`${setting}.allow\` chooses ${set} twice.`)
       }
+      if (slotted.includes(set)) {
+        return yield* bad(
+          `${where}: \`${setting}.allow\` chooses ${set}, whose rules name a repository, so it applies per repository: list it in \`repos\` for each repository it may reach, as \`repos."owner/repo" = [ "${set}" ];\`.`,
+        )
+      }
     }
-    const reaches = Profiles.reached(defined.profile, allowed)
+
+    const repos: Record<string, readonly string[]> = {}
+    if (repository !== undefined && entry['repos'] !== undefined) {
+      const byRepo = asRecord(entry['repos'])
+      if (byRepo === undefined || Array.isArray(entry['repos'])) {
+        return yield* bad(
+          `${where}: \`${setting}.repos\` lists repositories, each with the sets that apply there, as in \`repos."owner/repo" = [ ${slotted.map(set => `"${set}"`).join(' ')} ];\`.`,
+        )
+      }
+      const seen = new Map<string, string>()
+      for (const [repo, list] of Object.entries(byRepo)) {
+        const at = `${setting}.repos."${repo}"`
+        if (!isRepo(repo, repository)) {
+          return yield* bad(
+            `${where}: \`${repo}\` in \`${setting}.repos\` is not a repository. Write ${repoForm(repository)}: the host is decided by the profile, so it is not part of the name.`,
+          )
+        }
+        const normal = normaliseRepo(repo, repository)
+        const first = seen.get(normal)
+        if (first !== undefined) {
+          return yield* bad(
+            `${where}: \`${setting}.repos\` lists ${first} and ${repo}, which are one repository to the ${profile} profile. List it once, with every set that applies there.`,
+          )
+        }
+        seen.set(normal, repo)
+        const chosen = yield* readStringList(where, at, list)
+        if (chosen.length === 0) {
+          return yield* bad(
+            `${where}: \`${at}\` chooses no set, so it would allow nothing there. Its sets: ${slotted.join(', ')}.`,
+          )
+        }
+        for (const [index, set] of chosen.entries()) {
+          if (!Object.hasOwn(defined.profile.allow, set)) {
+            return yield* bad(
+              `${where}: \`${at}\` chooses ${set}, which is not one of the ${profile} profile's sets: ${sets.join(', ')}.`,
+            )
+          }
+          if (chosen.indexOf(set) !== index) {
+            return yield* bad(`${where}: \`${at}\` chooses ${set} twice.`)
+          }
+          if (!slotted.includes(set)) {
+            return yield* bad(
+              `${where}: \`${at}\` chooses ${set}, none of whose rules names a repository: it reaches the whole account, whatever the key reaches, and listing it under one repository would hide that. Choose it in \`${setting}.allow\` instead.`,
+            )
+          }
+        }
+        repos[repo] = chosen
+      }
+    }
+    const chosen = [...new Set([...allowed, ...Object.values(repos).flat()])]
+    if (chosen.length === 0) {
+      return yield* bad(
+        `${where}: \`${setting}.allow\` chooses no set${repository === undefined ? '' : ', and `repos` lists no repository'}, so the grant would allow nothing. The ${profile} profile's sets: ${sets.join(', ')}.`,
+      )
+    }
+
+    const reaches = Profiles.reached(defined.profile, chosen)
     const pinned = yield* readStringList(where, `${setting}.hosts`, entry['hosts'] ?? [])
     const lowered = pinned.map(host => host.toLowerCase())
     const unpinned = reaches.filter(host => !lowered.includes(host))
@@ -649,7 +763,7 @@ const readProfileGrant = (
       )
     }
     return {
-      ...Profiles.grantOf(profile, defined.profile, allowed),
+      ...Profiles.grantOf(profile, defined.profile, allowed, repos),
       definedBy: defined.by,
       placeholders: defined.profile.placeholders,
     }
@@ -671,67 +785,14 @@ const readGrant = (
 ): Result.Result<Grant, ConfigError> =>
   Result.gen(function* () {
     const profile = entry['profile']
-    if (profile !== 'github') {
-      const defined = typeof profile === 'string' ? available.profiles.get(profile) : undefined
-      if (typeof profile !== 'string' || defined === undefined) {
-        const known = ['github', ...available.profiles.keys()].toSorted()
-        return yield* bad(
-          `${where}: \`secrets.${name}.profile\` must name a broker profile${typeof profile === 'string' ? `, and ${profile} is none ${available.layer === 'user' ? 'igloo or this layer defines' : 'igloo, the user layer or this project defines'}` : ''}. Defined: ${known.map(each => `"${each}"`).join(', ')}.${available.layer === 'user' ? " A project's own profiles are for that project's credentials alone." : ''} A brokered credential without a profile has no upstream the broker is allowed to construct a request to, so it could only refuse everything asked of it.`,
-        )
-      }
-      return yield* readProfileGrant(where, name, entry, profile, defined)
-    }
-
-    // GitHub's grant is still its code's: what it may do is by repository.
-    for (const key of ['allow', 'hosts']) {
-      if (!(key in entry)) continue
+    const defined = typeof profile === 'string' ? available.profiles.get(profile) : undefined
+    if (typeof profile !== 'string' || defined === undefined) {
+      const known = [...available.profiles.keys()].toSorted()
       return yield* bad(
-        `${where}: \`secrets.${name}.${key}\` does not apply to the github profile, whose grant names repositories in \`repos\`, \`{ read = [ … ]; write = [ … ]; }\`.`,
+        `${where}: \`secrets.${name}.profile\` must name a broker profile${typeof profile === 'string' ? `, and ${profile} is none ${available.layer === 'user' ? 'igloo or this layer defines' : 'igloo, the user layer or this project defines'}` : ''}. Defined: ${known.map(each => `"${each}"`).join(', ')}.${available.layer === 'user' ? " A project's own profiles are for that project's credentials alone." : ''} A brokered credential without a profile has no upstream the broker is allowed to construct a request to, so it could only refuse everything asked of it.`,
       )
     }
-    if (Array.isArray(entry['repos'])) return yield* refuseFlatRepos(where, name, entry)
-    const byAccess = entry['repos'] === undefined ? {} : asRecord(entry['repos'])
-    if (byAccess === undefined) {
-      return yield* bad(
-        `${where}: \`secrets.${name}.repos\` must be an attribute set, \`{ read = [ … ]; write = [ … ]; }\`, not ${JSON.stringify(entry['repos'])}.`,
-      )
-    }
-    for (const key of Object.keys(byAccess)) {
-      if (key !== 'read' && key !== 'write') {
-        return yield* bad(
-          `${where}: \`secrets.${name}.repos.${key}\` is not a setting. \`repos\` takes \`read\`, the repositories to fetch and read, and \`write\`, those to push to and write through the API as well.`,
-        )
-      }
-    }
-    const listed = (key: 'read' | 'write') =>
-      byAccess[key] === undefined
-        ? Result.succeed([])
-        : readStringList(where, `secrets.${name}.repos.${key}`, byAccess[key])
-    const repos = yield* listed('read')
-    const write = yield* listed('write')
-    if (repos.length + write.length === 0) {
-      return yield* bad(
-        `${where}: \`secrets.${name}\` lists no repositories in \`repos.read\` or \`repos.write\`, so the grant reaches nothing. List those this credential may fetch in \`repos.read\`, and those it may push to and write through the API as well in \`repos.write\`, as \`owner/repo\`.`,
-      )
-    }
-    for (const repo of [...repos, ...write]) {
-      if (!isRepo(repo)) {
-        return yield* bad(
-          `${where}: \`${repo}\` is not a repository. Write \`owner/repo\` — ${profiles.github.host} is decided by the profile, so it is not part of the name.`,
-        )
-      }
-    }
-    // Refused rather than merged: listed in `read` as well, a repository in
-    // `write` reads as one someone meant to keep from being pushed to.
-    const twice = write.find(repo =>
-      repos.some(read => normaliseRepo(read) === normaliseRepo(repo)),
-    )
-    if (twice !== undefined) {
-      return yield* bad(
-        `${where}: \`${twice}\` is in both \`secrets.${name}.repos.read\` and \`secrets.${name}.repos.write\`. One in \`write\` is fetched and read as well as pushed to, so list it there alone, or in \`read\` alone to keep it from being pushed to.`,
-      )
-    }
-    return { profile, repos, ...(write.length === 0 ? {} : { write }) }
+    return yield* readProfileGrant(where, name, entry, profile, defined)
   })
 
 /** What either layer says about one credential: where its value comes from, and what it is for. */
@@ -748,7 +809,7 @@ interface Shared {
 const BODY_KEYS = new Set(['allow', 'hosts', 'mode', 'profile', 'repos', 'source'])
 
 const BODY_SHAPE =
-  'plus `profile` when the mode is "broker", and `hosts` and `allow` for a profile, or `repos` for github'
+  'plus `profile`, `hosts` and `allow` when the mode is "broker", and `repos` for a profile with repositories'
 
 /** A declaration's fields that are gone, and what to do instead. */
 const removedFromBody = new Map<string, string>([
@@ -765,13 +826,14 @@ const removedFromBody = new Map<string, string>([
 /**
  * A declaration's name and attribute set, before anything in it is read — but
  * not one still setting a field that is gone, which is refused with what to do
- * instead. `write` is among those, and refused with the repositories it lists
- * written out under `repos`.
+ * instead. `write` is among those, and refused with the grant of `github`
+ * that keeps what it allowed written out.
  */
 const readEntry = (
   where: string,
   name: string,
   raw: unknown,
+  available: Available,
 ): Result.Result<Record<string, unknown>, ConfigError> => {
   if (!CREDENTIAL_NAME.test(name)) {
     return bad(
@@ -786,7 +848,9 @@ const readEntry = (
       return bad(`${where}: \`secrets.${name}.${key}\` is no longer a setting: ${gone}`)
     }
   }
-  return 'write' in entry ? refuseFlatRepos(where, name, entry) : Result.succeed(entry)
+  return 'write' in entry
+    ? refuseOldGithub(where, name, entry, available.profiles.get('github')?.profile)
+    : Result.succeed(entry)
 }
 
 const readBody = (
@@ -853,7 +917,7 @@ const readShared = (
     }
     const shared = new Map<string, Shared>()
     for (const name of Object.keys(entries)) {
-      const entry = yield* readEntry(where, name, entries[name])
+      const entry = yield* readEntry(where, name, entries[name], available)
       for (const key of Object.keys(entry)) {
         if (!BODY_KEYS.has(key) && key !== 'projects') {
           return yield* bad(
@@ -883,7 +947,7 @@ const readOwn = (
     }
     const own = new Map<string, Body>()
     for (const name of Object.keys(entries)) {
-      const entry = yield* readEntry(where, name, entries[name])
+      const entry = yield* readEntry(where, name, entries[name], available)
       for (const key of Object.keys(entry)) {
         if (key === 'projects') {
           return yield* bad(
@@ -974,7 +1038,7 @@ const composeSecrets = (
       if (first !== undefined) {
         const elsewhere = fileOf(first) === fileOf(secret) ? '' : ` (in ${fileOf(first)})`
         return yield* bad(
-          `${fileOf(secret)}: \`${secret.name}\` and \`${first.name}\`${elsewhere} are both brokered for the ${secret.grant.profile} profile. ${'repos' in secret.grant ? 'A request to its API may name no repository' : 'A request names no credential'}, so the broker could not tell which one pays: keep one${'repos' in secret.grant ? ', and list every repository in it' : ''}.`,
+          `${fileOf(secret)}: \`${secret.name}\` and \`${first.name}\`${elsewhere} are both brokered for the ${secret.grant.profile} profile. A request names no credential${secret.grant.repository === undefined ? '' : ', and may name no repository'}, so the broker could not tell which one pays: keep one${secret.grant.repository === undefined ? '' : ', and list every repository in it'}.`,
         )
       }
       calling.set(secret.grant.profile, secret)
@@ -984,7 +1048,7 @@ const composeSecrets = (
     // so a host is one grant's.
     const reaching = new Map<string, SecretDeclaration>()
     for (const secret of secrets) {
-      if (secret.mode !== 'broker' || !('hosts' in secret.grant)) continue
+      if (secret.mode !== 'broker') continue
       for (const host of Object.keys(secret.grant.hosts)) {
         const first = reaching.get(host)
         if (first !== undefined && first.mode === 'broker') {
@@ -1289,7 +1353,7 @@ export const compose = (layers: Layers): Result.Result<Composed, ConfigError> =>
     // hosts. Under `none` a brokered credential is refused below already.
     if (ceiling === 'restricted') {
       for (const secret of secrets) {
-        if (secret.mode !== 'broker' || !('hosts' in secret.grant)) continue
+        if (secret.mode !== 'broker') continue
         if (secret.grant.definedBy === 'igloo') continue
         const outside = Object.keys(secret.grant.hosts).find(
           host => !ceilingHosts.some(allowed => allowed.toLowerCase() === host),

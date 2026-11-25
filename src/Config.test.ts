@@ -692,7 +692,12 @@ describe('Config.compose: secrets', () => {
     // reads this to decide which of the two mechanisms a credential gets.
     const policy = composed({
       project: {},
-      user: declared({ mode: 'broker', profile: 'github', repos: { read: ['you/api'] } }),
+      user: declared({
+        allow: ['graphql'],
+        hosts: ['api.github.com'],
+        mode: 'broker',
+        profile: 'github',
+      }),
     })
     assert.deepStrictEqual(
       policy.secrets.map(secret => secret.mode),
@@ -780,18 +785,29 @@ describe('Config.compose: secrets', () => {
  * policy — or with a wider one than was meant — are the cases worth asserting.
  */
 describe('Config.compose: grants', () => {
+  /** The user layer's github credential, with `over` over it, a field `undefined` there left out. */
   const brokered = (over: Record<string, unknown> = {}) => ({
     secrets: {
-      GITHUB_TOKEN: {
-        mode: 'broker',
-        profile: 'github',
-        projects: [projectRoot],
-        repos: { read: ['you/api'] },
-        source: { command: ['gh', 'auth', 'token'] },
-        ...over,
-      },
+      GITHUB_TOKEN: Object.fromEntries(
+        Object.entries({
+          allow: ['graphql'],
+          hosts: ['api.github.com', 'github.com'],
+          mode: 'broker',
+          profile: 'github',
+          projects: [projectRoot],
+          repos: { 'you/api': ['fetch', 'read'] },
+          source: { command: ['gh', 'auth', 'token'] },
+          ...over,
+        }).filter(([, value]) => value !== undefined),
+      ),
     },
   })
+
+  /** The grant `over` comes to, on the user layer's github credential. */
+  const githubGrant = (over: Record<string, unknown> = {}) => {
+    const [secret] = composed({ project: {}, user: brokered(over) }).secrets
+    return secret?.mode === 'broker' ? secret.grant : undefined
+  }
 
   it('refuses a brokered credential under none, which would reach its upstream', () => {
     const message = refused({ project: { network: 'none' }, user: brokered() })
@@ -799,12 +815,39 @@ describe('Config.compose: grants', () => {
     assert.include(message, 'network = "restricted"')
   })
 
-  it('carries the grant through to the launch path', () => {
-    const [secret] = composed({ project: {}, user: brokered() }).secrets
-    assert.deepStrictEqual(secret?.mode === 'broker' ? secret.grant : undefined, {
-      profile: 'github',
-      repos: ['you/api'],
+  it('carries the grant through to the launch path: its repositories, and each one’s sets', () => {
+    const grant = githubGrant({
+      hosts: ['api.github.com', 'github.com', 'uploads.github.com'],
+      repos: {
+        'you/api': ['fetch', 'read'],
+        'You/Web.git': ['fetch', 'push', 'read', 'releases'],
+      },
     })
+    assert.strictEqual(grant?.profile, 'github')
+    assert.strictEqual(grant?.definedBy, 'igloo')
+    assert.deepStrictEqual(grant?.placeholders, ['GH_TOKEN'])
+    assert.deepStrictEqual(grant?.repository, { ignoreCase: true, segments: 2 })
+    assert.deepStrictEqual(grant?.repos, {
+      'You/Web.git': ['fetch', 'push', 'read', 'releases'],
+      'you/api': ['fetch', 'read'],
+    })
+    assert.deepStrictEqual(Object.keys(grant?.hosts ?? {}).toSorted(), [
+      'api.github.com',
+      'github.com',
+      'uploads.github.com',
+    ])
+    assert.deepStrictEqual(
+      grant?.hosts['github.com']?.allow.map(rule => rule.set),
+      ['fetch', 'push'],
+    )
+    assert.strictEqual(grant?.hosts['api.github.com']?.pages, 'github')
+  })
+
+  it('takes GraphQL as a choice: a grant without it reaches the API by repository alone', () => {
+    const grant = githubGrant({ allow: [] })
+    assert.isFalse(
+      grant?.hosts['api.github.com']?.allow.some(rule => rule.set === 'graphql') ?? true,
+    )
   })
 
   it('refuses a brokered credential with no profile', () => {
@@ -821,25 +864,92 @@ describe('Config.compose: grants', () => {
     assert.include(message, '"github"')
   })
 
-  it('refuses a grant that reaches nothing', () => {
-    for (const repos of [undefined, {}, { read: [] }]) {
-      assert.include(refused({ project: {}, user: brokered({ repos }) }), 'reaches nothing')
+  it('refuses a grant that chooses nothing', () => {
+    assert.include(
+      refused({ project: {}, user: brokered({ allow: [], repos: {} }) }),
+      'chooses no set, and `repos` lists no repository',
+    )
+    assert.include(
+      refused({ project: {}, user: brokered({ repos: { 'you/api': [] } }) }),
+      '`secrets.GITHUB_TOKEN.repos."you/api"` chooses no set',
+    )
+  })
+
+  it('refuses a repository written as anything but owner/repo, and says where the host comes from', () => {
+    for (const repo of [
+      'api',
+      'https://github.com/you/api',
+      'you/api/extra',
+      'github.com/you/api',
+    ]) {
+      const message = refused({ project: {}, user: brokered({ repos: { [repo]: ['fetch'] } }) })
+      assert.include(message, 'is not a repository', repo)
+      assert.include(message, 'Write `owner/repo`: the host is decided by the profile', repo)
     }
   })
 
-  it('refuses a repository written as anything but owner/repo', () => {
-    for (const repo of ['api', 'https://github.com/you/api', 'you/api/extra']) {
-      const message = refused({ project: {}, user: brokered({ repos: { read: [repo] } }) })
-      assert.include(message, 'is not a repository')
-    }
+  it('refuses one repository listed twice, by spellings GitHub reads as one', () => {
+    assert.include(
+      refused({
+        project: {},
+        user: brokered({ repos: { 'you/api': ['fetch'], 'You/API.git': ['read'] } }),
+      }),
+      'lists you/api and You/API.git, which are one repository to the github profile',
+    )
   })
 
-  it('says where the host comes from, since a grant cannot name one', () => {
+  it('refuses a set naming no repository under one, and one naming them in `allow`', () => {
+    const under = refused({
+      project: {},
+      user: brokered({ allow: [], repos: { 'you/api': ['fetch', 'graphql'] } }),
+    })
+    assert.include(under, '`secrets.GITHUB_TOKEN.repos."you/api"` chooses graphql')
+    assert.include(under, 'it reaches the whole account')
+    assert.include(under, 'Choose it in `secrets.GITHUB_TOKEN.allow` instead')
+    const across = refused({ project: {}, user: brokered({ allow: ['graphql', 'push'] }) })
+    assert.include(
+      across,
+      '`secrets.GITHUB_TOKEN.allow` chooses push, whose rules name a repository',
+    )
+    assert.include(across, 'repos."owner/repo" = [ "push" ];')
+  })
+
+  it('refuses a set the profile lacks, under a repository or in `allow`', () => {
+    assert.include(
+      refused({ project: {}, user: brokered({ repos: { 'you/api': ['admin'] } }) }),
+      'chooses admin, which is not one of the github profile',
+    )
+    assert.include(
+      refused({ project: {}, user: brokered({ allow: ['admin'] }) }),
+      'chooses admin, which is not one of the github profile',
+    )
+  })
+
+  it('refuses `hosts` that differ from what the sets chosen reach', () => {
+    assert.include(
+      refused({ project: {}, user: brokered({ hosts: ['api.github.com'] }) }),
+      'does not name github.com',
+    )
+    assert.include(
+      refused({
+        project: {},
+        user: brokered({ hosts: ['api.github.com', 'github.com', 'uploads.github.com'] }),
+      }),
+      'names uploads.github.com, which no set it allows reaches',
+    )
+  })
+
+  it('refuses a grant of github that chooses nothing, with the lines that allow everything', () => {
     const message = refused({
       project: {},
-      user: brokered({ repos: { read: ['github.com/you/api'] } }),
+      user: brokered({ allow: undefined, hosts: undefined, repos: undefined }),
     })
-    assert.include(message, 'github.com is decided by the profile')
+    assert.include(message, 'grants the github profile without choosing from it')
+    assert.include(
+      message,
+      '  hosts = [ "api.github.com" "github.com" "uploads.github.com" ];\n  allow = [ "graphql" ];\n  repos."owner/repo" = [ "actions" "checks" "fetch" "issues" "pulls" "push" "read" "releases" ];',
+    )
+    assert.include(message, 'with a line in `repos` for each repository it may reach')
   })
 
   it('refuses a grant on a delivered credential rather than ignoring it', () => {
@@ -847,7 +957,7 @@ describe('Config.compose: grants', () => {
     // it was handed to the guest whole.
     const message = refused({
       project: {},
-      user: brokered({ mode: 'deliver' }),
+      user: brokered({ allow: undefined, hosts: undefined, mode: 'deliver' }),
     })
     assert.include(message, 'only means something for a brokered credential')
     const delivered = {
@@ -855,7 +965,7 @@ describe('Config.compose: grants', () => {
         GITHUB_TOKEN: {
           mode: 'deliver',
           projects: [projectRoot],
-          repos: { write: ['you/api'] },
+          repos: { 'you/api': ['fetch'] },
           source: { command: ['gh', 'auth', 'token'] },
         },
       },
@@ -866,102 +976,87 @@ describe('Config.compose: grants', () => {
     )
   })
 
-  it('carries the repositories a grant may push to, beside those it may only fetch', () => {
-    const grantOf = (repos: Record<string, unknown>) => {
-      const [secret] = composed({ project: {}, user: brokered({ repos }) }).secrets
-      return secret?.mode === 'broker' ? secret.grant : undefined
-    }
-    assert.deepStrictEqual(grantOf({ read: ['you/api'] }), {
-      profile: 'github',
-      repos: ['you/api'],
-    })
-    assert.deepStrictEqual(grantOf({ write: ['you/web'] }), {
-      profile: 'github',
-      repos: [],
-      write: ['you/web'],
-    })
-    assert.deepStrictEqual(grantOf({ read: ['you/api'], write: ['you/web'] }), {
-      profile: 'github',
-      repos: ['you/api'],
-      write: ['you/web'],
-    })
-  })
-
-  it('refuses repositories listed flat, with the line that lists them by access', () => {
+  describe('a github grant in a shape it had before profiles', () => {
+    /** What the user layer's github credential, written as `over`, comes to. */
     const message = (over: Record<string, unknown>) =>
-      refused({ project: {}, user: brokered(over) })
-    assert.include(
-      message({ repos: ['you/api'] }),
-      `${userPolicyName}: \`secrets.GITHUB_TOKEN\` lists its repositories in \`repos\`, and \`repos\` takes them by access now, as \`read\` and \`write\`. Write \`repos.read = [ "you/api" ];\` in its place.`,
-    )
-    assert.include(
-      message({ repos: ['you/api'], write: ['you/web', 'you/docs'] }),
-      'in `repos` and `write`, and `repos` takes them by access now, as `read` and `write`. Write `repos = { read = [ "you/api" ]; write = [ "you/web" "you/docs" ]; };` in their place.',
-    )
-    assert.include(
-      message({ repos: undefined, write: ['you/web'] }),
-      'in `write`, and `repos` takes them by access now, as `read` and `write`. Write `repos.write = [ "you/web" ];` in its place.',
-    )
-    // Half moved: Nix merges `repos.write = …;` into a `repos = { read = …; };`
-    // beside it, so the same line still copies as it stands.
-    assert.include(message({ write: ['you/web'] }), 'Write `repos.write = [ "you/web" ];`')
-    // Only a list of repositories can be written out as one.
-    assert.include(
-      message({ repos: ['you/api'], write: 'you/web' }),
-      '`secrets.GITHUB_TOKEN.write` must be a list of non-empty strings',
-    )
-    assert.include(
-      refused({
-        project: {
-          secrets: {
-            OWN: { mode: 'broker', profile: 'github', repos: ['you/web'], source: { file: '/t' } },
-          },
-        },
-      }),
-      `${projectPolicyPath}: \`secrets.OWN\` lists its repositories in \`repos\``,
-    )
-  })
-
-  it('refuses anything under `repos` but `read` and `write`', () => {
-    assert.include(
       refused({
         project: {},
-        user: brokered({ repos: { push: ['you/web'], read: ['you/api'] } }),
-      }),
-      '`secrets.GITHUB_TOKEN.repos.push` is not a setting',
-    )
-    assert.include(
-      refused({ project: {}, user: brokered({ repos: 'you/api' }) }),
-      '`secrets.GITHUB_TOKEN.repos` must be an attribute set',
-    )
-  })
+        user: brokered({ allow: undefined, hosts: undefined, repos: undefined, ...over }),
+      })
+    const every = '[ "actions" "checks" "fetch" "issues" "pulls" "push" "read" "releases" ]'
 
-  it('refuses a grant whose two lists are both empty', () => {
-    assert.include(
-      refused({ project: {}, user: brokered({ repos: { read: [], write: [] } }) }),
-      'reaches nothing',
-    )
-  })
-
-  it('refuses a repository in both lists, which reads as one kept from being pushed to', () => {
-    const message = refused({
-      project: {},
-      user: brokered({ repos: { read: ['you/api'], write: ['You/API.git'] } }),
+    it('refuses `repos.read`, writing out each repository with fetch and read', () => {
+      assert.include(
+        message({ repos: { read: ['you/api', 'you/docs'] } }),
+        `${userPolicyName}: \`secrets.GITHUB_TOKEN\` lists its repositories in \`repos.read\`, and a github grant chooses sets now: \`graphql\` in \`allow\`, and in \`repos\` each repository with the sets that apply there. To keep allowing what it did, write in its place:\n\n  hosts = [ "api.github.com" "github.com" ];\n  allow = [ "graphql" ];\n  repos."you/api" = [ "fetch" "read" ];\n  repos."you/docs" = [ "fetch" "read" ];\n\nand drop the sets a repository does not need.`,
+      )
     })
-    assert.include(
-      message,
-      '`You/API.git` is in both `secrets.GITHUB_TOKEN.repos.read` and `secrets.GITHUB_TOKEN.repos.write`',
-    )
-  })
 
-  it('refuses a repository written as anything but owner/repo in write too', () => {
-    assert.include(
-      refused({
-        project: {},
-        user: brokered({ repos: { write: ['https://github.com/you/web'] } }),
-      }),
-      'is not a repository',
-    )
+    it('refuses `repos.write`, writing out each repository with every set', () => {
+      assert.include(
+        message({ repos: { write: ['you/web'] } }),
+        `in \`repos.write\`, and a github grant chooses sets now`,
+      )
+      assert.include(
+        message({ repos: { write: ['you/web'] } }),
+        `  hosts = [ "api.github.com" "github.com" "uploads.github.com" ];\n  allow = [ "graphql" ];\n  repos."you/web" = ${every};\n`,
+      )
+    })
+
+    it('refuses both, in their place', () => {
+      const both = message({ repos: { read: ['you/api'], write: ['you/web'] } })
+      assert.include(both, 'in `repos.read` and `repos.write`')
+      assert.include(both, 'write in their place')
+      assert.include(
+        both,
+        `  allow = [ "graphql" ];\n  repos."you/api" = [ "fetch" "read" ];\n  repos."you/web" = ${every};\n`,
+      )
+    })
+
+    it('refuses the flat list and `write` beside it, older still, the same way', () => {
+      assert.include(
+        message({ repos: ['you/api'] }),
+        'in `repos`, and a github grant chooses sets now',
+      )
+      const flat = message({ repos: ['you/api'], write: ['you/web'] })
+      assert.include(flat, 'in `repos` and `write`')
+      assert.include(flat, `repos."you/web" = ${every};`)
+      assert.include(message({ write: ['you/web'] }), `in \`write\`, and a github grant`)
+      // Only a list of repositories can be written out as one.
+      assert.include(
+        message({ repos: ['you/api'], write: 'you/web' }),
+        '`secrets.GITHUB_TOKEN.write` must be a list of non-empty strings',
+      )
+      assert.include(
+        refused({
+          project: {
+            secrets: {
+              OWN: {
+                mode: 'broker',
+                profile: 'github',
+                repos: ['you/web'],
+                source: { file: '/t' },
+              },
+            },
+          },
+        }),
+        `${projectPolicyPath}: \`secrets.OWN\` lists its repositories in \`repos\``,
+      )
+    })
+
+    it('refuses `repos` as anything but repositories', () => {
+      assert.include(
+        refused({
+          project: {},
+          user: brokered({ repos: { push: ['you/web'], read: ['you/api'] } }),
+        }),
+        '`push` in `secrets.GITHUB_TOKEN.repos` is not a repository',
+      )
+      assert.include(
+        refused({ project: {}, user: brokered({ repos: 'you/api' }) }),
+        '`secrets.GITHUB_TOKEN.repos` lists repositories, each with the sets that apply there',
+      )
+    })
   })
 
   const calling = (over: Record<string, unknown> = {}) => ({
@@ -1084,9 +1179,10 @@ describe('Config.compose: grants', () => {
       project: {
         secrets: {
           SECOND_TOKEN: {
+            allow: ['graphql'],
+            hosts: ['api.github.com'],
             mode: 'broker',
             profile: 'github',
-            repos: { read: ['you/web'] },
             source: { file: '/t' },
           },
         },
@@ -1095,15 +1191,6 @@ describe('Config.compose: grants', () => {
     })
     assert.include(message, 'are both brokered for the github profile')
     assert.include(message, 'list every repository in it')
-  })
-
-  it('refuses `hosts` and `allow` on a github grant, which names repositories instead', () => {
-    for (const key of ['allow', 'hosts']) {
-      assert.include(
-        refused({ project: {}, user: brokered({ [key]: ['x'] }) }),
-        `\`secrets.GITHUB_TOKEN.${key}\` does not apply to the github profile`,
-      )
-    }
   })
 
   const driving = (over: Record<string, unknown> = {}) => ({
@@ -1647,6 +1734,51 @@ describe('Config.compose, on a profile’s definition', () => {
   /** `slotted`, its one set `write` holding `rules` at its API. */
   const writing = (rules: unknown, more: Record<string, unknown> = {}) =>
     slotted({ allow: { write: { 'api.example.com': rules } }, ...more })
+
+  it('takes {repo} in a set’s rule, git’s reader, the host options and a kept length', () => {
+    const project = {
+      profiles: {
+        example: slotted({
+          allow: {
+            fetch: { 'uploads.example.com': [{ git: 'fetch' }] },
+            write: {
+              'api.example.com': [
+                { method: 'GET', path: 'repos/{repo}/**' },
+                { length: 'kept', method: 'POST', path: 'repos/{repo}/assets' },
+              ],
+            },
+          },
+          hosts: {
+            'api.example.com': { pages: 'github', redirects: 'return', send: 'bearer' },
+            'uploads.example.com': { send: { basic: 'x-access-token' } },
+          },
+        }),
+      },
+      secrets: {
+        EXAMPLE: {
+          hosts: ['api.example.com', 'uploads.example.com'],
+          mode: 'broker',
+          profile: 'example',
+          repos: { 'you/api': ['fetch', 'write'] },
+          source: { file: '/k' },
+        },
+      },
+    }
+    const grant = grantNamed(composed({ project }), 'EXAMPLE')
+    assert.deepStrictEqual(grant?.repository, { ignoreCase: true, segments: 2 })
+    assert.deepStrictEqual(grant?.repos, { 'you/api': ['fetch', 'write'] })
+    assert.deepStrictEqual(grant?.hosts['uploads.example.com']?.allow, [
+      { git: 'fetch', set: 'fetch' },
+    ])
+    assert.strictEqual(grant?.hosts['api.example.com']?.pages, 'github')
+    assert.strictEqual(grant?.hosts['api.example.com']?.redirects, 'return')
+    assert.deepStrictEqual(grant?.hosts['api.example.com']?.allow[1], {
+      length: 'kept',
+      method: ['POST'],
+      path: 'repos/{repo}/assets',
+      set: 'write',
+    })
+  })
 
   it('refuses a repository that is not one, and {repo}, git and pages without one', () => {
     for (const repository of [{ ignoreCase: true, segments: 0 }, { segments: 2 }, 2]) {

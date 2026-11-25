@@ -47,14 +47,22 @@ export interface Plan {
  * What a project's broker is granted: one grant per brokered credential, and
  * one per model server, its key held under a name of its own. A profile grant
  * is sent what the broker reads of it and no more: its hosts, each with how
- * the key is sent there, the chosen sets' rules and the `deny` rules there.
+ * the key is sent there, its options, the chosen sets' rules and the `deny`
+ * rules there; and, for a profile with a repository, what one is and the sets
+ * each repository listed chose.
  */
 export const grantsOf = (policy: Config.Policy): readonly Broker.Grant[] => [
   ...policy.secrets.flatMap((secret): readonly Broker.Grant[] => {
     if (secret.mode !== 'broker') return []
-    if (!('hosts' in secret.grant)) return [{ credential: secret.name, ...secret.grant }]
-    const { hosts, profile } = secret.grant
-    return [{ credential: secret.name, hosts, profile }]
+    const { hosts, profile, repos, repository } = secret.grant
+    return [
+      {
+        credential: secret.name,
+        hosts,
+        profile,
+        ...(repository === undefined ? {} : { repos: repos ?? {}, repository }),
+      },
+    ]
   }),
   ...policy.modelServers.map(server => ({
     ...(server.key === undefined ? {} : { credential: Config.modelServerKeyName(server.name) }),
@@ -118,12 +126,16 @@ export const fromConfig = (
     source: secret.source,
   }))
   const grants = grantsOf(config.policy)
-  // The hosts the guest's git reaches the broker at, deduplicated: two grants
-  // for the same upstream are one rewrite, and a repeated `insteadOf` would be
-  // a conflicting definition rather than a second chance.
-  const gitHosts = [
-    ...new Set(grants.filter(Broker.isGitGrant).map(grant => Broker.profiles[grant.profile].host)),
-  ]
+  // The hosts the guest's git reaches the broker at: each at which a grant
+  // has git's reader. A host is one grant's, so each is named once.
+  const gitHosts = grants
+    .filter(Broker.isProfileGrant)
+    .flatMap(grant =>
+      Object.entries(grant.hosts)
+        .filter(([, at]) => at.allow.some(rule => 'git' in rule))
+        .map(([host]) => host),
+    )
+    .toSorted()
   // Every profile granted names the variables its clients read a key from,
   // each set to the placeholder: the broker sets the real one.
   const placeholders = Object.fromEntries(
@@ -227,10 +239,11 @@ export const fromConfig = (
 
 /**
  * A profile grant as the drift report hashes it: its profile, credential, sets
- * and hosts, and a hash of every rule the broker is sent, so that a profile
- * whose rules changed under a running VM shows as a change. Sorted throughout,
- * since sets chosen in another order, or a profile's rules written in one, are
- * the same grant.
+ * and hosts, the repositories it lists with the sets each chose, and a hash of
+ * every rule and host option the broker is sent, so that a profile whose rules
+ * changed under a running VM shows as a change. Sorted throughout, since sets
+ * chosen in another order, or a profile's rules written in one, are the same
+ * grant.
  */
 const profileLine = (grant: Broker.ProfileGrant): string => {
   const hosts = Object.keys(grant.hosts).toSorted()
@@ -243,8 +256,13 @@ const profileLine = (grant: Broker.ProfileGrant): string => {
       allow: (at?.allow ?? []).map(rule => JSON.stringify(rule)).toSorted(),
       deny: (at?.deny ?? []).map(rule => JSON.stringify(rule)).toSorted(),
       host,
+      ...(at?.pages === undefined ? {} : { pages: at.pages }),
+      ...(at?.redirects === undefined ? {} : { redirects: at.redirects }),
       send: at?.send ?? null,
     }
   })
-  return `${grant.profile} ${grant.credential} sets=${sets.join(',')} hosts=${hosts.join(',')} rules=${LaunchInputs.digest(JSON.stringify(rules))}`
+  const repos = Object.entries(grant.repos ?? {})
+    .map(([repo, chosen]) => `${repo}:${chosen.toSorted().join('+')}`)
+    .toSorted()
+  return `${grant.profile} ${grant.credential} sets=${sets.join(',')} hosts=${hosts.join(',')}${repos.length === 0 ? '' : ` repos=${repos.join(',')}`} rules=${LaunchInputs.digest(JSON.stringify(grant.repository === undefined ? rules : { repository: grant.repository, rules }))}`
 }
