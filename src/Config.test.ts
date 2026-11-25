@@ -1613,8 +1613,8 @@ describe('Config.compose, on a profile’s definition', () => {
   /** What defining `profile` as `example` in a project comes to. */
   const defining = (profile: unknown) => refused({ project: { profiles: { example: profile } } })
 
-  it('refuses a field a profile does not have, part 2’s and MCP’s among them', () => {
-    for (const field of ['repository', 'ask', 'mcp', 'via']) {
+  it('refuses a field a profile does not have, MCP’s among them', () => {
+    for (const field of ['ask', 'mcp', 'via']) {
       assert.include(
         defining(exampleProfile({ [field]: {} })),
         `\`profiles.example.${field}\` is not a profile's field`,
@@ -1623,7 +1623,7 @@ describe('Config.compose, on a profile’s definition', () => {
     assert.include(
       defining(
         exampleProfile({
-          hosts: { 'api.example.com': { pages: 'github', send: 'bearer' } },
+          hosts: { 'api.example.com': { cache: 'none', send: 'bearer' } },
           allow: { read: { 'api.example.com': [{ method: 'GET', path: '' }] } },
           deny: {},
         }),
@@ -1633,10 +1633,88 @@ describe('Config.compose, on a profile’s definition', () => {
     assert.include(
       defining(
         exampleProfile({
-          allow: { read: { 'api.example.com': [{ length: 'kept', method: 'GET', path: '' }] } },
+          allow: { read: { 'api.example.com': [{ mcp: {}, method: 'GET', path: '' }] } },
         }),
       ),
-      "`length` is not a rule's field",
+      "`mcp` is not a rule's field",
+    )
+  })
+
+  /** `exampleProfile` with a repository of two segments, and `more` over it. */
+  const slotted = (more: Record<string, unknown> = {}) =>
+    exampleProfile({ repository: { ignoreCase: true, segments: 2 }, ...more })
+
+  /** `slotted`, its one set `write` holding `rules` at its API. */
+  const writing = (rules: unknown, more: Record<string, unknown> = {}) =>
+    slotted({ allow: { write: { 'api.example.com': rules } }, ...more })
+
+  it('refuses a repository that is not one, and {repo}, git and pages without one', () => {
+    for (const repository of [{ ignoreCase: true, segments: 0 }, { segments: 2 }, 2]) {
+      assert.include(
+        defining(writing([{ git: 'fetch' }], { repository })),
+        'says what a repository is',
+        JSON.stringify(repository),
+      )
+    }
+    const unslotted = (rules: unknown) =>
+      defining(exampleProfile({ allow: { write: { 'api.example.com': rules } } }))
+    assert.include(
+      unslotted([{ method: 'GET', path: 'repos/{repo}/**' }]),
+      'names `{repo}`, and the profile says of none what one is',
+    )
+    assert.include(
+      unslotted([{ git: 'push' }]),
+      'serves a repository, and the profile says of none',
+    )
+    assert.include(
+      defining(
+        exampleProfile({
+          hosts: { 'api.example.com': { pages: 'github', send: 'bearer' } },
+          allow: { read: { 'api.example.com': [{ method: 'GET', path: '' }] } },
+          deny: {},
+        }),
+      ),
+      'puts a page link back under the repository a request named',
+    )
+  })
+
+  it('refuses {repo}, git and length in a deny rule, and a git rule with more beside it', () => {
+    const denying = (rule: unknown) =>
+      defining(writing([{ git: 'fetch' }], { deny: { 'api.example.com': [rule] } }))
+    assert.include(
+      denying({ method: 'POST', path: 'repos/{repo}/hooks' }),
+      'a `deny` rule belongs to no set',
+    )
+    assert.include(denying({ git: 'push' }), 'no place in a `deny` rule')
+    assert.include(
+      denying({ length: 'kept', method: 'POST', path: 'x' }),
+      'no place in a `deny` rule',
+    )
+    assert.include(
+      defining(writing([{ git: 'fetch', method: 'GET' }])),
+      'a git rule is `{ git = "fetch"; }` or `{ git = "push"; }` alone',
+    )
+    assert.include(defining(writing([{ git: 'clone' }])), 'a git rule is')
+  })
+
+  it('refuses a host option or a length that is not one', () => {
+    const at = (options: Record<string, unknown>) =>
+      defining(
+        writing([{ git: 'fetch' }], {
+          hosts: { 'api.example.com': { send: 'bearer', ...options } },
+        }),
+      )
+    assert.include(at({ redirects: 'follow' }), '.redirects` is "return"')
+    assert.include(at({ pages: 'gitlab' }), '.pages` is "github"')
+    assert.include(
+      defining(writing([{ length: 'exact', method: 'POST', path: 'repos/{repo}/assets' }])),
+      '`length` at "repos/{repo}/assets" is "kept"',
+    )
+    assert.include(
+      defining(
+        writing([{ graphql: { withheld: [] }, length: 'kept', method: 'POST', path: 'graphql' }]),
+      ),
+      'takes no `length`',
     )
   })
 
@@ -1662,7 +1740,7 @@ describe('Config.compose, on a profile’s definition', () => {
     )
   })
 
-  it('refuses a host that is an address, has no dot, or is one of github’s', () => {
+  it('refuses a host that is an address, or has no dot', () => {
     for (const host of ['10.0.0.1', 'localhost', 'https://api.example.com']) {
       assert.include(
         defining(exampleProfile({ hosts: { [host]: { send: 'bearer' } } })),
@@ -1670,10 +1748,6 @@ describe('Config.compose, on a profile’s definition', () => {
         host,
       )
     }
-    assert.include(
-      defining(exampleProfile({ hosts: { 'api.github.com': { send: 'bearer' } } })),
-      "one of the github profile's hosts",
-    )
   })
 
   it('refuses an empty set, and a rule at a host the profile does not name', () => {
@@ -1701,7 +1775,7 @@ describe('Config.compose, on a profile’s definition', () => {
         JSON.stringify(method),
       )
     }
-    for (const written of ['v1/**/items', '**/x', '/v1', 'v1/x*', 'repos/{repo}/**']) {
+    for (const written of ['v1/**/items', '**/x', '/v1', 'v1/x*', '{repo}/{repo}']) {
       assert.include(
         defining(
           exampleProfile({
@@ -1747,13 +1821,15 @@ describe('Config.compose, on a profile’s definition', () => {
     )
   })
 
-  it('refuses a name the broker’s code takes', () => {
-    for (const name of ['github', 'model-server']) {
-      assert.include(
-        refused({ project: { profiles: { [name]: exampleProfile() } } }),
-        'Name the profile something else',
-      )
-    }
+  it('refuses the name a model server’s grant takes, and github, which is igloo’s', () => {
+    assert.include(
+      refused({ project: { profiles: { 'model-server': exampleProfile() } } }),
+      'Name the profile something else',
+    )
+    assert.include(
+      refused({ project: { profiles: { github: exampleProfile() } } }),
+      "`profiles.github` is one of igloo's already",
+    )
   })
 })
 

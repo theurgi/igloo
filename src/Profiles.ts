@@ -24,16 +24,17 @@ import { Effect, FileSystem, Predicate, Result, Schema } from 'effect'
 
 import {
   type ChosenRule,
+  type PathRule,
   type ProfileGrant,
+  type ProfileHost,
+  type Repository,
   type Rule,
-  type Send,
-  forgeNames,
   isHostname,
   isPlaceholderName,
   isProfileNameForm,
-  isProfileName,
   isSend,
-  profiles as codeProfiles,
+  namesRepo,
+  repoSegment,
   rulePathProblem,
   ruleMethods,
   sendProblem,
@@ -48,15 +49,20 @@ export interface Profile {
   /** Set name, then host, then the rules the set holds there. */
   readonly allow: Readonly<Record<string, Readonly<Record<string, readonly Rule[]>>>>
   /** Host, then the rules that refuse whatever is chosen. */
-  readonly deny: Readonly<Record<string, readonly Rule[]>>
-  /** Host, then how the key is sent there. */
-  readonly hosts: Readonly<Record<string, Send>>
+  readonly deny: Readonly<Record<string, readonly PathRule[]>>
+  /** Host, then how the key is sent there and the host's options. */
+  readonly hosts: Readonly<Record<string, Host>>
   /** The variables the guest holds the placeholder in, for a project granted this profile. */
   readonly placeholders: readonly string[]
+  /** What a repository is in its paths, for a profile whose grants list them. */
+  readonly repository?: Repository
 }
 
+/** One of a profile's hosts: how the key is sent there, and the options a forge's API needs. */
+export type Host = Omit<ProfileHost, 'allow' | 'deny'>
+
 /** The fields a profile has. Any other is refused. */
-const profileFields = new Set(['allow', 'deny', 'hosts', 'placeholders'])
+const profileFields = new Set(['allow', 'deny', 'hosts', 'placeholders', 'repository'])
 
 /** An attribute set, and not a list. */
 const asRecord = (raw: unknown): Record<string, unknown> | undefined =>
@@ -66,24 +72,51 @@ const methodsText = [...ruleMethods].map(method => `"${method}"`).join(', ')
 
 /**
  * A rule as a profile writes it, in the form the broker reads: `method` a list
- * or `"*"`. `allowed` for a rule in a set, which may carry a reader.
+ * or `"*"`. `allowed` for a rule in a set, which may carry a reader or name a
+ * repository; `slotted` for a profile with a `repository`, the only kind whose
+ * rules may name one.
  */
-const readRule = (where: string, raw: unknown, allowed: boolean): Result.Result<Rule, string> => {
+const readRule = (
+  where: string,
+  raw: unknown,
+  allowed: boolean,
+  slotted: boolean,
+): Result.Result<Rule, string> => {
   const rule = asRecord(raw)
   if (rule === undefined) {
     return Result.fail(
       `${where}: a rule is an attribute set, as in \`{ method = "GET"; path = "v1/**"; }\`.`,
     )
   }
+  if ('git' in rule) {
+    if (!allowed) {
+      return Result.fail(
+        `${where}: \`git\` serves a repository a grant lists, so it has no place in a \`deny\` rule, which belongs to no set.`,
+      )
+    }
+    const { git } = rule
+    if (Object.keys(rule).length !== 1 || (git !== 'fetch' && git !== 'push')) {
+      return Result.fail(
+        `${where}: a git rule is \`{ git = "fetch"; }\` or \`{ git = "push"; }\` alone: git's reader fixes its methods and paths.`,
+      )
+    }
+    if (!slotted) {
+      return Result.fail(
+        `${where}: \`{ git = "${git}"; }\` serves a repository, and the profile says of none what one is. Set \`repository = { segments = 2; ignoreCase = true; };\`, as a forge whose repositories are \`owner/repo\` would.`,
+      )
+    }
+    return Result.succeed({ git })
+  }
   for (const key of Object.keys(rule)) {
-    if (key === 'method' || key === 'path' || (key === 'graphql' && allowed)) continue
+    if (key === 'method' || key === 'path') continue
+    if ((key === 'graphql' || key === 'length') && allowed) continue
     return Result.fail(
-      key === 'graphql'
-        ? `${where}: \`graphql\` reads a body a set allows, so it has no place in a \`deny\` rule, which refuses whatever it matches.`
-        : `${where}: \`${key}\` is not a rule's field. A rule takes \`method\` and \`path\`${allowed ? ', and `graphql` for a GraphQL request' : ''}.`,
+      key === 'graphql' || key === 'length'
+        ? `${where}: \`${key}\` ${key === 'graphql' ? 'reads a body' : 'sends a body'} a set allows, so it has no place in a \`deny\` rule, which refuses whatever it matches.`
+        : `${where}: \`${key}\` is not a rule's field. A rule takes \`method\` and \`path\`${allowed ? ', `graphql` for a GraphQL request, `length = "kept"` for an upload, or `git` alone' : ''}.`,
     )
   }
-  const { graphql, method, path } = rule
+  const { graphql, length, method, path } = rule
   if (typeof path !== 'string') {
     return Result.fail(
       `${where}: a rule's \`path\` is a string of segments, as in "v2/pods/*", or "" for the host's root.`,
@@ -92,8 +125,20 @@ const readRule = (where: string, raw: unknown, allowed: boolean): Result.Result<
   const problem = rulePathProblem(path)
   if (problem !== undefined) {
     return Result.fail(
-      `${where}: ${problem}. A path is segments, where \`*\` is any one and a last \`**\` any number of them.`,
+      `${where}: ${problem}. A path is segments, where \`*\` is any one and a last \`**\` any number of them${slotted && allowed ? ', and `{repo}` a repository' : ''}.`,
     )
+  }
+  if (path.split('/').includes(repoSegment)) {
+    if (!allowed) {
+      return Result.fail(
+        `${where}: ${JSON.stringify(path)} names \`{repo}\`, a repository a grant lists for a set, and a \`deny\` rule belongs to no set. Name a repository by its segments, as "repos/*/*/…", to refuse it for every one.`,
+      )
+    }
+    if (!slotted) {
+      return Result.fail(
+        `${where}: ${JSON.stringify(path)} names \`{repo}\`, and the profile says of none what one is. Set \`repository = { segments = 2; ignoreCase = true; };\`, as a forge whose repositories are \`owner/repo\` would.`,
+      )
+    }
   }
   const listed = method === '*' ? '*' : typeof method === 'string' ? [method] : method
   if (
@@ -106,8 +151,20 @@ const readRule = (where: string, raw: unknown, allowed: boolean): Result.Result<
       `${where}: \`method\` at ${JSON.stringify(path)} is ${JSON.stringify(method)}. Write one of ${methodsText}, a list of them, or "*" for any.`,
     )
   }
-  const methods: Rule['method'] = listed === '*' ? '*' : [...new Set(listed as readonly string[])]
-  if (graphql === undefined) return Result.succeed({ method: methods, path })
+  const methods: PathRule['method'] =
+    listed === '*' ? '*' : [...new Set(listed as readonly string[])]
+  if (length !== undefined && length !== 'kept') {
+    return Result.fail(
+      `${where}: \`length\` at ${JSON.stringify(path)} is "kept", which sends a body with the length the guest stated, for a service that takes an upload only with one.`,
+    )
+  }
+  const kept = length === undefined ? {} : { length: 'kept' as const }
+  if (graphql === undefined) return Result.succeed({ ...kept, method: methods, path })
+  if (length !== undefined) {
+    return Result.fail(
+      `${where}: the GraphQL rule at ${JSON.stringify(path)} sends the body the broker wrote for it, so it takes no \`length\`.`,
+    )
+  }
   const reader = asRecord(graphql)
   const withheld = reader?.['withheld'] ?? []
   if (
@@ -137,6 +194,7 @@ const readRules = (
   where: string,
   raw: unknown,
   allowed: boolean,
+  slotted: boolean,
 ): Result.Result<readonly Rule[], string> =>
   Result.gen(function* () {
     if (!Array.isArray(raw) || raw.length === 0) {
@@ -145,7 +203,9 @@ const readRules = (
       )
     }
     const rules: Array<Rule> = []
-    for (const each of raw as readonly unknown[]) rules.push(yield* readRule(where, each, allowed))
+    for (const each of raw as readonly unknown[]) {
+      rules.push(yield* readRule(where, each, allowed, slotted))
+    }
     return rules
   })
 
@@ -160,9 +220,31 @@ const readProfile = (where: string, name: string, raw: unknown): Result.Result<P
     for (const key of Object.keys(entry)) {
       if (profileFields.has(key)) continue
       return yield* Result.fail(
-        `${where}: \`${setting}.${key}\` is not a profile's field. A profile takes \`hosts\`, \`placeholders\`, \`allow\` and \`deny\`.`,
+        `${where}: \`${setting}.${key}\` is not a profile's field. A profile takes \`hosts\`, \`placeholders\`, \`repository\`, \`allow\` and \`deny\`.`,
       )
     }
+
+    let repository: Repository | undefined
+    if (entry['repository'] !== undefined) {
+      const shape = asRecord(entry['repository'])
+      const segments = shape?.['segments']
+      const ignoreCase = shape?.['ignoreCase']
+      if (
+        shape === undefined ||
+        Object.keys(shape).some(key => key !== 'segments' && key !== 'ignoreCase') ||
+        typeof segments !== 'number' ||
+        !Number.isInteger(segments) ||
+        segments < 1 ||
+        segments > 20 ||
+        typeof ignoreCase !== 'boolean'
+      ) {
+        return yield* Result.fail(
+          `${where}: \`${setting}.repository\` says what a repository is in the profile's paths: \`{ segments = 2; ignoreCase = true; }\` for one named \`owner/repo\`, compared ignoring case. \`segments\` is a whole number from 1 to 20, and \`ignoreCase\` true or false.`,
+        )
+      }
+      repository = { ignoreCase, segments }
+    }
+    const slotted = repository !== undefined
 
     const hostsRaw = asRecord(entry['hosts'])
     if (hostsRaw === undefined || Object.keys(hostsRaw).length === 0) {
@@ -170,7 +252,7 @@ const readProfile = (where: string, name: string, raw: unknown): Result.Result<P
         `${where}: \`${setting}.hosts\` names the hosts its key is sent to, each with how it is sent, as in \`hosts."api.example.com".send = "bearer";\`.`,
       )
     }
-    const hosts: Record<string, Send> = {}
+    const hosts: Record<string, Host> = {}
     for (const [written, value] of Object.entries(hostsRaw)) {
       const host = written.toLowerCase()
       const at = `${setting}.hosts."${written}"`
@@ -182,11 +264,6 @@ const readProfile = (where: string, name: string, raw: unknown): Result.Result<P
       if (Object.hasOwn(hosts, host)) {
         return yield* Result.fail(`${where}: \`${setting}.hosts\` names ${host} twice.`)
       }
-      if (forgeNames.includes(host)) {
-        return yield* Result.fail(
-          `${where}: \`${at}\` is one of the github profile's hosts, which the broker answers with code of its own, so no profile may name it.`,
-        )
-      }
       const options = asRecord(value)
       if (options === undefined || !('send' in options)) {
         return yield* Result.fail(
@@ -194,16 +271,35 @@ const readProfile = (where: string, name: string, raw: unknown): Result.Result<P
         )
       }
       for (const key of Object.keys(options)) {
-        if (key === 'send') continue
+        if (key === 'send' || key === 'redirects' || key === 'pages') continue
         return yield* Result.fail(
-          `${where}: \`${at}.${key}\` is not a host's field. A host takes \`send\` alone.`,
+          `${where}: \`${at}.${key}\` is not a host's field. A host takes \`send\`, and \`redirects\` and \`pages\` for a forge's API.`,
         )
       }
-      const send = options['send']
+      const { pages, redirects, send } = options
       if (!isSend(send)) {
         return yield* Result.fail(`${where}: \`${at}\`: ${sendProblem(send) ?? ''}.`)
       }
-      hosts[host] = send
+      if (redirects !== undefined && redirects !== 'return') {
+        return yield* Result.fail(
+          `${where}: \`${at}.redirects\` is "return", which passes the host's redirects back to the guest unfollowed, for a signed URL that needs no credential. Leave it out to refuse them.`,
+        )
+      }
+      if (pages !== undefined && pages !== 'github') {
+        return yield* Result.fail(
+          `${where}: \`${at}.pages\` is "github", GitHub's page links put back under the repository a request named. Leave it out for any other service.`,
+        )
+      }
+      if (pages !== undefined && !slotted) {
+        return yield* Result.fail(
+          `${where}: \`${at}.pages\` puts a page link back under the repository a request named, and the profile says of none what one is. Set \`${setting}.repository\`, or leave \`pages\` out.`,
+        )
+      }
+      hosts[host] = {
+        ...(pages === undefined ? {} : { pages }),
+        ...(redirects === undefined ? {} : { redirects }),
+        send,
+      }
     }
     const named = (at: string, written: string): Result.Result<string, string> => {
       const host = written.toLowerCase()
@@ -253,7 +349,7 @@ const readProfile = (where: string, name: string, raw: unknown): Result.Result<P
       const rules: Record<string, readonly Rule[]> = {}
       for (const [written, list] of Object.entries(hostsOfSet)) {
         const host = yield* named(at, written)
-        rules[host] = yield* readRules(`${where}: \`${at}."${written}"\``, list, true)
+        rules[host] = yield* readRules(`${where}: \`${at}."${written}"\``, list, true, slotted)
       }
       allow[set] = rules
     }
@@ -264,13 +360,25 @@ const readProfile = (where: string, name: string, raw: unknown): Result.Result<P
         `${where}: \`${setting}.deny\` is rules by host, as in \`deny."api.example.com" = [ … ];\`.`,
       )
     }
-    const deny: Record<string, readonly Rule[]> = {}
+    const deny: Record<string, readonly PathRule[]> = {}
     for (const [written, list] of Object.entries(denyRaw)) {
       const host = yield* named(`${setting}.deny`, written)
-      deny[host] = yield* readRules(`${where}: \`${setting}.deny."${written}"\``, list, false)
+      const rules = yield* readRules(
+        `${where}: \`${setting}.deny."${written}"\``,
+        list,
+        false,
+        slotted,
+      )
+      deny[host] = rules.filter((rule): rule is PathRule => 'path' in rule)
     }
 
-    return { allow, deny, hosts, placeholders: placeholdersRaw }
+    return {
+      allow,
+      deny,
+      hosts,
+      placeholders: placeholdersRaw,
+      ...(repository === undefined ? {} : { repository }),
+    }
   })
 
 /**
@@ -295,9 +403,9 @@ export const read = (
           `${where}: \`${name}\` is not a usable profile name. Use lowercase letters, digits and \`-\`, starting with a letter or digit.`,
         )
       }
-      if (name === 'model-server' || (isProfileName(name) && codeProfiles[name].kind === 'git')) {
+      if (name === 'model-server') {
         return yield* Result.fail(
-          `${where}: \`profiles.${name}\` takes a name the broker gives ${name === 'model-server' ? 'a model server’s grant' : 'its own code for GitHub'}. Name the profile something else.`,
+          `${where}: \`profiles.${name}\` takes the name the broker gives a model server’s grant. Name the profile something else.`,
         )
       }
       profiles.set(name, yield* readProfile(where, name, entry))
@@ -312,35 +420,46 @@ export const reached = (profile: Profile, sets: readonly string[]): readonly str
 
 /**
  * What the broker is granted for a credential choosing `sets` of the profile
- * `name`: each host they reach, how the key is sent there, the chosen sets'
- * rules there, each under its set's name, and the `deny` rules there. A set
- * not chosen never reaches the broker, and nor does a host no chosen set
- * reaches.
+ * `name` for the whole account, and `repos`' sets for each repository it
+ * lists: each host the sets chosen reach, how the key is sent there and the
+ * host's options, the chosen sets' rules there, each under its set's name, and
+ * the `deny` rules there; and, for a profile with a repository, what one is
+ * and the repositories listed. A set not chosen never reaches the broker, and
+ * nor does a host no chosen set reaches.
  */
 export const grantOf = (
   name: string,
   profile: Profile,
   sets: readonly string[],
+  repos: Readonly<Record<string, readonly string[]>> = {},
 ): Omit<ProfileGrant, 'credential'> => {
-  const reaches = reached(profile, sets)
+  const chosen = [...new Set([...sets, ...Object.values(repos).flat()])]
+  const reaches = reached(profile, chosen)
   return {
     hosts: Object.fromEntries(
       Object.entries(profile.hosts)
         .filter(([host]) => reaches.includes(host))
-        .map(([host, send]) => [
+        .map(([host, options]) => [
           host,
           {
-            allow: sets.flatMap(set =>
+            ...options,
+            allow: chosen.flatMap(set =>
               (profile.allow[set]?.[host] ?? []).map((rule): ChosenRule => ({ ...rule, set })),
             ),
             deny: profile.deny[host] ?? [],
-            send,
           },
         ]),
     ),
     profile: name,
+    ...(profile.repository === undefined ? {} : { repos, repository: profile.repository }),
   }
 }
+
+/** The sets of `profile` with a rule naming a repository, which a grant chooses per repository. */
+export const repoSets = (profile: Profile): readonly string[] =>
+  Object.entries(profile.allow)
+    .filter(([, byHost]) => Object.values(byHost).some(rules => rules.some(namesRepo)))
+    .map(([set]) => set)
 
 /** Every host of every profile in `profiles`, each once. */
 export const hostsOf = (profiles: ReadonlyMap<string, Profile>): readonly string[] => [

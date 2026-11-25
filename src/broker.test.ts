@@ -1893,7 +1893,7 @@ describe('Broker.parseGrants', () => {
     for (const grant of [
       { ...shippedGrant('anthropic-messages', 'K'), models: ['m'] },
       { ...shippedGrant('openrouter', 'K'), maxOutputTokens: 64 },
-      { ...shippedGrant('runpod', 'R'), repos: ['you/api'] },
+      { ...shippedGrant('runpod', 'R'), ask: ['pods'] },
       { credential: 'T', models: ['m'], profile: 'github', repos: ['you/api'] },
     ]) {
       assert.include(message(JSON.stringify([grant])), 'which this broker does not read')
@@ -5313,17 +5313,50 @@ describe('Broker.parseGrants, for a profile grant', () => {
   })
 
   it('refuses a field it does not read, on the grant, a host or a rule', () => {
-    assert.include(message(grantJson({ repos: ['you/api'] })), 'repos')
-    assert.include(message(grantJson({}, { redirects: 'return' })), 'redirects')
+    assert.include(message(grantJson({ ask: ['read'] })), 'sets ask')
+    assert.include(message(grantJson({}, { cache: 'none' })), 'sets cache')
     assert.include(
-      message(
-        grantJson({}, { allow: [{ length: 'kept', method: ['GET'], path: 'v1', set: 'r' }] }),
-      ),
-      'length',
+      message(grantJson({}, { allow: [{ mcp: {}, method: ['GET'], path: 'v1', set: 'r' }] })),
+      'sets mcp',
     )
     assert.include(
       message(grantJson({}, { deny: [{ method: ['GET'], path: 'v1', set: 'read' }] })),
-      'set',
+      'sets set',
+    )
+    assert.include(
+      message(grantJson({}, { deny: [{ length: 'kept', method: ['POST'], path: 'v1' }] })),
+      'sets length',
+    )
+  })
+
+  it('refuses a host option or a length that is not one, and pages without a repository', () => {
+    assert.include(message(grantJson({}, { redirects: 'follow' })), 'redirects is "return"')
+    assert.include(message(grantJson({}, { pages: 'gitlab' })), 'pages is "github"')
+    assert.include(message(grantJson({}, { pages: 'github' })), 'the grant has none')
+    assert.include(
+      message(
+        grantJson({}, { allow: [{ length: 'all', method: ['POST'], path: 'v1', set: 'r' }] }),
+      ),
+      'length at "v1" is "kept"',
+    )
+    assert.include(
+      message(
+        grantJson(
+          {},
+          {
+            allow: [
+              {
+                graphql: { withheld: [] },
+                length: 'kept',
+                method: ['POST'],
+                path: 'graphql',
+                set: 'r',
+              },
+            ],
+          },
+        ),
+      ),
+      'no length the guest stated',
     )
   })
 
@@ -5387,23 +5420,180 @@ describe('Broker.parseGrants, for a profile grant', () => {
     assert.include(message(`[${one},${other}]`), 'api.example.com')
   })
 
-  it('refuses a host the broker’s own code answers, and a code profile’s name', () => {
-    const github = JSON.stringify([
+  it('refuses the name a model server’s grant is read by', () => {
+    assert.include(message(grantJson({ profile: 'model-server' })), 'model-server')
+  })
+})
+
+describe('Broker.parseGrants, for a grant with a repository', () => {
+  /** A grant with a repository of two segments, `fetch` at its git host and `write` at its API. */
+  const slotted = (change: Record<string, unknown> = {}) =>
+    JSON.stringify([
       {
         credential: 'K',
         hosts: {
-          'api.github.com': {
-            allow: [{ method: ['GET'], path: '', set: 'r' }],
+          'api.example.com': {
+            allow: [
+              { method: ['GET'], path: '', set: 'write' },
+              { method: ['POST'], path: 'repos/{repo}/issues', set: 'write' },
+              { method: ['POST'], path: 'graphql', set: 'graphql' },
+            ],
             deny: [],
+            pages: 'github',
             send: 'bearer',
+          },
+          'git.example.com': {
+            allow: [{ git: 'fetch', set: 'fetch' }],
+            deny: [],
+            send: { basic: 'x-access-token' },
           },
         },
         profile: 'forge',
+        repos: { 'You/API': ['fetch', 'write'] },
+        repository: { ignoreCase: true, segments: 2 },
+        ...change,
       },
     ])
-    assert.include(message(github), 'api.github.com')
-    assert.include(message(grantJson({ profile: 'github' })), 'github')
-    assert.include(message(grantJson({ profile: 'model-server' })), 'model-server')
+
+  it('reads one, its repository and repos as they were sent', () => {
+    const parsed = Broker.parseGrants(slotted())
+    assert.isTrue('grants' in parsed)
+    if (!('grants' in parsed)) return
+    const [grant] = parsed.grants
+    assert.isTrue(grant !== undefined && Broker.isProfileGrant(grant))
+    if (grant === undefined || !Broker.isProfileGrant(grant)) return
+    assert.deepStrictEqual(grant.repository, { ignoreCase: true, segments: 2 })
+    assert.deepStrictEqual(grant.repos, { 'You/API': ['fetch', 'write'] })
+    assert.deepStrictEqual(grant.hosts['git.example.com']?.allow, [{ git: 'fetch', set: 'fetch' }])
+    assert.strictEqual(grant.hosts['api.example.com']?.pages, 'github')
+  })
+
+  it('refuses a repository that is not one, and repos without one', () => {
+    for (const repository of [
+      { ignoreCase: true, segments: 0 },
+      { ignoreCase: true, segments: 2.5 },
+      { segments: 2 },
+      { ignoreCase: 'yes', segments: 2 },
+      { ignoreCase: true, segments: 2, separator: '/' },
+    ]) {
+      assert.include(
+        message(slotted({ repository })),
+        'a repository is { segments; ignoreCase; }',
+        JSON.stringify(repository),
+      )
+    }
+    assert.include(message(slotted({ repository: undefined })), 'and the grant has none')
+    assert.include(
+      message(
+        JSON.stringify([
+          {
+            credential: 'K',
+            hosts: {
+              'api.example.com': {
+                allow: [{ method: ['GET'], path: '', set: 'read' }],
+                deny: [],
+                send: 'bearer',
+              },
+            },
+            profile: 'example',
+            repos: { 'you/api': ['read'] },
+          },
+        ]),
+      ),
+      'lists repos, and has no repository',
+    )
+    assert.include(message(slotted({ repos: undefined })), 'no repos listing them')
+  })
+
+  it('refuses a repository listed in another shape, or twice by spellings one service reads as one', () => {
+    for (const repo of ['you', 'you/api/x', 'you/../api', '-you/api', 'you/a%2fb']) {
+      assert.include(
+        message(slotted({ repos: { [repo]: ['fetch'] } })),
+        'is not a repository',
+        repo,
+      )
+    }
+    assert.include(
+      message(slotted({ repos: { 'you/api': ['fetch'], 'You/Api.git': ['write'] } })),
+      'lists you/api twice',
+    )
+    assert.isTrue(
+      'grants' in
+        Broker.parseGrants(
+          slotted({
+            repos: { 'you/api': ['fetch'], 'You/Api': ['write'] },
+            repository: { ignoreCase: false, segments: 2 },
+          }),
+        ),
+    )
+  })
+
+  it('refuses a repository listing a set no rule of which names one, or no set', () => {
+    assert.include(
+      message(slotted({ repos: { 'you/api': ['fetch', 'graphql'] } })),
+      'lists graphql for you/api, and none of its rules names a repository',
+    )
+    assert.include(message(slotted({ repos: { 'you/api': [] } })), 'lists no sets')
+  })
+
+  it('refuses a rule naming a repository whose set no repository lists', () => {
+    assert.include(
+      message(slotted({ repos: { 'you/api': ['fetch'] } })),
+      'names a repository, and no repository lists write',
+    )
+  })
+
+  it('refuses a git rule with more beside it, of another access, or without a repository', () => {
+    const git = (rule: Record<string, unknown>, repository?: unknown) =>
+      JSON.stringify([
+        {
+          credential: 'K',
+          hosts: { 'git.example.com': { allow: [rule], deny: [], send: 'bearer' } },
+          profile: 'forge',
+          ...(repository === undefined ? {} : { repos: { 'you/api': ['fetch'] }, repository }),
+        },
+      ])
+    const slot = { ignoreCase: true, segments: 2 }
+    assert.include(
+      message(git({ git: 'fetch', method: ['GET'], set: 'fetch' }, slot)),
+      'takes git alone',
+    )
+    assert.include(message(git({ git: 'clone', set: 'fetch' }, slot)), 'git is "fetch" or "push"')
+    assert.include(message(git({ git: 'fetch', set: 'fetch' })), 'the grant has none')
+    assert.include(message(git({ git: 'fetch' }, slot)), 'names no set')
+  })
+
+  it('refuses {repo} in a deny rule, or twice in one path', () => {
+    assert.include(
+      message(
+        slotted({
+          hosts: {
+            'git.example.com': {
+              allow: [{ git: 'fetch', set: 'fetch' }],
+              deny: [{ method: ['POST'], path: 'repos/{repo}/hooks' }],
+              send: 'bearer',
+            },
+          },
+          repos: { 'you/api': ['fetch'] },
+        }),
+      ),
+      'which a rule of no set cannot',
+    )
+    assert.include(
+      message(
+        slotted({
+          hosts: {
+            'api.example.com': {
+              allow: [{ method: ['GET'], path: '{repo}/{repo}', set: 'write' }],
+              deny: [],
+              send: 'bearer',
+            },
+          },
+          repos: { 'you/api': ['write'] },
+        }),
+      ),
+      'names {repo} twice',
+    )
   })
 })
 
@@ -5751,6 +5941,7 @@ interface Case {
 /** The key each profile sends, and how, as the upstream sees it. */
 const keys = {
   'anthropic-messages': { credential: 'ANTHROPIC_KEY', header: 'x-api-key: an-k', value: 'an-k' },
+  github: { credential: 'GITHUB_TOKEN', header: 'authorization: Bearer gh-k', value: 'gh-k' },
   openrouter: { credential: 'OPENROUTER_KEY', header: 'authorization: Bearer or-k', value: 'or-k' },
   runpod: { credential: 'RUNPOD_API_KEY', header: 'authorization: Bearer rp-k', value: 'rp-k' },
 } as const
@@ -6049,5 +6240,398 @@ describe('the shipped profiles, against what each serves', () => {
       false,
     )
     assert.deepStrictEqual(reached, queried.expected)
+  })
+})
+
+/** GitHub's profile, as igloo ships it, granted as `repos.read` and `repos.write` were. */
+const githubGrant = (): Broker.ProfileGrant => {
+  const profile = shippedProfiles().get('github')
+  if (profile === undefined) throw new Error('igloo ships no github profile')
+  return {
+    credential: 'GITHUB_TOKEN',
+    ...Profiles.grantOf('github', profile, ['graphql'], {
+      'you/read': ['fetch', 'read'],
+      'You/Write': Profiles.repoSets(profile),
+    }),
+  }
+}
+
+/** The key as git sends it to GitHub: a token in the username slot git uses for one. */
+const gitKey = `authorization: Basic ${btoa('x-access-token:gh-k')}`
+
+const github = 'https://github.com'
+const githubApi = 'https://api.github.com'
+const githubUploads = 'https://uploads.github.com'
+const sentToGithub = (url: string, body?: string): Reached => sentTo(url, 'github', body)
+const sentByGit = (url: string, body?: string): Reached => ({
+  ...(body === undefined ? {} : { body }),
+  key: gitKey,
+  url,
+})
+
+/** A write through GitHub's API at each path its sets list, by each method there. */
+const githubWrites: readonly (readonly [string, string])[] = [
+  ['POST', 'actions/jobs/7/rerun'],
+  ['POST', 'actions/runs/7/cancel'],
+  ['POST', 'actions/runs/7/force-cancel'],
+  ['POST', 'actions/runs/7/rerun'],
+  ['POST', 'actions/runs/7/rerun-failed-jobs'],
+  ['POST', 'actions/workflows/ci.yml/dispatches'],
+  ['POST', 'check-runs'],
+  ['PATCH', 'check-runs/7'],
+  ['POST', 'check-runs/7/rerequest'],
+  ['POST', 'check-suites'],
+  ['POST', 'check-suites/7/rerequest'],
+  ...['DELETE', 'PATCH', 'POST', 'PUT'].flatMap(method => [
+    [method, 'issues'] as const,
+    [method, 'issues/7/comments'] as const,
+    [method, 'pulls/7/merge'] as const,
+    [method, 'releases/7'] as const,
+  ]),
+  ['POST', 'pulls'],
+  ['POST', 'statuses/abc123'],
+]
+
+/**
+ * What `github` serves, and refuses, for a repository read (`you/read`) and
+ * one written (`you/write`, granted as `You/Write`): git's four endpoints,
+ * reads, every write its sets list, GraphQL, an upload, and what reaches past
+ * a repository, the Codespace among it.
+ */
+const githubCorpus: readonly Case[] = [
+  // git: a fetch of either, a push of the written one alone, each spelled as granted.
+  {
+    expected: sentByGit(`${github}/you/read.git/info/refs?service=git-upload-pack`),
+    method: 'GET',
+    url: `${github}/You/Read.git/info/refs?service=git-upload-pack`,
+  },
+  {
+    body: '0000',
+    expected: sentByGit(`${github}/you/read.git/git-upload-pack`, '0000'),
+    method: 'POST',
+    url: `${github}/you/read/git-upload-pack`,
+  },
+  {
+    expected: sentByGit(`${github}/You/Write.git/info/refs?service=git-receive-pack`),
+    method: 'GET',
+    url: `${github}/you/write/info/refs?service=git-receive-pack`,
+  },
+  {
+    body: '0000',
+    expected: sentByGit(`${github}/You/Write.git/git-receive-pack`, '0000'),
+    method: 'POST',
+    url: `${github}/you/write.git/git-receive-pack`,
+  },
+  {
+    body: '0000',
+    expected: sentByGit(`${github}/You/Write.git/git-upload-pack`, '0000'),
+    method: 'POST',
+    url: `${github}/you/write/git-upload-pack`,
+  },
+  ...[
+    ['GET', '/you/read/info/refs?service=git-receive-pack'],
+    ['POST', '/you/read/git-receive-pack'],
+    ['GET', '/other/repo/info/refs?service=git-upload-pack'],
+    ['POST', '/other/repo/git-upload-pack'],
+    ['GET', '/you/read/info/refs'],
+    ['GET', '/you/read/info/refs?service=git-upload-archive'],
+    ['POST', '/you/read/info/refs?service=git-upload-pack'],
+    ['GET', '/you/read/git-upload-pack'],
+    ['GET', '/you/read/sub/info/refs?service=git-upload-pack'],
+    ['GET', '/you/info/refs?service=git-upload-pack'],
+    ['GET', '/you/read'],
+  ].map(([method = '', path = '']) => ({
+    expected: 'refused' as const,
+    method,
+    url: `${github}${path}`,
+  })),
+
+  // The API: its root, and reads under either repository, the query carried.
+  { expected: sentToGithub(`${githubApi}/`), method: 'GET', url: `${githubApi}/` },
+  { expected: sentToGithub(`${githubApi}/`), method: 'HEAD', url: `${githubApi}/` },
+  {
+    expected: sentToGithub(`${githubApi}/repos/you/read`),
+    method: 'GET',
+    url: `${githubApi}/repos/you/read`,
+  },
+  {
+    expected: sentToGithub(`${githubApi}/repos/you/read/issues?state=open&labels=a+b`),
+    method: 'GET',
+    url: `${githubApi}/repos/YOU/read/issues?state=open&labels=a%20b`,
+  },
+  {
+    expected: sentToGithub(`${githubApi}/repos/You/Write/pulls/7/files`),
+    method: 'HEAD',
+    url: `${githubApi}/repos/you/write/pulls/7/files`,
+  },
+  ...[
+    ['GET', '/repos/other/repo'],
+    ['GET', '/repos/you/read.git'],
+    ['GET', '/repos/you'],
+    ['GET', '/user'],
+    ['GET', '/user/repos'],
+    ['GET', '/orgs/you/repos'],
+    ['OPTIONS', '/repos/you/read'],
+    ['GET', '/graphql'],
+  ].map(([method = '', path = '']) => ({
+    expected: 'refused' as const,
+    method,
+    url: `${githubApi}${path}`,
+  })),
+
+  // GraphQL, unread.
+  {
+    body: '{"query":"mutation { x }"}',
+    expected: sentToGithub(`${githubApi}/graphql`, '{"query":"mutation { x }"}'),
+    method: 'POST',
+    url: `${githubApi}/graphql`,
+  },
+
+  // Each write the sets list: made for the written repository, refused for the read one.
+  ...githubWrites.flatMap(([method, path]) => [
+    {
+      body: '{}',
+      expected: sentToGithub(`${githubApi}/repos/You/Write/${path}`, '{}'),
+      method,
+      url: `${githubApi}/repos/you/write/${path}`,
+    },
+    {
+      body: '{}',
+      expected: 'refused' as const,
+      method,
+      url: `${githubApi}/repos/you/read/${path}`,
+    },
+  ]),
+
+  // What reaches past a repository, and a write nothing lists.
+  ...[
+    ['POST', '/repos/you/write/pulls/7/codespaces'],
+    ['DELETE', '/repos/you/write/pulls/7/codespaces'],
+    ['POST', '/repos/you/write/hooks'],
+    ['PUT', '/repos/you/write/collaborators/someone'],
+    ['POST', '/repos/you/write/keys'],
+    ['PUT', '/repos/you/write/actions/secrets/TOKEN'],
+    ['POST', '/repos/you/write/actions/runners/registration-token'],
+    ['PATCH', '/repos/you/write'],
+    ['DELETE', '/repos/you/write'],
+    ['POST', '/repos/you/write/merges'],
+    ['POST', '/repos/you/write/statuses'],
+    ['POST', '/user/repos'],
+  ].map(([method = '', path = '']) => ({
+    body: '{}',
+    expected: 'refused' as const,
+    method,
+    url: `${githubApi}${path}`,
+  })),
+
+  // An asset's upload, for the written repository alone.
+  {
+    body: 'asset',
+    expected: sentToGithub(
+      `${githubUploads}/repos/You/Write/releases/7/assets?name=a.txt&label=A+b`,
+      'asset',
+    ),
+    method: 'POST',
+    url: `${githubUploads}/repos/you/write/releases/7/assets?name=a.txt&label=A%20b`,
+  },
+  ...[
+    ['POST', '/repos/you/read/releases/7/assets?name=a.txt'],
+    ['PUT', '/repos/you/write/releases/7/assets?name=a.txt'],
+    ['POST', '/repos/you/write/releases/7/assets/a.txt'],
+    ['POST', '/repos/you/write/releases'],
+    ['GET', '/repos/you/write/releases/7/assets'],
+  ].map(([method = '', path = '']) => ({
+    body: 'asset',
+    expected: 'refused' as const,
+    method,
+    url: `${githubUploads}${path}`,
+  })),
+]
+
+/**
+ * One request through a TLS listener serving `served`, to an upstream that
+ * answers `answer`: what the guest got back, and the headers the upstream
+ * was sent.
+ */
+const answeredBy = (
+  served: readonly Broker.Grant[],
+  request: Request,
+  answer: () => Response,
+): Promise<{ readonly response: Response; readonly sent: Headers | undefined }> =>
+  auditing(() =>
+    withSocketDir(async dir => {
+      let sent: Headers | undefined
+      const send = async (_url: string, init: RequestInit): Promise<Response> => {
+        sent = new Headers(init.headers)
+        if (init.body !== undefined && init.body !== null) await new Response(init.body).text()
+        return answer()
+      }
+      const server = Broker.serveTls(
+        join(dir, 'tls.sock'),
+        served,
+        new Map([['GITHUB_TOKEN', 'gh-k']]),
+        tlsIdentity(dir),
+        [],
+        send,
+      )
+      try {
+        const response = await server.fetch(request)
+        await response.clone().arrayBuffer()
+        return { response, sent }
+      } finally {
+        await server.stop(true)
+      }
+    }),
+  )
+
+/** The headers of `headers` named in `names`, as one record, for comparing two answers. */
+const picked = (headers: Headers | undefined, names: readonly string[]) =>
+  Object.fromEntries(names.map(name => [name, headers?.get(name) ?? null]))
+
+/**
+ * Each check of what the shipped `github` does, run against `served`: the
+ * corpus, then git's headers, a page link, a returned redirect, a kept
+ * upload length, and a 401. Each is what came of it, what should have, and
+ * what it was.
+ */
+const githubChecks = async (
+  served: readonly Broker.Grant[],
+): Promise<readonly (readonly [unknown, unknown, string])[]> => {
+  const checks: Array<readonly [unknown, unknown, string]> = []
+  const check = (actual: unknown, expected: unknown, what = ''): void => {
+    checks.push([actual, expected, what])
+  }
+  const reached = await reachedBy(served, githubCorpus, false)
+  githubCorpus.forEach((each, at) => {
+    check(reached[at], each.expected, `${each.method} ${each.url}`)
+  })
+
+  const fetched = await answeredBy(
+    served,
+    new Request(`${github}/you/read/git-upload-pack`, {
+      body: '0000',
+      headers: {
+        'Content-Encoding': 'gzip',
+        Cookie: 'a=b',
+        'Git-Protocol': 'version=2',
+        'X-Forwarded-Host': 'elsewhere.example',
+      },
+      method: 'POST',
+    }),
+    () =>
+      new Response('pack', {
+        headers: {
+          'Content-Type': 'application/x-git-upload-pack-result',
+          'Set-Cookie': 'a=b',
+          'X-Other': '1',
+        },
+      }),
+  )
+  check(
+    [...(fetched.sent ?? new Headers())],
+    [
+      ['accept', 'application/x-git-upload-pack-result'],
+      ['accept-encoding', 'identity'],
+      ['authorization', `Basic ${btoa('x-access-token:gh-k')}`],
+      ['content-encoding', 'gzip'],
+      ['content-type', 'application/x-git-upload-pack-request'],
+      ['git-protocol', 'version=2'],
+      ['user-agent', 'igloo-broker'],
+    ],
+  )
+  check(
+    [...fetched.response.headers],
+    [
+      ['cache-control', 'no-cache, max-age=0, must-revalidate'],
+      ['content-type', 'application/x-git-upload-pack-result'],
+    ],
+  )
+
+  const paged = await answeredBy(
+    served,
+    new Request(`${githubApi}/repos/you/write/issues?per_page=2`),
+    () =>
+      new Response('[]', {
+        headers: {
+          Link: '<https://api.github.com/repositories/42/issues?per_page=2&page=2>; rel="next", <https://api.github.com/repositories/42/issues?per_page=2&page=5>; rel="last"',
+        },
+      }),
+  )
+  check(
+    paged.response.headers.get('link'),
+    '<https://api.github.com/repos/You/Write/issues?per_page=2&page=2>; rel="next", <https://api.github.com/repos/You/Write/issues?per_page=2&page=5>; rel="last"',
+  )
+
+  const redirected = await answeredBy(
+    served,
+    new Request(`${githubApi}/repos/you/read/actions/runs/7/logs`),
+    () =>
+      new Response(null, {
+        headers: { Location: 'https://results.example.net/logs?sig=x' },
+        status: 302,
+      }),
+  )
+  check(redirected.response.status, 302)
+  check(redirected.response.headers.get('location'), 'https://results.example.net/logs?sig=x')
+
+  const uploaded = await answeredBy(
+    served,
+    new Request(`${githubUploads}/repos/you/write/releases/7/assets?name=a.txt`, {
+      body: 'asset',
+      headers: { 'Content-Length': '5', 'Content-Type': 'text/plain' },
+      method: 'POST',
+    }),
+    () => new Response('{}', { status: 201 }),
+  )
+  check(uploaded.response.status, 201)
+  check(picked(uploaded.sent, ['content-length', 'content-type']), {
+    'content-length': '5',
+    'content-type': 'text/plain',
+  })
+
+  for (const [request, status] of [
+    [new Request(`${github}/you/read/info/refs?service=git-upload-pack`), 502],
+    [new Request(`${githubApi}/repos/you/read`), 403],
+  ] as const) {
+    const refused = await answeredBy(served, request, () => new Response('', { status: 401 }))
+    check(refused.response.status, status, request.url)
+    check((await refused.response.text()).includes('refused GITHUB_TOKEN'), true, request.url)
+  }
+  const pushRefused = await answeredBy(
+    served,
+    new Request(`${github}/you/read/info/refs?service=git-receive-pack`),
+    () => new Response(''),
+  )
+  check(pushRefused.response.status, 403)
+  check(pushRefused.response.headers.get('content-type'), 'text/plain; charset=utf-8')
+  return checks
+}
+
+describe('the shipped github profile, against what github’s code serves', () => {
+  it('serves and refuses what the corpus expects, through the shipped profile', async () => {
+    for (const [actual, expected, what] of await githubChecks([githubGrant()])) {
+      assert.deepStrictEqual(actual, expected, what)
+    }
+  })
+
+  it('carries the API root’s query, which the code dropped', async () => {
+    const [reached] = await reachedBy(
+      [githubGrant()],
+      [{ expected: 'refused', method: 'GET', url: `${githubApi}/?per_page=1` }],
+      false,
+    )
+    assert.deepStrictEqual(reached, sentToGithub(`${githubApi}/?per_page=1`))
+  })
+
+  it('serves and refuses the same through the code', async () => {
+    const code: Broker.Grant = {
+      credential: 'GITHUB_TOKEN',
+      profile: 'github',
+      repos: ['you/read'],
+      write: ['You/Write'],
+    }
+    for (const [actual, expected, what] of await githubChecks([code])) {
+      assert.deepStrictEqual(actual, expected, what)
+    }
   })
 })

@@ -5,6 +5,7 @@
 # flake exports them as `brokerProfiles` for anyone to read or copy.
 {
   anthropic-messages = import ./anthropic-messages.nix;
+  github = import ./github.nix;
   openrouter = import ./openrouter.nix;
   runpod = import ./runpod.nix;
 }
