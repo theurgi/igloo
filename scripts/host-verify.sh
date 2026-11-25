@@ -2463,15 +2463,17 @@ EOF
 				echo "=== the guest's end of the tether"
 				guest 'ss -ltn "sport = :3128" 2>&1 || cat /proc/net/tcp | head -3'
 				echo
-				echo "=== a push through it, which the grant must refuse rather than forward"
-				guest 'exec 3<>/dev/tcp/127.0.0.1/3128 && printf "GET /github.com/git/git/info/refs?service=git-receive-pack HTTP/1.0\r\n\r\n" >&3 && cat <&3'
+				# The broker's own port serves model servers alone; a profile's hosts
+				# are answered by name. One this VM holds no grant for is refused.
+				echo "=== a model server no grant names, asked for through it, which the broker must refuse"
+				guest 'exec 3<>/dev/tcp/127.0.0.1/3128 && printf "GET /local/igloo-verify-absent/v1/models HTTP/1.0\r\n\r\n" >&3 && cat <&3'
 				echo
 				echo "=== and the brokered value must not be anywhere in the guest"
 				guest 'ls /run/credentials/@system/ 2>&1; grep -rl brokered-value-never-in-the-guest /run /etc /root 2>/dev/null | head'
 			} >"$out/artifacts/tether.txt" 2>&1
 
-			if grep -q 'may fetch, not push' "$out/artifacts/tether.txt"; then
-				verdict PASS tether-reaches-broker "a guest process reaches the broker over the tether, and the grant refuses a push"
+			if grep -q 'no model server named igloo-verify-absent is brokered for this VM' "$out/artifacts/tether.txt"; then
+				verdict PASS tether-reaches-broker "a guest process reaches the broker over the tether, and the broker refuses what no grant names"
 			else
 				verdict FAIL tether-reaches-broker "the guest did not reach the broker — artifacts/tether.txt says whether the port was even bound"
 			fi
@@ -3073,15 +3075,15 @@ GUEST
 					systemctl --user show "$broker_unit" -p ActiveState -p NRestarts
 					[ "$now" != "$before" ] && echo "a new process"
 					echo
-					echo "=== a push through the tether, which the new broker must refuse"
-					guest 'exec 3<>/dev/tcp/127.0.0.1/3128 && printf "GET /github.com/git/git/info/refs?service=git-receive-pack HTTP/1.0\r\n\r\n" >&3 && timeout 10 cat <&3' 2>&1 | tail -2
+					echo "=== a model server no grant names, asked for through the tether, which the new broker must refuse"
+					guest 'exec 3<>/dev/tcp/127.0.0.1/3128 && printf "GET /local/igloo-verify-absent/v1/models HTTP/1.0\r\n\r\n" >&3 && timeout 10 cat <&3' 2>&1 | tail -2
 					echo
 					echo "=== igloo ls"
 					own_ls 2>&1
 				} >"$out/artifacts/broker-killed.txt" 2>&1
 				if grep -qx 'NRestarts=1' "$out/artifacts/broker-killed.txt" &&
 					grep -q '^a new process' "$out/artifacts/broker-killed.txt" &&
-					grep -q 'may fetch, not push' "$out/artifacts/broker-killed.txt" &&
+					grep -q 'no model server named igloo-verify-absent is brokered for this VM' "$out/artifacts/broker-killed.txt" &&
 					grep -q 'up, restarted 1×' "$out/artifacts/broker-killed.txt"; then
 					verdict PASS broker-restarts "a broker killed outright is started again, the guest reaches it through the same tether, and ls says it restarted"
 				else
