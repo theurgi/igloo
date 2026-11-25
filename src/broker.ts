@@ -2790,7 +2790,13 @@ const handle = async (
     host: decision.host,
     id,
     ...(decision._tag === 'Profile'
-      ? { profile: decision.profile, rule: decision.rule, set: decision.set }
+      ? {
+          // What git asked for, which its rule alone does not say.
+          ...(decision.git === undefined ? {} : { operation: decision.git }),
+          profile: decision.profile,
+          rule: decision.rule,
+          set: decision.set,
+        }
       : { operation: decision.operation }),
     ...(scope === undefined ? {} : { scope }),
     ...(decision._tag === 'ModelServer' ? { server: decision.server } : {}),
