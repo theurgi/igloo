@@ -3801,6 +3801,7 @@ describe('Broker.serveRequests, on a push', () => {
           )
           assert.strictEqual(allowed?.['set'], 'push')
           assert.strictEqual(allowed?.['rule'], 'git push')
+          assert.strictEqual(allowed?.['operation'], 'push')
           assert.strictEqual(allowed?.['scope'], 'you/web')
         },
       ),

@@ -112,8 +112,8 @@ Every VM starts from `nixosModules.guest`. Any of it can be overridden by a cont
 
 - **Packages:** `bash`, `cacert`, `coreutils`, `diffutils`, `findutils`, `gawk`, `gnugrep`,
   `gnused`, `gnutar`, `gzip`, `less`, `ncurses`, `openssh`, `which` and `xz`, plus terminfo for
-  Ghostty and kitty. `git` is installed only when the VM has a
-  [`github` grant](credentials.md#github).
+  Ghostty and kitty. `git` is installed only when the VM has a grant with git's reader, as a
+  [`github` grant](credentials.md#github) choosing `fetch` or `push` does.
 - **`programs.nix-ld`** is enabled, so prebuilt binaries a language toolchain downloads — rustup's,
   uv's Python, an `npm i -g` package — can run.
 - **Unfree packages** are allowed.
@@ -279,9 +279,10 @@ sides or as `{ guest = 5173; host = 5174; }`. It is the project's alone.
 
 **`secrets`** declares credentials. A project's own go to that project. The user layer's go to the
 projects each one lists. [Credentials](credentials.md) covers both. A brokered credential names its
-`profile`, and for any but `github` the sets it allows in `allow` and the hosts those sets reach in
-`hosts`, which have to be exactly those: a profile whose update moves a host is refused rather than
-sending the key there.
+`profile`, the sets it allows for the whole account in `allow`, for a profile with repositories such
+as `github` the sets it allows for each repository in `repos`, as
+`repos."owner/repo" = [ "fetch" "read" ];`, and the hosts those sets reach in `hosts`, which have to
+be exactly those: a profile whose update moves a host is refused rather than sending the key there.
 
 **`profiles`** defines broker profiles by name, each the hosts a service's key goes to, how it is
 sent at each, the variables its clients read a key from, and named sets of rules

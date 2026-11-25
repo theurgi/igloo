@@ -2076,10 +2076,10 @@ EOF
       source = { file = "$broker_config/from-file"; };
       mode = "broker";
       profile = "github";
-      repos = {
-        read = [ "git/git" ];
-        write = [ "git/git-scm.com" ];
-      };
+      hosts = [ "api.github.com" "github.com" "uploads.github.com" ];
+      allow = [ "graphql" ];
+      repos."git/git" = [ "fetch" "read" ];
+      repos."git/git-scm.com" = [ "actions" "checks" "fetch" "issues" "pulls" "push" "read" "releases" ];
       projects = [ "$project" ];
     };
     IGLOO_VERIFY_INFERENCE = {
@@ -2559,7 +2559,7 @@ EOF
 			fi
 
 			# Pushes, each a dry run: git asks for the push's ref advertisement
-			# and sends nothing more. The one to the repository in `repos.write`
+			# and sends nothing more. The one to the repository listed for `push`
 			# goes to GitHub with the same invalid token, so it comes back
 			# refused; the others never leave the broker.
 			{
@@ -2576,12 +2576,12 @@ EOF
 				grep '"event":"allow".*"operation":"push' "$(boot_log broker.log)"
 			} >"$out/artifacts/github-push.txt" 2>&1
 			if grep -q 'refused IGLOO_VERIFY_BROKERED; .* not scoped to git/git-scm.com' "$out/artifacts/github-push.txt" &&
-				grep -q '"operation":"push-refs","scope":"git/git-scm.com"' "$out/artifacts/github-push.txt"; then
-				verdict PASS github-push-reaches-upstream "a push to a repository in repos.write reaches github.com through the broker, which reports its own credential being refused"
+				grep -q '"operation":"push-refs","profile":"github","rule":"git push","set":"push","scope":"git/git-scm.com"' "$out/artifacts/github-push.txt"; then
+				verdict PASS github-push-reaches-upstream "a push to a repository listed for push reaches github.com through the broker, which reports its own credential being refused, and is logged as the push set's"
 			else
 				verdict FAIL github-push-reaches-upstream "read artifacts/github-push.txt, then logs/up-broker/broker.log"
 			fi
-			if grep -qx 'remote: broker: this VM may fetch, not push' "$out/artifacts/github-push.txt" &&
+			if grep -qx 'remote: broker: this VM may fetch git/git, not push to it' "$out/artifacts/github-push.txt" &&
 				grep -q 'torvalds/linux is not a repository this VM may push to' "$out/artifacts/github-push.txt"; then
 				verdict PASS github-push-refuses "a push to a repository the grant may only fetch, and to one it does not name, is refused at the first request, each with its reason, which git prints as text"
 			else
@@ -2656,9 +2656,9 @@ EOF
 				verdict FAIL github-api-root "read artifacts/github-api.txt"
 				;;
 			esac
-			if grep -qxF '{"message":"broker: torvalds/linux is not a repository this VM may read"}' "$out/artifacts/github-api.txt" &&
-				grep -q '/gists is not something this VM may write through api.github.com' "$out/artifacts/github-api.txt" &&
-				grep -q '/user/repos is not something this VM may read' "$out/artifacts/github-api.txt"; then
+			if grep -qxF '{"message":"broker: GET /repos/torvalds/linux is not something this VM may do for torvalds/linux through api.github.com"}' "$out/artifacts/github-api.txt" &&
+				grep -q 'POST /gists is not something this VM may do through api.github.com' "$out/artifacts/github-api.txt" &&
+				grep -q 'GET /user/repos is not something this VM may do through api.github.com' "$out/artifacts/github-api.txt"; then
 				verdict PASS github-api-refuses "another repository, a new gist and the account's repositories are refused through the API, each with its reason as the message of a JSON body, as GitHub writes an error"
 			else
 				verdict FAIL github-api-refuses "read artifacts/github-api.txt"
@@ -2666,24 +2666,24 @@ EOF
 			write_said=$(after_header "$out/artifacts/github-api.txt" "=== a write under the repository the grant may write")
 			case $write_said in
 			*'api.github.com refused IGLOO_VERIFY_BROKERED; '*' not scoped to git/git-scm.com"'*)
-				verdict PASS github-api-write-reaches-upstream "a write under a repository in repos.write reaches api.github.com through the broker, which reports its own credential being refused"
+				verdict PASS github-api-write-reaches-upstream "a write under a repository listed for issues reaches api.github.com through the broker, which reports its own credential being refused"
 				;;
 			*)
 				verdict FAIL github-api-write-reaches-upstream "read artifacts/github-api.txt, then logs/up-broker/broker.log"
 				;;
 			esac
-			if grep -q 'this VM may read git/git, not write to it' "$out/artifacts/github-api.txt" &&
-				grep -q 'torvalds/linux is not a repository this VM may write to' "$out/artifacts/github-api.txt" &&
-				grep -q 'POST /repos/git/git-scm.com/hooks is not a write this VM may make' "$out/artifacts/github-api.txt" &&
-				grep -q 'PUT /repos/git/git-scm.com/actions/secrets/X is not a write this VM may make' "$out/artifacts/github-api.txt"; then
-				verdict PASS github-api-write-refuses "a write through the API to a repository the grant may only read, and to one it does not name, is refused, and so are a webhook and a secret for the one it may write, each with its reason"
+			if grep -q 'POST /repos/git/git/issues is not something this VM may do through api.github.com, which allows GET, HEAD there' "$out/artifacts/github-api.txt" &&
+				grep -q 'POST /repos/torvalds/linux/issues is not something this VM may do for torvalds/linux through api.github.com' "$out/artifacts/github-api.txt" &&
+				grep -q 'POST /repos/git/git-scm.com/hooks is not something this VM may do through api.github.com, which allows GET, HEAD there' "$out/artifacts/github-api.txt" &&
+				grep -q 'PUT /repos/git/git-scm.com/actions/secrets/X is not something this VM may do through api.github.com, which allows GET, HEAD there' "$out/artifacts/github-api.txt"; then
+				verdict PASS github-api-write-refuses "a write through the API to a repository listed only for read, and to one the grant does not name, is refused, and so are a webhook and a secret for the one listed for every set, each with its reason"
 			else
 				verdict FAIL github-api-write-refuses "read artifacts/github-api.txt"
 			fi
 			upload_said=$(after_header "$out/artifacts/github-api.txt" "=== an asset uploaded to a release of the repository")
 			case $upload_said in
 			*'uploads.github.com refused IGLOO_VERIFY_BROKERED; '*' not scoped to git/git-scm.com"'*)
-				verdict PASS github-upload-reaches-upstream "an asset uploaded to a release of a repository in repos.write reaches uploads.github.com through the broker, which reports its own credential being refused"
+				verdict PASS github-upload-reaches-upstream "an asset uploaded to a release of a repository listed for releases reaches uploads.github.com through the broker, which reports its own credential being refused"
 				;;
 			*)
 				verdict FAIL github-upload-reaches-upstream "read artifacts/github-api.txt, then logs/up-broker/broker.log"
@@ -2691,8 +2691,8 @@ EOF
 			esac
 			upload_refused=$(after_header "$out/artifacts/github-api.txt" "=== an asset uploaded to a release of one it may only read")
 			case $upload_refused in
-			*'this VM may read git/git, not write to it'*)
-				verdict PASS github-upload-refuses "an asset uploaded to a release of a repository the grant may only read is refused, with its reason"
+			*'POST /repos/git/git/releases/1/assets is not something this VM may do for git/git through uploads.github.com'*)
+				verdict PASS github-upload-refuses "an asset uploaded to a release of a repository listed only for read is refused, with its reason"
 				;;
 			*)
 				verdict FAIL github-upload-refuses "read artifacts/github-api.txt"
@@ -3177,7 +3177,11 @@ GUEST
 				shown_repo=${shown_repo:-git/git}
 				write_repo=${IGLOO_VERIFY_GITHUB_WRITE_REPO:-}
 				write_line=
-				[ -z "$write_repo" ] || write_line="write = [ \"$write_repo\" ];"
+				hosts_line='hosts = [ "api.github.com" "github.com" ];'
+				if [ -n "$write_repo" ]; then
+					write_line="repos.\"$write_repo\" = [ \"fetch\" \"push\" \"read\" \"releases\" ];"
+					hosts_line='hosts = [ "api.github.com" "github.com" "uploads.github.com" ];'
+				fi
 				printf '%s' "$IGLOO_VERIFY_GITHUB_TOKEN" >"$broker_config/from-file"
 				cat >"$broker_config/igloo/igloo-policy.nix" <<EOF
 {
@@ -3186,10 +3190,10 @@ GUEST
       source = { file = "$broker_config/from-file"; };
       mode = "broker";
       profile = "github";
-      repos = {
-        read = [ "$real_repo" ];
-        $write_line
-      };
+      $hosts_line
+      allow = [ "graphql" ];
+      repos."$real_repo" = [ "fetch" "read" ];
+      $write_line
       projects = [ "$project" ];
     };
   };
@@ -3285,7 +3289,7 @@ EOF
 								[ "$(said 'the push deleting it')" = 0 ] &&
 								[ "$(said 'branches of that name')" = 0 ] &&
 								[ "$(said 'pushes the broker allowed')" = 2 ]; then
-								verdict PASS github-push-live "a real token pushes a new branch to a repository in repos.write through the broker, and deletes it again"
+								verdict PASS github-push-live "a real token pushes a new branch to a repository listed for push through the broker, and deletes it again"
 							else
 								verdict FAIL github-push-live "read artifacts/github-push-live.txt; a branch named igloo-verify-… may be left in the scratch repository"
 							fi
@@ -3314,9 +3318,9 @@ EOF
 									guest "timeout 30 curl -sS -o /dev/null -w '%{http_code}\n' https://api.github.com/repos/$write_repo/releases/$release 2>&1 | tail -1"
 								fi
 								echo "=== uploads the broker allowed, from its log"
-								grep -c '"event":"allow".*"operation":"upload"' "$(boot_log broker.log)"
+								grep -c '"event":"allow","host":"uploads.github.com",.*"set":"releases"' "$(boot_log broker.log)"
 								echo "=== writes the broker allowed, from its log"
-								grep -c '"event":"allow".*"operation":"write"' "$(boot_log broker.log)"
+								grep -c '"event":"allow","host":"api.github.com",.*"set":"releases"' "$(boot_log broker.log)"
 							} >"$out/artifacts/github-release-live.txt" 2>&1
 							released() { after_header "$out/artifacts/github-release-live.txt" "=== $1"; }
 							chunked_said=$(awk -v header="=== an asset uploaded in chunks" 'index($0, header) == 1 { n++; want = 2; next } want == 2 { s = $0; want = 1; next } want == 1 { if ($0 !~ /^===/) s = s " " $0; want = 0 } END { print (n == 1 ? s : "<header repeated>") }' "$out/artifacts/github-release-live.txt")
@@ -3327,7 +3331,7 @@ EOF
 								[ "$(released 'the release read again')" = 404 ] &&
 								[ "$(released 'uploads the broker allowed')" = 2 ] &&
 								[ "$(released 'writes the broker allowed')" = 2 ]; then
-								verdict PASS github-release-live "a real token makes a draft release in a repository in repos.write through the broker, uploads an asset to it, reads it back, and deletes it — the asset is served from $(released 'the asset read back' | cut -d' ' -f2)"
+								verdict PASS github-release-live "a real token makes a draft release in a repository listed for releases through the broker, uploads an asset to it, reads it back, and deletes it — the asset is served from $(released 'the asset read back' | cut -d' ' -f2)"
 							else
 								verdict FAIL github-release-live "read artifacts/github-release-live.txt; a draft release named igloo host-verify may be left in the scratch repository"
 							fi
@@ -3512,7 +3516,9 @@ EOF
     source = { file = "$broker_config/from-file"; };
     mode = "broker";
     profile = "github";
-    repos.read = [ "git/git" ];
+    hosts = [ "api.github.com" "github.com" ];
+    allow = [ "graphql" ];
+    repos."git/git" = [ "fetch" "read" ];
     projects = [ "$project" ];
   };
 }

@@ -60,7 +60,15 @@ The user layer declares credentials once and lists the projects each one goes to
     ];
     mode = "broker";
     profile = "github";
-    repos.read = [ "alice/demo" ];
+    hosts = [
+      "api.github.com"
+      "github.com"
+    ];
+    allow = [ "graphql" ];
+    repos."alice/demo" = [
+      "fetch"
+      "read"
+    ];
     projects = [ "${config.home.homeDirectory}/projects/demo" ];
   };
 }
@@ -79,21 +87,21 @@ holds its own TLS certificate and key under them.
 
 ### Fields
 
-| Field         | Applies to          | Value                                                                       |
-| ------------- | ------------------- | --------------------------------------------------------------------------- |
-| `source`      | every credential    | `{ file = "…"; }` or `{ command = [ … ]; }`                                 |
-| `mode`        | every credential    | `"broker"` or `"deliver"`                                                   |
-| `profile`     | brokered            | A [profile](#profiles): one of igloo's, `"github"`, or one a layer defines. |
-| `hosts`       | brokered, a profile | Exactly the hosts the sets in `allow` reach.                                |
-| `allow`       | brokered, a profile | The profile's sets this credential allows, at least one.                    |
-| `repos.read`  | brokered, `github`  | Repositories to fetch and read, as `owner/repo`.                            |
-| `repos.write` | brokered, `github`  | Repositories to push to and write through the API as well, as `owner/repo`. |
-| `projects`    | user layer only     | Absolute paths of the projects' root directories.                           |
+| Field      | Applies to                            | Value                                                                           |
+| ---------- | ------------------------------------- | ------------------------------------------------------------------------------- |
+| `source`   | every credential                      | `{ file = "…"; }` or `{ command = [ … ]; }`                                     |
+| `mode`     | every credential                      | `"broker"` or `"deliver"`                                                       |
+| `profile`  | brokered                              | A [profile](#profiles): one of igloo's, or one a layer defines.                 |
+| `hosts`    | brokered                              | Exactly the hosts the sets chosen reach.                                        |
+| `allow`    | brokered                              | The profile's sets this credential allows for the whole account.                |
+| `repos`    | brokered, a profile with repositories | Each repository, as `"owner/repo"`, with the sets this credential allows there. |
+| `projects` | user layer only                       | Absolute paths of the projects' root directories.                               |
 
-A field that does not apply is refused rather than ignored: `repos` on a profile's grant, or
-`profile` on a delivered credential, would be someone believing they had narrowed something. A grant
-of a profile with neither `hosts` nor `allow`, as one was written before profiles had sets, is
-refused with the two lines that keep what it allowed: every set.
+A field that does not apply is refused rather than ignored: `repos` on a profile without
+repositories, or `profile` on a delivered credential, would be someone believing they had narrowed
+something. A grant chooses at least one set, in `allow` or under a repository. A grant of a profile
+with none of `hosts`, `allow` and `repos`, as one was written before profiles had sets, is refused
+with the lines that keep what it allowed: every set.
 
 A project has at most one brokered credential per profile, and no two of its grants may reach one
 host. A request names no credential, and one to GitHub's API may name no repository, so the broker
@@ -159,9 +167,9 @@ refused if it takes longer than 120 seconds, prints nothing, or prints more than
 
 A brokered credential's `profile` says what its key may do at a service: the hosts it is sent to,
 how it is sent at each, and named **sets** of what it may do there. A profile is data the broker
-reads, never code it runs. igloo ships `anthropic-messages`, `openrouter` and `runpod` as profiles,
-and `github` as code of the broker's own (below). Anything else is a profile you define, or import
-from someone who published one. The one upstream policy places otherwise is a
+reads, never code it runs. igloo ships `anthropic-messages`, `github`, `openrouter` and `runpod` as
+profiles (below). Anything else is a profile you define, or import from someone who published one.
+The one upstream policy places otherwise is a
 [model server on this machine](#model-servers-on-this-machine), and only by its port.
 
 ### Defining and granting
@@ -215,8 +223,9 @@ cannot have its rules changed from a project's file. A profile is defined once p
 home-manager refuses a second definition of one name. igloo's are also the flake's `brokerProfiles`,
 for reading or copying.
 
-**Granting** is declaring a brokered credential for the profile, choosing its sets in `allow` and
-naming in `hosts` the hosts they reach:
+**Granting** is declaring a brokered credential for the profile, choosing its sets in `allow`, and
+per repository in `repos` for a profile with repositories, and naming in `hosts` the hosts they
+reach:
 
 ```nix
 {
@@ -266,6 +275,34 @@ igloo's profiles and the user layer's; one a project declares may grant its own 
   fields listed, each one that would return a credential. The request has to be one JSON object of
   `query`, `variables` and `operationName`, at most 256 KiB, and goes as the object the broker read,
   written again as JSON, without the URL's query.
+- **`length = "kept"`** on a rule sends a body with the `Content-Length` the guest stated, and holds
+  it to that, for a service that takes an upload only with its length. Any other body goes in
+  chunks.
+
+For a service whose keys reach repositories, a forge:
+
+- **`repository = { segments = 2; ignoreCase = true; };`** says what a repository is in the
+  profile's paths: that many segments, as `owner/repo` is two, compared ignoring case where the
+  service matches names so.
+- **`{repo}`** in a rule's path is a repository, as `repos/{repo}/issues/**`. Such a rule applies to
+  a repository whose list in the grant's `repos` holds its set, and the request goes upstream with
+  the repository spelled as the grant spells it. A `deny` rule belongs to no set, so it names a
+  repository by its segments, as `repos/*/*/hooks`, and refuses that for every one.
+- **`{ git = "fetch"; }`** and **`{ git = "push"; }`** are git's reader, a rule of their own with no
+  method or path: git's smart HTTP for `{repo}` at the rule's host, the ref advertisement and the
+  fetch, or the advertisement a push asks for and the push, with or without `.git`. A push is
+  refused at its advertisement as well as at the push. git's headers are built rather than carried,
+  and a refused credential comes back as a `502`, so git does not ask for a password.
+- **`hosts.<host>.redirects = "return"`** passes that host's redirects back to the guest,
+  unfollowed, for a signed URL elsewhere that needs no credential, a log's or an asset's.
+- **`hosts.<host>.pages = "github"`** is GitHub's exception, named for whose behaviour it is: GitHub
+  names a listing's next page by the repository's number, and an answer for a request under `{repo}`
+  has each such `Link` put back under the repository, so a client following it stays within the
+  grant. It needs `repository`.
+
+A set whose rules name a repository is chosen per repository, in `repos`; one whose rules name none
+reaches the whole account, whatever the key reaches, and is chosen in `allow` alone. A set with both
+applies its rules naming none when any repository lists it.
 
 A field the format does not have is refused, not ignored, as is anything above written otherwise.
 
@@ -288,9 +325,9 @@ sets you choose allow; reviewing an update means reading what changed.
 - **Reach past a `restricted` ceiling.** Where the user layer sets `networkCeiling = "restricted"`,
   each host a project's grant reaches through a profile has to be in `tunnelCeiling`, whichever
   layer defined the profile; igloo's own, as igloo ships them, are exempt.
-- **Name an address, a port, plain HTTP**, or any of the hosts `github` answers.
-- **Read a body**, but GraphQL's, or follow a redirect: a redirect is refused, and an upstream `401`
-  comes back as the broker's `403` naming the credential.
+- **Name an address, a port or plain HTTP.**
+- **Read a body**, but GraphQL's, or follow a redirect: a redirect is refused, or passed back where
+  a host returns them, and an upstream `401` comes back as the broker's `403` naming the credential.
 - **Ask, budget or rate-limit.** A rule allows or denies.
 
 Every profile host is answered by its own name. A client keeps its default address and needs only a
@@ -328,53 +365,80 @@ project's `tunnel` reaches `openrouter.ai`, and is refused where it does not
 
 ### `github`
 
-- **Upstream:** `https://github.com`, over git's smart HTTP protocol, and GitHub's REST and GraphQL
-  APIs at `https://api.github.com`, and its uploads of a release's assets at
-  `https://uploads.github.com`, with the token sent the way each takes a fine-grained personal
-  access token or a GitHub App installation token.
-- **Operations:**
-  - Fetching, `git clone`, `git fetch` and `git pull`, from the repositories in `repos.read` and
-    `repos.write`.
-  - Pushing, `git push`, to those in `repos.write`. A push to any other is refused at the first
-    request git makes for it, before anything is sent.
-  - Reading through the REST API, with `GET` or `HEAD`, anything under `repos/<owner>/<repo>/` for a
-    repository in either list, with its query, and the API's root, where GitHub gives a token's
-    scopes.
-  - Writing through the REST API, under `repos/<owner>/<repo>/` for a repository in `repos.write`,
-    what `gh` writes: issues and pull requests, with their comments, labels, reviews and merges,
-    anywhere under `issues/` and `pulls/` but a pull request's `codespaces`; releases, anywhere
-    under `releases/`; a run's rerun and cancel and a workflow's dispatch, at
-    `actions/runs/<id>/rerun`, `rerun-failed-jobs`, `cancel` and `force-cancel`,
-    `actions/jobs/<id>/rerun` and `actions/workflows/<id>/dispatches`; and a commit's statuses and
-    checks, at `statuses/<sha>`, `check-runs` and `check-suites`.
-  - Uploading a release's asset, `POST repos/<owner>/<repo>/releases/<id>/assets` at
-    `uploads.github.com`, for a repository in `repos.write`, with its query, which names the asset.
-    GitHub takes an asset only with its `Content-Length`, as `gh` sends it, and refuses one sent in
-    chunks.
-  - A GraphQL query, `POST graphql`, whatever it reads or writes. The grant does not bound it: see
-    [what a grant does not bound](#what-a-grant-does-not-bound).
-  - Through the API, everything else is refused: a write to a repository only in `repos.read`; any
-    other write to one in `repos.write`, its settings, collaborators, webhooks, deploy keys, Actions
-    secrets, variables and runners, its contents and refs and its labels, and a Codespace made from
-    a pull request, which is a machine of its own, among them, even where the token could make it;
-    another repository; and everything outside `repos/` but the root and `graphql`, `gists`,
-    `user/repos` and `search` among it.
-- **Grant:** `repos.read`, the repositories to fetch and read, and `repos.write`, those to push to
-  and write through the API as well, which are fetched and read without being listed twice. Either
-  may be left out, but not both, and a repository in both is refused. Each is `owner/repo`, with or
-  without `.git`, matched ignoring case.
-- **In the guest:** `git` is installed, and `GH_TOKEN=igloo-broker-holds-the-real-key`, a
-  placeholder for GitHub's CLI, `gh`, which makes no request without a token. The broker answers
-  `github.com`, `api.github.com` and `uploads.github.com` itself: a connection to any of them
-  through the [tunnel](network.md#the-tunnel) reaches the broker rather than GitHub, under every
-  network mode and with no `tunnel` entry. So an ordinary GitHub URL just works, a remote reads as
-  the URL it was cloned from, and `gh` finds its repository from it. Its system configuration
-  rewrites `git@github.com:` and `ssh://git@github.com/` URLs to `https://github.com/`.
+- **Hosts:** `github.com`, over git's smart HTTP protocol, with the token in the username slot git
+  uses for one, `x-access-token`; `api.github.com`, GitHub's REST and GraphQL APIs, with the token
+  as a bearer token, its redirects passed back and its page links kept under the repository; and
+  `uploads.github.com`, where a release's assets are uploaded, as a bearer token. A fine-grained
+  personal access token or a GitHub App installation token is taken either way.
+- **Repositories:** `owner/repo`, with or without `.git`, matched ignoring case, as GitHub matches
+  them. The upstream names one as the grant spells it.
+- **Sets, per repository:**
+  - `fetch`: `git clone`, `git fetch` and `git pull`.
+  - `push`: `git push`. A push to a repository not listed for it is refused at the first request git
+    makes for it, before anything is sent.
+  - `read`: through the REST API, with `GET` or `HEAD`, anything under `repos/<owner>/<repo>/`, with
+    its query; and the API's root, where GitHub gives a token's scopes.
+  - `issues`, `pulls` and `releases`: writing through the REST API anywhere under `issues/`,
+    `pulls/` and `releases/`, with their comments, labels, reviews and merges, and, for `releases`,
+    uploading an asset, `POST repos/<owner>/<repo>/releases/<id>/assets` at `uploads.github.com`,
+    with its query, which names the asset. GitHub takes an asset only with its `Content-Length`, as
+    `gh` sends it, and refuses one sent in chunks, so the length is kept.
+  - `actions`: a run's rerun and cancel and a workflow's dispatch, at `actions/runs/<id>/rerun`,
+    `rerun-failed-jobs`, `cancel` and `force-cancel`, `actions/jobs/<id>/rerun` and
+    `actions/workflows/<id>/dispatches`.
+  - `checks`: a commit's statuses and checks, at `statuses/<sha>`, `check-runs` and `check-suites`.
+- **Sets, for the whole account:** `graphql`, `POST graphql`, whatever it reads or writes. It names
+  repositories in its body, so it reaches whatever the token reaches, and is chosen in `allow`,
+  never under a repository: see [what a grant does not bound](#what-a-grant-does-not-bound).
+- **Refused whatever is chosen:** a Codespace made from a pull request,
+  `repos/*/*/pulls/*/codespaces`, which `pulls` would admit: a machine of its own, billed to the
+  token's account, running the pull request's branch. And, by omission, every write no set lists,
+  even where the token could make it: a repository's settings, collaborators, webhooks, deploy keys,
+  Actions secrets, variables and runners, its contents and refs and its labels; and everything
+  outside `repos/` but the root and `graphql`, `gists`, `user/repos` and `search` among it.
+- **Placeholder:** `GH_TOKEN`, for GitHub's CLI, `gh`, which makes no request without a token.
+- **Grant:** a repository read and one worked on, with GraphQL for `gh`:
+
+  ```nix
+  {
+    hosts = [
+      "api.github.com"
+      "github.com"
+      "uploads.github.com"
+    ];
+    allow = [ "graphql" ];
+    repos."alice/demo" = [
+      "fetch"
+      "read"
+    ];
+    repos."alice/tool" = [
+      "actions"
+      "checks"
+      "fetch"
+      "issues"
+      "pulls"
+      "push"
+      "read"
+      "releases"
+    ];
+  }
+  ```
+
+  A Nix `let` names a list several repositories share. A grant written before profiles, with
+  `repos.read` and `repos.write`, is refused with the grant that keeps what it allowed written out:
+  each repository it read with `fetch` and `read`, each it wrote with every set, and `graphql`.
+
+- **In the guest:** `git` is installed, and its system configuration rewrites `git@github.com:` and
+  `ssh://git@github.com/` URLs to `https://github.com/` for a grant choosing `fetch` or `push`. The
+  broker answers the hosts the grant reaches itself: a connection to any of them through the
+  [tunnel](network.md#the-tunnel) reaches the broker rather than GitHub, under every network mode
+  and with no `tunnel` entry. So an ordinary GitHub URL just works, a remote reads as the URL it was
+  cloned from, and `gh` finds its repository from it.
 
 A project has at most one `github` credential: a request to the API may name no repository, so the
 broker could not tell which of two pays. List every repository in the one.
 
-A push to a repository in `repos.write` reaches every branch and tag the token can write to. Which
+A push to a repository listed for `push` reaches every branch and tag the token can write to. Which
 ones it updates is in its body, which the broker does not read, so the bound is the repository's
 own: its rulesets, such as no force-push and no deletion on `main`. A token acts as its account, so
 the token of an account a ruleset lets bypass it bypasses it from the guest too. To keep an agent
@@ -382,60 +446,62 @@ off `main`, use a token of an account that is not on the bypass list. A GitHub A
 token expires within an hour, and the broker reads a credential only when the VM boots, so it does
 not last a working session.
 
-With `gh` in the guest, `gh auth status` works, and so do its commands that read a listed
-repository: `gh run list`, `gh run view`, `gh release list`, `gh release view`, `gh repo view`,
+With `gh` in the guest, `gh auth status` works, and so do its commands that read a repository listed
+for `read`: `gh run list`, `gh run view`, `gh release list`, `gh release view`, `gh repo view`,
 `gh issue list`, `gh pr list`, and `gh api` under `repos/`. Those that read through GraphQL, as most
-of `gh pr`, `gh issue` and `gh repo` do, reach whatever the token reaches, listed or not, and those
-that write through it, as `gh issue create`, `gh pr comment` and `gh pr merge` do, work if the token
-can write. For a repository in `repos.write`, so do those that write through the REST API:
-`gh release create`, assets included, `gh release upload`, `gh release edit` and
-`gh release delete`, `gh run rerun`, `gh run cancel` and `gh workflow run`. `gh label`,
-`gh run delete`, `gh workflow enable` and `disable`, `gh cache delete`, `gh secret` and
-`gh variable` write what is refused. So does deleting a ref through the API, which
-`gh release delete --cleanup-tag` and `gh pr close --delete-branch` do after their own work: the
-release is deleted and the pull request closed, and the tag or branch is left for
-`git push origin :<ref>` to delete. GitHub serves a run's logs and a release's assets as redirects
-to signed URLs on other hosts, which the broker passes back for the guest to follow through the
-tunnel; under `restricted`, list those hosts in `tunnel`. `gh run view --log` and `--log-failed`
-read a run's log archive from `results-receiver.actions.githubusercontent.com`, and
-`gh release download` reads an asset from `release-assets.githubusercontent.com`.
+of `gh pr`, `gh issue` and `gh repo` do, need `graphql`, and reach whatever the token reaches,
+listed or not; those that write through it, as `gh issue create`, `gh pr comment` and `gh pr merge`
+do, work if the token can write. Without `graphql` they are refused. Those that write through the
+REST API work for a repository listed for their set: `gh release create`, assets included,
+`gh release upload`, `gh release edit` and `gh release delete` for `releases`, and `gh run rerun`,
+`gh run cancel` and `gh workflow run` for `actions`. `gh label`, `gh run delete`,
+`gh workflow enable` and `disable`, `gh cache delete`, `gh secret` and `gh variable` write what is
+refused. So does deleting a ref through the API, which `gh release delete --cleanup-tag` and
+`gh pr close --delete-branch` do after their own work: the release is deleted and the pull request
+closed, and the tag or branch is left for `git push origin :<ref>` to delete. GitHub serves a run's
+logs and a release's assets as redirects to signed URLs on other hosts, which the broker passes back
+for the guest to follow through the tunnel; under `restricted`, list those hosts in `tunnel`.
+`gh run view --log` and `--log-failed` read a run's log archive from
+`results-receiver.actions.githubusercontent.com`, and `gh release download` reads an asset from
+`release-assets.githubusercontent.com`.
+
+GitHub names the next page of a repository's listing by the repository's number, which no grant
+names. On an answer for a listed repository, the broker puts each such link back in the
+`repos/<owner>/<repo>/` form, so `gh` paging through issues or runs stays within the grant.
 
 Scope the token itself to the same repositories. The grant bounds what the broker asks for over git
 and the REST API, and the token bounds what GitHub gives; a GraphQL query is bounded by the token
-alone. Without `repos.write`, make the token read-only. With it, the token needs Contents write,
-which a fine-grained token holds for every repository it reaches, so a GraphQL query can write to
-one in `repos.read` too. A repository that must not be written belongs in neither `repos.write` nor
-a token that can write.
+alone. With no repository listed for a writing set, make the token read-only. With one, the token
+needs Contents write, which a fine-grained token holds for every repository it reaches, so a GraphQL
+query can write to a repository listed only for `read` too. A repository that must not be written
+belongs in a token that cannot write it, or in a grant without `graphql`.
 
-### How the guest reaches GitHub
+### How the guest reaches a profile's hosts
 
-The broker answers `github.com`, `api.github.com` and `uploads.github.com` over TLS with a
-certificate of its own, so the guest has to trust what issued it, and answers Runpod's names for a
-`runpod` grant the same way. On the first launch with either grant, igloo makes a certificate
-authority for the project with `openssl`, and a certificate signed by it for the names the broker
-answers for any profile. It keeps both in `.igloo/tls/`, with the certificate's key, readable only
-by you. The guest is built trusting that authority beside the system's own, and
-`NODE_EXTRA_CA_CERTS` and `NIX_SSL_CERT_FILE` point Node, Bun and Python at the same list.
+The broker answers each host a project's grants reach over TLS with a certificate of its own, so the
+guest has to trust what issued it. On the first launch with a grant, igloo makes a certificate
+authority for the project with `openssl`, and a certificate signed by it for every host of the
+profiles igloo ships, `github.com`, `api.github.com` and `uploads.github.com` among them, and for
+the hosts of the user layer's and the project's profiles the project grants. It keeps both in
+`.igloo/tls/`, with the certificate's key, readable only by you. The guest is built trusting that
+authority beside the system's own, and `NODE_EXTRA_CA_CERTS` and `NIX_SSL_CERT_FILE` point Node, Bun
+and Python at the same list.
 
-- The authority can sign for `github.com`, `api.runpod.io` and `api.runpod.ai`, and their
-  subdomains, and nothing else: its name constraints say so, and its own key is deleted once it has
-  signed the one certificate. What `.igloo/tls/` holds can answer those names to this project's
-  guest, and sign nothing. The broker answers only the names its own grants are for.
+- The authority can sign for those hosts and their subdomains, and nothing else: its name
+  constraints say so, and its own key is deleted once it has signed the one certificate. What
+  `.igloo/tls/` holds can answer those names to this project's guest, and sign nothing. The broker
+  answers only the hosts its own grants reach.
 - Every request the guest makes to any of them over HTTPS reaches the broker. What the grant covers
-  is served with the token. A read no grant covers, a release download, a clone of a public
-  repository the grant does not list or an install script's read through the API, is sent to GitHub
-  with no credential at all, when the VM's tunnel could reach that name itself: under `internet`, or
-  under `restricted` with the name in `tunnel`. A redirect in its answer comes back for the guest to
-  follow through the tunnel. Anything else, a write no grant covers among it, is refused with the
-  reason.
-- GitHub names the next page of a repository's listing by the repository's number, which no grant
-  names. On an answer for a listed repository, the broker puts each such link back in the
-  `repos/<owner>/<repo>/` form, so a client following it stays within the grant.
+  is served with the key. A read no grant covers, a release download, a clone of a public repository
+  the grant does not list or an install script's read through the API, is sent on with no credential
+  at all, when the VM's tunnel could reach that name itself: under `internet`, or under `restricted`
+  with the name in `tunnel`. A redirect in its answer comes back for the guest to follow through the
+  tunnel. Anything else, a write no grant covers among it, is refused with the reason.
 - `.igloo/tls/` is made again when it no longer covers the names the broker answers, or is within 30
   days of expiring after ten years. Delete it to have it made again; the next launch rebuilds the
   guest, since the authority is part of it.
 
-Without a repository in `repos.write`, pushing happens from the host, in a repository the agent has
+With no repository listed for `push`, pushing happens from the host, in a repository the agent has
 written. Before running `git` there, look at `.git/config` and `.git/hooks`: git runs what they
 name, as you.
 
@@ -614,48 +680,48 @@ On every brokered request:
 
 - The guest's `Authorization`, `x-api-key`, `Proxy-Authorization` and `Cookie` are dropped, and the
   broker sets its own credential.
-- On a profile's host, a model server or GitHub's API, the guest's other headers pass,
-  `anthropic-version`, `anthropic-beta`, `x-session-id` and `X-GitHub-Api-Version` included. Those
-  about the guest's connection do not: `Host`, `Connection` and the headers it names, the other
-  hop-by-hop ones, and `Expect`. Nor do those a server in front of the upstream could take another
-  method, path or origin from: `X-HTTP-Method-Override`, `X-HTTP-Method`, `X-Method-Override`,
-  `X-Original-URL`, `X-Rewrite-URL`, `Forwarded`, `X-Forwarded-For`, `-Host`, `-Port`, `-Prefix` and
-  `-Proto`, and `X-Real-IP`. Nor do `Accept-Encoding` and `Content-Length`, which the broker sets
-  itself: a body goes in chunks, but for a release's asset sent with a `Content-Length` and no
-  `Transfer-Encoding`, which goes with that length and is cut off if it runs past it or ends short.
-  A `GET` or `HEAD` carries no `Content-Type` or `Content-Encoding` either. The broker's key is set
-  as the profile says, replacing a header of the same name the guest sent. On git's requests to
-  `github.com`, the broker builds the headers and carries over only git's protocol version and
+- On a profile's host or a model server, the guest's other headers pass, `anthropic-version`,
+  `anthropic-beta`, `x-session-id` and `X-GitHub-Api-Version` included. Those about the guest's
+  connection do not: `Host`, `Connection` and the headers it names, the other hop-by-hop ones, and
+  `Expect`. Nor do those a server in front of the upstream could take another method, path or origin
+  from: `X-HTTP-Method-Override`, `X-HTTP-Method`, `X-Method-Override`, `X-Original-URL`,
+  `X-Rewrite-URL`, `Forwarded`, `X-Forwarded-For`, `-Host`, `-Port`, `-Prefix` and `-Proto`, and
+  `X-Real-IP`. Nor do `Accept-Encoding` and `Content-Length`, which the broker sets itself: a body
+  goes in chunks, but at a rule that keeps its length, a release's asset among them, where one sent
+  with a `Content-Length` and no `Transfer-Encoding` goes with that length and is cut off if it runs
+  past it or ends short. A `GET` or `HEAD` carries no `Content-Type` or `Content-Encoding` either.
+  The broker's key is set as the profile says, replacing a header of the same name the guest sent.
+  On git's requests, the broker builds the headers and carries over only git's protocol version and
   request-body encoding, each checked first. A GraphQL request a rule reads goes as
-  `Content-Type: application/json`, the body the broker wrote. A request to a profile's host or
-  GitHub's arrives over TLS and names no host in its path, so the host it was sent to is read
-  instead, and only the names the project's grants reach are answered.
+  `Content-Type: application/json`, the body the broker wrote. A request to a profile's host arrives
+  over TLS and names no host in its path, so the host it was sent to is read instead, and only the
+  names the project's grants reach are answered.
 - A read no rule covers at a name the broker answers, a `GET` or `HEAD` or git's fetch, goes on
   without any credential where the project's `tunnel` reaches that name, as it would have had the
   broker not answered it; so does a read a profile's `deny` rule matches. Where the tunnel does not
   reach the name it is refused, as is a write no rule covers.
-- The response passes back with its status and body. On a profile's host, a model server or GitHub's
-  API, its headers pass too, `retry-after`, rate limits and request ids included, except
-  `Set-Cookie`, `WWW-Authenticate`, `Proxy-Authenticate`, `Alt-Svc`, `Content-Length`,
-  `Content-Encoding` and the hop-by-hop ones. On git's, `Content-Type` is its only header.
+- The response passes back with its status and body. On a profile's host or a model server, its
+  headers pass too, `retry-after`, rate limits and request ids included, except `Set-Cookie`,
+  `WWW-Authenticate`, `Proxy-Authenticate`, `Alt-Svc`, `Content-Length`, `Content-Encoding` and the
+  hop-by-hop ones. On git's, `Content-Type` is its only header.
 - An upstream `401` comes back saying the host's credential was refused: as a `403` on a profile's
-  host, a model server or GitHub's API, which a client reports at once rather than retrying, and as
-  a `502` on git's requests to `github.com`, so that git does not prompt for credentials the guest
-  must not have. A redirect is not followed. One from GitHub's API comes back to the guest, which
-  follows it to a signed URL elsewhere without the credential.
-- A refusal the broker writes itself gives its reason as `broker: <reason>`, in text, which git
-  prints as `remote: broker: …`. On GitHub's API, at `api.github.com` and `uploads.github.com`, and
-  at each profile host, it is JSON instead, `{"message":"broker: <reason>"}`, as GitHub writes an
-  error of its own, and `gh` shows it as `HTTP <status>: broker: <reason> (<URL>)`. `runpodctl`
-  reads the same field.
+  host or a model server, which a client reports at once rather than retrying, and as a `502` on
+  git's requests, so that git does not prompt for credentials the guest must not have. A redirect is
+  not followed. One from a host whose profile returns them, GitHub's API, comes back to the guest,
+  which follows it to a signed URL elsewhere without the credential.
+- A refusal the broker writes itself at a profile's host is JSON, `{"message":"broker: <reason>"}`,
+  as GitHub writes an error of its own, and `gh` shows it as
+  `HTTP <status>: broker: <reason> (<URL>)`; `runpodctl` reads the same field. At one of git's
+  endpoints, and on the broker's own port, it is text, `broker: <reason>`, which git prints as
+  `remote: broker: …`.
 - Every refusal the broker writes itself carries `x-should-retry: false`, except the one that may
   pass: an upstream that did not answer.
 - No request body is refused for its size, but a GraphQL request a rule reads, which is read whole
   and refused past 256 KiB. The upstream's own limit is the one a body meets, and at a profile's
   host the upstream's refusal comes back as it gave it. A call is given up on when its upstream has
-  not answered within 10 minutes of any request to a profile's host or a model server, a push or an
-  asset's upload, or 30 seconds of any other request, or when the guest leaves before it answers; a
-  body still being sent then is cut off.
+  not answered within 10 minutes of any request to a profile's host or a model server, or 30 seconds
+  of a read no grant covers, or when the guest leaves before it answers; a body still being sent
+  then is cut off.
 - The broker serves as many requests and tunnels at once as the guest opens. Its memory is not
   bounded unless you set `brokerMem`; see [Configuration](configuration.md#policy-settings) and
   [when the broker is killed](troubleshooting.md#when-the-broker-is-killed).
@@ -667,13 +733,13 @@ On every brokered request:
   guest makes. Limits on the key itself, at the provider, are the only bound on either.
 - **The provider's tools.** A model grant reaches every tool the provider runs for a model, and
   those reach whatever the provider reaches.
-- **GitHub's GraphQL API.** A `github` grant sends every GraphQL query with its token, reads and
-  writes alike, for whatever repository the query names. A query names repositories in its body,
-  which the broker does not read, and much of it by IDs that say which repository they belong to
-  only after a lookup, so not even reading it could bound one to the repositories listed. The
-  token's own permissions are all that bound it: scope a fine-grained token to exactly the
+- **GitHub's GraphQL API.** A `github` grant choosing `graphql` sends every GraphQL query with its
+  token, reads and writes alike, for whatever repository the query names. A query names repositories
+  in its body, which the broker does not read, and much of it by IDs that say which repository they
+  belong to only after a lookup, so not even reading it could bound one to the repositories listed.
+  The token's own permissions are all that bound it: scope a fine-grained token to exactly the
   repositories listed, with no permission you would not give the agent.
-- **Which refs a push updates.** A push to a repository in `repos.write` reaches every branch and
+- **Which refs a push updates.** A push to a repository listed for `push` reaches every branch and
   tag the token can write to. The repository's rulesets bound it, and the grant does not.
 - **What a write through the REST API sets.** A write is allowed by its method and its path, and
   what it sets is in its body. A merge lands on whatever branch the pull request targets, and a
@@ -688,17 +754,16 @@ On every brokered request:
 
 ## Pointing an agent at the broker
 
-The broker answers each host of a granted profile by that host's own name, as it answers GitHub's,
-so an agent keeps its default address: Claude Code reaches `api.anthropic.com`, an OpenRouter client
-`openrouter.ai`, `runpodctl` `api.runpod.io`. The tunnel hands a connection for one of those names
-to the broker, which answers with a certificate from an authority made for the project and trusted
-in the guest. An agent needs only a key, and the guest holds a placeholder in each variable the
-profile names (`ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `RUNPOD_API_KEY`), which the broker
-replaces with the real key. An agent that reads its key only from its own file needs any text there.
-A model server is covered in
-[pointing an agent at a model server](#pointing-an-agent-at-a-model-server), and a `github` grant
-needs no pointing: `git` and `gh` reach GitHub by its own names, as
-[how the guest reaches GitHub](#how-the-guest-reaches-github) says.
+The broker answers each host of a granted profile by that host's own name, so an agent keeps its
+default address: Claude Code reaches `api.anthropic.com`, an OpenRouter client `openrouter.ai`,
+`runpodctl` `api.runpod.io`. The tunnel hands a connection for one of those names to the broker,
+which answers with a certificate from an authority made for the project and trusted in the guest. An
+agent needs only a key, and the guest holds a placeholder in each variable the profile names
+(`ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `RUNPOD_API_KEY`), which the broker replaces with the
+real key. An agent that reads its key only from its own file needs any text there. A model server is
+covered in [pointing an agent at a model server](#pointing-an-agent-at-a-model-server), and a
+`github` grant needs no pointing: `git` and `gh` reach GitHub by its own names, as
+[`github`](#github) says.
 
 The client has to trust the project's authority. Most read the system's store, which holds it. Node
 and Bun read `NODE_EXTRA_CA_CERTS`, and Python clients that use certifi's list, as `requests` and
@@ -730,11 +795,11 @@ The log is in the boot record of the launch that started the broker, which is us
 has one JSON line per event: `listening` as the broker starts, with the credentials it holds by name
 and its grants, a profile grant's sets and hosts among them, and `tunnel-listening` with the
 tunnel's destinations; `allow` with the credential if there is one, and the profile, the set and the
-rule that allowed it, or for git and GitHub's API the operation and the repository, or for a model
-server the server; `deny` with the reason and status, and what the request asked for when the reason
-names it; `response` with the status, bytes and time taken; `error` when the upstream could not be
-reached or refused the credential; and `tunnel-open`, `tunnel-close` and `tunnel-deny` for each
-tunnel, with the destination it asked for. It never contains a credential's value.
+rule that allowed it, and the repository for a rule naming one, or for a model server the server;
+`deny` with the reason and status, and what the request asked for when the reason names it;
+`response` with the status, bytes and time taken; `error` when the upstream could not be reached or
+refused the credential; and `tunnel-open`, `tunnel-close` and `tunnel-deny` for each tunnel, with
+the destination it asked for. It never contains a credential's value.
 
 ## Logins inside the guest
 
@@ -773,13 +838,13 @@ that way, since it never enters the guest.
   and has the broker's unit unset them. A variable added to it after that reaches the broker when
   systemd starts it again on its own, after it is killed for memory, say, until the VM is next
   launched.
-- `github` pushes and writes through the REST API only for the repositories in `repos.write`, and
-  through the REST API writes only what its operations list. Its GraphQL API is passed with the
-  token, and the grant does not bound what a query reads or writes.
-- With a `github` grant, nothing in the guest reaches `github.com`, `api.github.com` or
-  `uploads.github.com` but through the broker. Under `restricted` without them in `tunnel`, that
-  means only the repositories listed: a release download from `github.com`, a clone of any other
-  repository, or an anonymous read through the API, is refused.
+- `github` pushes and writes through the REST API only for a repository listed for a set that does,
+  and through the REST API writes only what its sets list. Its GraphQL API, where `graphql` is
+  chosen, is passed with the token, and the grant does not bound what a query reads or writes.
+- With a `github` grant, nothing in the guest reaches the hosts its sets reach but through the
+  broker. Under `restricted` without them in `tunnel`, that means only the repositories listed: a
+  release download from `github.com`, a clone of any other repository, or an anonymous read through
+  the API, is refused.
 - Under `restricted`, one job's log, read through the API at `actions/jobs/<id>/logs`, is out of
   reach. GitHub redirects it to one of a set of numbered storage hosts,
   `productionresultssa<n>.blob.core.windows.net`, which differs from job to job, and `tunnel` names
