@@ -38,6 +38,40 @@ const file = (path: string) => ({ _tag: 'File', path }) as const
 const planFor = (overrides: Partial<Config.Policy>, at: Spec.Facts = facts): Spec.Plan =>
   Spec.fromConfig({ content: [], policy: { ...policy, ...overrides } }, at)
 
+/** igloo's `github` profile, from the JSON the package carries: `IGLOO_PROFILES`, which the devshell sets. */
+const githubProfile = (): Profiles.Profile => {
+  const at = process.env['IGLOO_PROFILES']
+  if (at === undefined || at === '') {
+    throw new Error('IGLOO_PROFILES is not set: run the tests in `nix develop`')
+  }
+  const read = Profiles.read(at, JSON.parse(readFileSync(at, 'utf8')))
+  const github = Result.isSuccess(read) ? read.success.get('github') : undefined
+  if (github === undefined) throw new Error(`${at} holds no github profile`)
+  return github
+}
+
+/** A project's github credential `name`, with `fetch` and `read` for each of `repos` and `graphql`. */
+const githubDeclaration = (
+  repos: readonly string[],
+  name: string,
+  layer: 'project' | 'user' = 'project',
+): Config.SecretDeclaration => ({
+  grant: {
+    ...Profiles.grantOf(
+      'github',
+      githubProfile(),
+      ['graphql'],
+      Object.fromEntries(repos.map(repo => [repo, ['fetch', 'read']])),
+    ),
+    definedBy: 'igloo',
+    placeholders: ['GH_TOKEN'],
+  },
+  layer,
+  mode: 'broker',
+  name,
+  source: file(`/${name}`),
+})
+
 describe('Spec.fromConfig, on the disk', () => {
   it('gives the runner no disk without one in policy', () => {
     assert.isUndefined(planFor({}).runner.disk)
@@ -58,10 +92,7 @@ describe('Spec.fromConfig, on where each credential goes', () => {
     secrets: [
       { layer: 'project', mode: 'deliver', name: 'NPM_TOKEN', source: file('/secrets/npm') },
       {
-        grant: { profile: 'github', repos: ['you/api'] },
-        layer: 'user',
-        mode: 'broker',
-        name: 'GITHUB_TOKEN',
+        ...githubDeclaration(['you/api'], 'GITHUB_TOKEN', 'user'),
         source: file('/secrets/github'),
       },
     ],
@@ -89,10 +120,24 @@ describe('Spec.fromConfig, on where each credential goes', () => {
         source: file('/secrets/github'),
       },
     ])
-    assert.deepStrictEqual(plan.grants, [
-      { credential: 'GITHUB_TOKEN', profile: 'github', repos: ['you/api'] },
-    ])
+    const [grant] = plan.grants
+    assert.isTrue(grant !== undefined && Broker.isProfileGrant(grant))
+    if (grant === undefined || !Broker.isProfileGrant(grant)) return
+    assert.strictEqual(grant.credential, 'GITHUB_TOKEN')
+    assert.deepStrictEqual(grant.repos, { 'you/api': ['fetch', 'read'] })
+    assert.deepStrictEqual(grant.repository, { ignoreCase: true, segments: 2 })
+    assert.deepStrictEqual(Object.keys(grant.hosts).toSorted(), ['api.github.com', 'github.com'])
+    // What composition keeps beside the grant is not the broker's to read.
+    assert.notProperty(grant, 'definedBy')
+    assert.notProperty(grant, 'placeholders')
+    assert.deepStrictEqual(Broker.parseGrants(JSON.stringify(plan.grants)), {
+      grants: [...plan.grants],
+    })
     assert.isTrue(plan.broker)
+  })
+
+  it('sets GH_TOKEN as github’s placeholder', () => {
+    assert.strictEqual(plan.runner.brokerEnv['GH_TOKEN'], 'igloo-broker-holds-the-real-key')
   })
 })
 
@@ -109,14 +154,7 @@ describe('Spec.fromConfig, on the rest of what it decides', () => {
     assert.strictEqual(cwd('user', { ...facts, userLayerDir: undefined }), '/')
   })
 
-  const gitGrant = (repos: readonly string[], name: string) =>
-    ({
-      grant: { profile: 'github', repos },
-      layer: 'project',
-      mode: 'broker',
-      name,
-      source: file(`/${name}`),
-    }) as const
+  const gitGrant = githubDeclaration
   const inferenceGrant = {
     grant: {
       definedBy: 'igloo',
@@ -137,13 +175,14 @@ describe('Spec.fromConfig, on the rest of what it decides', () => {
   } as const
   const modelServer: Config.ModelServerDeclaration = { layer: 'user', name: 'local', port: 8080 }
 
-  it('points git at the broker once per upstream, and not at all without a git grant', () => {
-    assert.deepStrictEqual(
-      planFor({ secrets: [gitGrant(['you/api'], 'ONE'), gitGrant(['you/web'], 'TWO')] }).runner
-        .gitBroker,
-      { hosts: ['github.com'] },
-    )
+  it('points git at the broker for each host with git’s reader, and not at all without one', () => {
+    assert.deepStrictEqual(planFor({ secrets: [gitGrant(['you/api'], 'ONE')] }).runner.gitBroker, {
+      hosts: ['github.com'],
+    })
     assert.isUndefined(planFor({ secrets: [inferenceGrant] }).runner.gitBroker)
+    // A github grant choosing no git set reaches github.com not at all.
+    const apiOnly = githubDeclaration([], 'API')
+    assert.isUndefined(planFor({ secrets: [apiOnly] }).runner.gitBroker)
   })
 
   it('has the guest trust the broker’s authority only when the broker answers a name', () => {
@@ -214,14 +253,7 @@ describe('Spec.fromConfig, on the rest of what it decides', () => {
 })
 
 describe('Spec.fromConfig, on what the drift report hashes', () => {
-  const grant = (repos: readonly string[], name: string) =>
-    ({
-      grant: { profile: 'github', repos },
-      layer: 'project',
-      mode: 'broker',
-      name,
-      source: file(`/${name}`),
-    }) as const
+  const grant = (repos: readonly string[], name: string) => githubDeclaration(repos, name)
 
   it('renders the same text however the policy file ordered things', () => {
     const one = planFor({
