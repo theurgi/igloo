@@ -165,29 +165,66 @@ export interface ModelServerGrant {
 export type Send = 'bearer' | { readonly basic: string } | { readonly header: string }
 
 /**
+ * What a repository is in a profile's paths: `segments` path segments, as
+ * GitHub's `owner/repo` is two, compared ignoring case where the service
+ * matches them so. A rule writes `{repo}` where a path names one, and a grant
+ * lists the repositories each set applies to.
+ */
+export interface Repository {
+  readonly ignoreCase: boolean
+  readonly segments: number
+}
+
+/** The segment a rule's path writes where it names a repository. */
+export const repoSegment = '{repo}'
+
+/**
  * What a rule matches: a request by one of `method`, `'*'` for any, at a path
- * in `apiWrites`' form, where `*` is any one segment, a last `**` any number
- * of them, none included, and `""` the host's root. Fixed segments are
- * compared as they are written, since services match them by case.
+ * of segments, where `*` is any one segment, a last `**` any number of them,
+ * none included, `""` the host's root, and `{repo}` a repository the grant
+ * lists for the rule's set. Fixed segments are compared as they are written,
+ * since services match them by case.
  *
  * `graphql` makes it a GraphQL request's rule: the body is read, and sent only
  * if it holds queries alone and names no field in `withheld` (`graphqlQuery`).
+ * `length: 'kept'` sends a body with the length the guest stated and holds it
+ * to that (`uploadLength`), for a service that takes an upload only with one.
  */
-export interface Rule {
+export interface PathRule {
   readonly graphql?: { readonly withheld: readonly string[] }
+  readonly length?: 'kept'
   readonly method: '*' | readonly string[]
   readonly path: string
 }
 
-/** A rule a grant allows, under the name of the set it was chosen as part of. */
-export interface ChosenRule extends Rule {
-  readonly set: string
+/**
+ * git's smart HTTP, for `{repo}` at the rule's host: `fetch`, the ref
+ * advertisement and the fetch, or `push`, the advertisement a push asks for
+ * and the push. The reader fixes each request's method and path
+ * (`routeGitRule`).
+ */
+export interface GitRule {
+  readonly git: 'fetch' | 'push'
 }
 
-/** One host of a profile grant: how its key is sent there, and the rules that hold there. */
+export type Rule = GitRule | PathRule
+
+/** A rule a grant allows, under the name of the set it was chosen as part of. */
+export type ChosenRule = Rule & { readonly set: string }
+
+/**
+ * One host of a profile grant: how its key is sent there, the rules that hold
+ * there, and two options a forge's API needs. `redirects: 'return'` passes
+ * the host's redirects back to the guest unfollowed, for a signed URL
+ * elsewhere that needs no credential. `pages: 'github'` puts a `Link` naming
+ * a repository by its number back under the repository the request named
+ * (`pagesOf`).
+ */
 export interface ProfileHost {
   readonly allow: readonly ChosenRule[]
-  readonly deny: readonly Rule[]
+  readonly deny: readonly PathRule[]
+  readonly pages?: 'github'
+  readonly redirects?: 'return'
   readonly send: Send
 }
 
@@ -203,11 +240,20 @@ export interface ProfileHost {
  * TLS listener: there is no path form for a profile's host. At most one per
  * profile, and a host is one grant's: a request is routed by the name it was
  * addressed to.
+ *
+ * A profile with a `repository` has its grant list repositories in `repos`,
+ * each with the sets that apply there. A rule naming `{repo}` applies to a
+ * repository whose list holds its set; a rule naming none applies once its
+ * set is chosen at all. `repos` is the broker's own copy of what is
+ * permitted, compared against a request and never built from one: the
+ * upstream names a repository as `repos` spells it.
  */
 export interface ProfileGrant {
   readonly credential: string
   readonly hosts: Readonly<Record<string, ProfileHost>>
   readonly profile: string
+  readonly repos?: Readonly<Record<string, readonly string[]>>
+  readonly repository?: Repository
 }
 
 export type Grant = GitGrant | ModelServerGrant | ProfileGrant
@@ -341,13 +387,16 @@ export const rulePathProblem = (path: string): string | undefined => {
     return `${JSON.stringify(path)} is written with no leading or trailing /, and the host's root as ""`
   }
   const segments = path.split('/')
+  if (segments.filter(segment => segment === repoSegment).length > 1) {
+    return `${JSON.stringify(path)} names ${repoSegment} twice, and a request names one repository`
+  }
   for (const [at, segment] of segments.entries()) {
     if (segment === '') return `${JSON.stringify(path)} has an empty segment`
     if (segment === '**') {
       if (at === segments.length - 1) continue
       return `${JSON.stringify(path)} has ** before its last segment, the one place it means any number of segments`
     }
-    if (segment === '*') continue
+    if (segment === '*' || segment === repoSegment) continue
     if (segment.includes('*')) {
       return `${JSON.stringify(path)} has * inside a segment, where it is a segment of its own`
     }
@@ -361,30 +410,62 @@ export const rulePathProblem = (path: string): string | undefined => {
   return undefined
 }
 
+/** Whether `rule` names a repository: a git rule, or a path with `{repo}` in it. */
+export const namesRepo = (rule: Rule): boolean =>
+  'git' in rule || rule.path.split('/').includes(repoSegment)
+
 /** A GraphQL name, which `graphql.withheld` lists fields by. */
 const GRAPHQL_FIELD = /^[_A-Za-z][_0-9A-Za-z]*$/
 
 /**
  * A rule as the broker reads it, from its fields as the grant has them, or
- * why it is not one. `chosen` for an `allow` rule, which carries its set.
+ * why it is not one. `chosen` for an `allow` rule, which carries its set and
+ * may carry a reader; `slotted` for a grant whose profile has a repository,
+ * the only kind whose rules may name one.
  */
 const readRule = (
   raw: unknown,
   chosen: boolean,
-): { readonly rule: ChosenRule | Rule } | { readonly message: string } => {
+  slotted: boolean,
+): { readonly rule: ChosenRule | PathRule } | { readonly message: string } => {
   if (!isObject(raw) || Array.isArray(raw)) return { message: 'a rule is an object' }
-  const fields = new Set(chosen ? ['graphql', 'method', 'path', 'set'] : ['method', 'path'])
+  const fields = new Set(
+    chosen ? ['git', 'graphql', 'length', 'method', 'path', 'set'] : ['method', 'path'],
+  )
   const unread = Object.keys(raw).find(key => !fields.has(key))
   if (unread !== undefined) {
     return {
       message: `a${chosen ? 'n allow' : ' deny'} rule sets ${unread}, which this broker does not read`,
     }
   }
-  const { graphql, method, path, set } = raw
+  const { git, graphql, length, method, path, set } = raw
+  const named = (rule: Rule): { readonly rule: ChosenRule } | { readonly message: string } =>
+    typeof set === 'string' && isProfileNameForm(set)
+      ? { rule: { ...rule, set } }
+      : { message: `the rule ${ruleText(rule)} names no set it was chosen as part of` }
+
+  if (git !== undefined) {
+    if (Object.keys(raw).some(key => key !== 'git' && key !== 'set')) {
+      return { message: 'a git rule takes git alone, which fixes its methods and paths' }
+    }
+    if (git !== 'fetch' && git !== 'push') {
+      return { message: `git is "fetch" or "push", not ${JSON.stringify(git)}` }
+    }
+    if (!slotted) return { message: 'a git rule is for a repository, and the grant has none' }
+    return named({ git })
+  }
+
   if (typeof path !== 'string') return { message: 'a rule has no path' }
   const problem = rulePathProblem(path)
   if (problem !== undefined) return { message: problem }
-  let methods: Rule['method']
+  if (path.split('/').includes(repoSegment) && !(chosen && slotted)) {
+    return {
+      message: chosen
+        ? `the rule at ${JSON.stringify(path)} names ${repoSegment}, and the grant has no repository`
+        : `the deny rule at ${JSON.stringify(path)} names ${repoSegment}, which a rule of no set cannot`,
+    }
+  }
+  let methods: PathRule['method']
   if (method === '*') {
     methods = '*'
   } else if (
@@ -398,7 +479,7 @@ const readRule = (
       message: `${JSON.stringify(method)} at ${JSON.stringify(path)} is not "*" or a list of methods`,
     }
   }
-  let reader: Rule['graphql']
+  let reader: PathRule['graphql']
   if (graphql !== undefined) {
     if (methods === '*' || methods.length !== 1 || methods[0] !== 'POST') {
       return { message: `the GraphQL rule at ${JSON.stringify(path)} is for POST alone` }
@@ -417,12 +498,21 @@ const readRule = (
     }
     reader = { withheld: withheld as readonly string[] }
   }
-  const rule = { ...(reader === undefined ? {} : { graphql: reader }), method: methods, path }
-  if (!chosen) return { rule }
-  if (typeof set !== 'string' || !isProfileNameForm(set)) {
-    return { message: `the rule at ${JSON.stringify(path)} names no set it was chosen as part of` }
+  if (length !== undefined && length !== 'kept') {
+    return { message: `length at ${JSON.stringify(path)} is "kept", not ${JSON.stringify(length)}` }
   }
-  return { rule: { ...rule, set } }
+  if (length !== undefined && reader !== undefined) {
+    return {
+      message: `the GraphQL rule at ${JSON.stringify(path)} sends the body it wrote, so no length the guest stated`,
+    }
+  }
+  const rule: PathRule = {
+    ...(reader === undefined ? {} : { graphql: reader }),
+    ...(length === undefined ? {} : { length }),
+    method: methods,
+    path,
+  }
+  return chosen ? named(rule) : { rule }
 }
 
 /** The rules of one host of a profile grant, or why they are not rules. */
@@ -430,15 +520,40 @@ const readRules = (
   where: string,
   list: unknown,
   chosen: boolean,
-): { readonly rules: readonly (ChosenRule | Rule)[] } | { readonly message: string } => {
+  slotted: boolean,
+): { readonly rules: readonly (ChosenRule | PathRule)[] } | { readonly message: string } => {
   if (!Array.isArray(list)) return { message: `${where} lists no rules` }
-  const rules: Array<ChosenRule | Rule> = []
+  const rules: Array<ChosenRule | PathRule> = []
   for (const each of list as unknown[]) {
-    const read = readRule(each, chosen)
+    const read = readRule(each, chosen, slotted)
     if ('message' in read) return { message: `${where}: ${read.message}` }
     rules.push(read.rule)
   }
   return { rules }
+}
+
+/** The most segments a repository may span: GitLab's groups nest, and none goes deeper. */
+const maxRepoSegments = 20
+
+/** Why `raw` is not what a repository is, or the shape it gives. */
+const readRepository = (
+  raw: unknown,
+): { readonly repository: Repository } | { message: string } => {
+  if (
+    !isObject(raw) ||
+    Array.isArray(raw) ||
+    Object.keys(raw).some(key => key !== 'ignoreCase' && key !== 'segments') ||
+    typeof raw['ignoreCase'] !== 'boolean' ||
+    typeof raw['segments'] !== 'number' ||
+    !Number.isInteger(raw['segments']) ||
+    raw['segments'] < 1 ||
+    raw['segments'] > maxRepoSegments
+  ) {
+    return {
+      message: `a repository is { segments; ignoreCase; }, segments a whole number from 1 to ${String(maxRepoSegments)}`,
+    }
+  }
+  return { repository: { ignoreCase: raw['ignoreCase'], segments: raw['segments'] } }
 }
 
 /** A profile grant as the broker reads it, or why it is not one. */
@@ -446,21 +561,24 @@ const readProfileGrant = (
   entry: Record<string, unknown>,
 ): { readonly grant: ProfileGrant } | { readonly message: string } => {
   const { credential, hosts, profile } = entry
-  // Not a name the broker's own code answers to.
-  if (
-    typeof profile !== 'string' ||
-    !isProfileNameForm(profile) ||
-    profile === 'model-server' ||
-    (isProfileName(profile) && profiles[profile].kind === 'git')
-  ) {
+  // Not the name the broker's own model server grant is read by.
+  if (typeof profile !== 'string' || !isProfileNameForm(profile) || profile === 'model-server') {
     return { message: `${JSON.stringify(profile)} is not a profile's name` }
   }
-  const unread = Object.keys(entry).find(key => !['credential', 'hosts', 'profile'].includes(key))
+  const unread = Object.keys(entry).find(
+    key => !['credential', 'hosts', 'profile', 'repos', 'repository'].includes(key),
+  )
   if (unread !== undefined) {
     return { message: `the ${profile} grant sets ${unread}, which this broker does not read` }
   }
   if (typeof credential !== 'string' || credential === '') {
     return { message: 'a grant needs a credential name' }
+  }
+  let repository: Repository | undefined
+  if (entry['repository'] !== undefined) {
+    const read = readRepository(entry['repository'])
+    if ('message' in read) return { message: `the ${profile} grant: ${read.message}` }
+    repository = read.repository
   }
   if (!isObject(hosts) || Array.isArray(hosts) || Object.keys(hosts).length === 0) {
     return { message: `the ${profile} grant reaches no host` }
@@ -476,28 +594,90 @@ const readProfileGrant = (
     }
     const where = `the ${profile} grant's ${host}`
     if (!isObject(raw) || Array.isArray(raw)) return { message: `${where} is not an object` }
-    const field = Object.keys(raw).find(key => !['allow', 'deny', 'send'].includes(key))
+    const field = Object.keys(raw).find(
+      key => !['allow', 'deny', 'pages', 'redirects', 'send'].includes(key),
+    )
     if (field !== undefined) {
       return { message: `${where} sets ${field}, which this broker does not read` }
     }
-    const send = raw['send']
+    const { pages, redirects, send } = raw
     if (!isSend(send)) return { message: `${where}: ${sendProblem(send) ?? ''}` }
-    const allow = readRules(where, raw['allow'], true)
+    if (redirects !== undefined && redirects !== 'return') {
+      return { message: `${where}: redirects is "return", not ${JSON.stringify(redirects)}` }
+    }
+    if (pages !== undefined && pages !== 'github') {
+      return { message: `${where}: pages is "github", not ${JSON.stringify(pages)}` }
+    }
+    if (pages !== undefined && repository === undefined) {
+      return { message: `${where}: pages puts a link under a repository, and the grant has none` }
+    }
+    const allow = readRules(where, raw['allow'], true, repository !== undefined)
     if ('message' in allow) return allow
     if (allow.rules.length === 0) {
       return { message: `${where} allows nothing, so it is not one of the grant's hosts` }
     }
-    const deny = readRules(where, raw['deny'], false)
+    const deny = readRules(where, raw['deny'], false, false)
     if ('message' in deny) return deny
     read[host] = {
       allow: allow.rules.filter((rule): rule is ChosenRule => 'set' in rule),
-      deny: deny.rules,
+      deny: deny.rules.filter((rule): rule is PathRule => 'path' in rule),
+      ...(pages === undefined ? {} : { pages }),
+      ...(redirects === undefined ? {} : { redirects }),
       send,
     }
   }
-  return { grant: { credential, hosts: read, profile } }
-}
+  const rules = Object.values(read).flatMap(at => at.allow)
 
+  if (repository === undefined) {
+    if (entry['repos'] !== undefined) {
+      return { message: `the ${profile} grant lists repos, and has no repository` }
+    }
+    return { grant: { credential, hosts: read, profile } }
+  }
+  const { repos } = entry
+  if (!isObject(repos) || Array.isArray(repos)) {
+    return { message: `the ${profile} grant has a repository, and no repos listing them` }
+  }
+  const listed: Record<string, readonly string[]> = {}
+  const seen = new Set<string>()
+  for (const [repo, sets] of Object.entries(repos)) {
+    if (!isRepo(repo, repository)) {
+      return {
+        message: `${JSON.stringify(repo)} is not a repository of ${String(repository.segments)} segments`,
+      }
+    }
+    const normal = normaliseRepo(repo, repository)
+    if (seen.has(normal)) return { message: `the ${profile} grant lists ${normal} twice` }
+    seen.add(normal)
+    if (
+      !Array.isArray(sets) ||
+      sets.length === 0 ||
+      !sets.every(set => typeof set === 'string' && isProfileNameForm(set))
+    ) {
+      return { message: `the ${profile} grant's ${repo} lists no sets` }
+    }
+    // A set no rule of which names a repository would apply to the whole
+    // account, which listing it under one repository would hide.
+    const unslotted = (sets as readonly string[]).find(
+      set => !rules.some(rule => rule.set === set && namesRepo(rule)),
+    )
+    if (unslotted !== undefined) {
+      return {
+        message: `the ${profile} grant lists ${unslotted} for ${repo}, and none of its rules names a repository`,
+      }
+    }
+    listed[repo] = [...new Set(sets as readonly string[])]
+  }
+  const unlisted = rules.find(
+    rule => namesRepo(rule) && !Object.values(listed).some(sets => sets.includes(rule.set)),
+  )
+  if (unlisted !== undefined) {
+    return {
+      message: `the ${profile} grant's rule ${ruleText(unlisted)} names a repository, and no repository lists ${unlisted.set}`,
+    }
+  }
+  return { grant: { credential, hosts: read, profile, repos: listed, repository } }
+}
 /**
  * The names the broker's TLS certificate and key are loaded under, beside the
  * credentials. Taken out of the credentials it serves before it serves any, so
@@ -583,14 +763,24 @@ export type Decision =
   | {
       readonly _tag: 'Profile'
       readonly credential: string
+      /** Set for git's reader: what git asked for, whose headers are built rather than carried. */
+      readonly git?: GitOperation
       /** Set for a rule with GraphQL's reader: the body is read and checked before anything is sent. */
       readonly graphql?: { readonly withheld: readonly string[] }
       readonly host: string
+      /** Set for a rule that sends a body with the length the guest stated (`uploadLength`). */
+      readonly length?: 'kept'
+      /** Set at a host whose page links are put back under `repo` (`pagesOf`). */
+      readonly pages?: 'github'
       readonly profile: string
-      /** The rule that allowed it, as text: its methods and its path. */
+      /** Set at a host whose redirects go back to the guest. */
+      readonly redirects?: 'return'
+      /** The repository the request named, as the *grant* spells it, for a rule naming one. */
+      readonly repo?: string
+      /** The rule that allowed it, as text: its methods and its path, or its git access. */
       readonly rule: string
       readonly send: Send
-      /** Whether the request sends a body: anything but a GET or a HEAD. */
+      /** Whether the request sends a body: anything but a GET or a HEAD, and a git fetch or push. */
       readonly sendsBody: boolean
       /** The set the rule was chosen as part of. */
       readonly set: string
@@ -631,14 +821,34 @@ const deny = (status: number, reason: string, asked?: Asked): Decision => ({
   status,
 })
 
-/** `decision`, set to be written in JSON if it refuses a request addressed to one of `jsonNames`. */
-const refusedAt = (grants: readonly Grant[], host: string, decision: Decision): Decision =>
-  decision._tag === 'Deny' && jsonNames(grants).includes(host)
+/**
+ * Whether `path` is one of git's endpoints, whose refusal git prints only as
+ * text, and as `remote: broker: …`.
+ */
+const isGitPath = (path: string): boolean =>
+  path.endsWith('/info/refs') ||
+  path.endsWith('/git-upload-pack') ||
+  path.endsWith('/git-receive-pack')
+
+/**
+ * `decision`, set to be written in JSON if it refuses a request addressed to
+ * one of `jsonNames` at `path`, which is not one of git's endpoints.
+ */
+const refusedAt = (
+  grants: readonly Grant[],
+  host: string,
+  path: string,
+  decision: Decision,
+): Decision =>
+  decision._tag === 'Deny' && jsonNames(grants).includes(host) && !isGitPath(path)
     ? { ...decision, json: true }
     : decision
 
-/** `owner/repo`, with no path traversal and nothing that needs encoding. */
-const REPO = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/
+/** One segment of a repository's name, with no path traversal and nothing that needs encoding. */
+const REPO_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
+
+/** GitHub's repository: `owner/repo`, matched ignoring case. */
+const ownerRepo: Repository = { ignoreCase: true, segments: 2 }
 
 /**
  * Git protocol version, as git sends it. Forwarded rather than constructed
@@ -648,19 +858,29 @@ const REPO = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/
  */
 const GIT_PROTOCOL = /^version=[0-9]$/
 
-/** `owner/repo.git` and `owner/repo` are the same repository to git and to GitHub. */
+/** `owner/repo.git` and `owner/repo` are the same repository to git, and to a forge. */
 const withoutGit = (repo: string): string => (repo.endsWith('.git') ? repo.slice(0, -4) : repo)
 
-/** Whether `repo` names a repository a grant may hold: `owner/repo`, with or without `.git`. */
-export const isRepo = (repo: string): boolean => REPO.test(withoutGit(repo))
+/**
+ * Whether `repo` names a repository a grant may hold, as `repository` has
+ * them: that many segments, each a name, with or without `.git`.
+ */
+export const isRepo = (repo: string, repository: Repository = ownerRepo): boolean => {
+  const segments = withoutGit(repo).split('/')
+  return (
+    segments.length === repository.segments && segments.every(segment => REPO_SEGMENT.test(segment))
+  )
+}
 
 /**
- * The form two spellings of one repository are compared in. GitHub treats owner
- * and repository names case-insensitively, so a grant for `owner/repo` covers a
- * clone of `Owner/Repo` — but the *upstream* URL is built from the grant's
- * spelling, so this normalisation never decides what is requested.
+ * The form two spellings of one repository are compared in: without `.git`,
+ * and lowercased where the service matches names ignoring case, as GitHub
+ * does, so a grant for `owner/repo` covers a clone of `Owner/Repo`. The
+ * *upstream* URL is built from the grant's spelling, so this normalisation
+ * never decides what is requested.
  */
-export const normaliseRepo = (repo: string): string => withoutGit(repo).toLowerCase()
+export const normaliseRepo = (repo: string, repository: Repository = ownerRepo): string =>
+  repository.ignoreCase ? withoutGit(repo).toLowerCase() : withoutGit(repo)
 
 /**
  * The repository in `among` that `wanted`, already normalised, names, as the
@@ -668,7 +888,6 @@ export const normaliseRepo = (repo: string): string => withoutGit(repo).toLowerC
  */
 const grantedAs = (among: readonly string[] | undefined, wanted: string): string | undefined =>
   among?.find(candidate => normaliseRepo(candidate) === wanted)
-
 /** The fields a grant of each kind carries. */
 const grantFields = {
   git: new Set(['credential', 'profile', 'repos', 'write']),
@@ -725,7 +944,7 @@ export const parseGrants = (json: string): { grants: Grant[] } | { message: stri
       }
       // A request is routed by the name it was addressed to, so a name is one
       // grant's or none, and never one the broker's own code answers.
-      const taken = [...tlsNames(grants), ...forgeNames]
+      const taken = tlsNames(grants)
       const shared = Object.keys(grant.hosts).find(host => taken.includes(host))
       if (shared !== undefined) {
         return {
@@ -918,27 +1137,49 @@ const apiWritesRefused: Readonly<Record<string, readonly string[]>> = {
 }
 
 /**
- * Whether `pattern`, a path in `apiWrites`' form, matches `path`, a sequence
- * of segments: `*` any one segment, a last `**` any number of them, none
- * included, `""` the root alone, and every other segment compared as written.
+ * Whether `pattern`, a rule's path, matches `path`, a sequence of segments: `*`
+ * any one segment, a last `**` any number of them, none included, `""` the
+ * root alone, `{repo}` the `width` segments of a repository, and every other
+ * segment compared as written. Where it does, the repository `{repo}` stood
+ * for, as the request spelled it, and where in `path` it starts.
  */
-const pathMatches = (pattern: string, path: readonly string[]): boolean => {
-  const segments = pattern === '' ? [] : pattern.split('/')
+const matchPath = (
+  pattern: string,
+  path: readonly string[],
+  width: number,
+): { readonly repo?: { readonly asked: string; readonly start: number } } | undefined => {
+  const written = pattern === '' ? [] : pattern.split('/')
+  const start = written.indexOf(repoSegment)
+  const segments =
+    start < 0
+      ? written
+      : [
+          ...written.slice(0, start),
+          ...Array.from({ length: width }, () => '*'),
+          ...written.slice(start + 1),
+        ]
   const open = segments.at(-1) === '**'
   const fixed = open ? segments.slice(0, -1) : segments
-  return (
+  const matches =
     (open ? path.length >= fixed.length : path.length === fixed.length) &&
     fixed.every((segment, at) => segment === '*' || segment === path[at])
-  )
+  if (!matches) return undefined
+  return start < 0 ? {} : { repo: { asked: path.slice(start, start + width).join('/'), start } }
 }
 
+/** Whether `pattern`, a path naming no repository, matches `path`. */
+const pathMatches = (pattern: string, path: readonly string[]): boolean =>
+  matchPath(pattern, path, 0) !== undefined
+
 /** Whether `rule` matches a request by `method` at `path`, a sequence of segments. */
-const ruleMatches = (rule: Rule, method: string, path: readonly string[]): boolean =>
+const ruleMatches = (rule: PathRule, method: string, path: readonly string[]): boolean =>
   (rule.method === '*' || rule.method.includes(method)) && pathMatches(rule.path, path)
 
-/** A rule as the log and a refusal name it: `GET,HEAD v2/**`, the root as `/`. */
+/** A rule as the log and a refusal name it: `GET,HEAD v2/**`, the root as `/`, a git rule as `git fetch`. */
 const ruleText = (rule: Rule): string =>
-  `${rule.method === '*' ? '*' : rule.method.join(',')} ${rule.path === '' ? '/' : rule.path}`
+  'git' in rule
+    ? `git ${rule.git}`
+    : `${rule.method === '*' ? '*' : rule.method.join(',')} ${rule.path === '' ? '/' : rule.path}`
 
 /**
  * Whether `table`, paths in `apiWrites`' form, lets `method` write at `path`,
@@ -961,20 +1202,42 @@ const writesTo = (method: string, tail: readonly string[]): boolean =>
   listedIn(apiWrites, method, tail) && !listedIn(apiWritesRefused, method, tail)
 
 /**
+ * The repository of `grant` that `asked`, a request's spelling of one, names,
+ * as the grant spells it and without `.git`, if its list holds `set`.
+ */
+const grantedRepo = (grant: ProfileGrant, asked: string, set: string): string | undefined => {
+  const { repos, repository } = grant
+  if (repos === undefined || repository === undefined) return undefined
+  const wanted = repository.ignoreCase ? asked.toLowerCase() : asked
+  const granted = Object.keys(repos).find(
+    repo => repos[repo]?.includes(set) === true && normaliseRepo(repo, repository) === wanted,
+  )
+  return granted === undefined ? undefined : withoutGit(granted)
+}
+
+/** A request's spelling of a repository as a refusal names it, in the form it was compared in. */
+const shownRepo = (grant: ProfileGrant, asked: string): string =>
+  grant.repository?.ignoreCase === true ? asked.toLowerCase() : asked
+
+/**
  * Route a request for a profile grant's host, or `undefined` if the path's
  * host is none of them.
  *
- * A `deny` rule that matches refuses it, whatever is chosen; then a chosen
- * rule that matches allows it; and anything else is refused. Order means
- * nothing: of the chosen rules that match, one with no reader is taken before
- * one with GraphQL's, since a request any rule allows unread is allowed.
+ * A `deny` rule that matches refuses it, whatever is chosen; then git's
+ * reader takes a git endpoint at a host with a git rule (`routeGitRule`);
+ * then a chosen rule that matches allows it, one naming `{repo}` only for a
+ * repository whose list holds its set; and anything else is refused. Order
+ * means nothing: of the chosen rules that match, one with no reader is taken
+ * before one with GraphQL's, since a request any rule allows unread is
+ * allowed.
  *
  * The upstream is the host and the request's path, segment by segment —
  * `decide` has refused a percent-escape and an empty segment, and the URL
  * parser has resolved every `.` and `..`, so the path sent is the one the
- * rule matched — and its query, rebuilt so that each name and value is
- * encoded. A GraphQL request goes without its query, since a server may take
- * an operation from the query in place of the body that was read.
+ * rule matched — with a repository spelled as the grant spells it, and its
+ * query, rebuilt so that each name and value is encoded. A GraphQL request
+ * goes without its query, since a server may take an operation from the query
+ * in place of the body that was read.
  */
 const routeProfile = (
   grants: readonly Grant[],
@@ -1000,17 +1263,39 @@ const routeProfile = (
       { host: lowered },
     )
   }
-  const matching = at.allow.filter(rule => ruleMatches(rule, method, rest))
-  const rule = matching.find(each => each.graphql === undefined) ?? matching[0]
-  if (rule === undefined) {
+  if (at.allow.some(rule => 'git' in rule)) {
+    const git = routeGitRule(grant, lowered, at, method, rest, query.get('service'))
+    if (git !== undefined) return git
+  }
+
+  // Each rule whose path matches, with the repository it names as granted, a
+  // rule naming one counting only where the grant lists it for its set.
+  const width = grant.repository?.segments ?? 0
+  let unlisted: string | undefined
+  const named = at.allow.flatMap(
+    (
+      rule,
+    ): readonly {
+      readonly repo?: { readonly asked: string; readonly granted: string; readonly start: number }
+      readonly rule: PathRule & { readonly set: string }
+    }[] => {
+      if ('git' in rule) return []
+      const matched = matchPath(rule.path, rest, width)
+      if (matched === undefined) return []
+      if (matched.repo === undefined) return [{ rule }]
+      const repo = grantedRepo(grant, matched.repo.asked, rule.set)
+      if (repo !== undefined) return [{ repo: { ...matched.repo, granted: repo }, rule }]
+      if (rule.method === '*' || rule.method.includes(method)) unlisted = matched.repo.asked
+      return []
+    },
+  )
+  const matching = named.filter(({ rule }) => rule.method === '*' || rule.method.includes(method))
+  const chosen = matching.find(({ rule }) => rule.graphql === undefined) ?? matching[0]
+  if (chosen === undefined) {
     // A path a chosen rule names, by other methods: a `*` rule would have
     // matched any.
     const methods = [
-      ...new Set(
-        at.allow.flatMap(each =>
-          each.method !== '*' && pathMatches(each.path, rest) ? each.method : [],
-        ),
-      ),
+      ...new Set(named.flatMap(({ rule }) => (rule.method === '*' ? [] : rule.method))),
     ]
     if (methods.length > 0) {
       return deny(
@@ -1019,22 +1304,128 @@ const routeProfile = (
         { host: lowered },
       )
     }
+    if (unlisted !== undefined) {
+      const scope = shownRepo(grant, unlisted)
+      return deny(
+        403,
+        `${method} ${path} is not something this VM may do for ${scope} through ${lowered}`,
+        { scope },
+      )
+    }
     return deny(403, `${method} ${path} is not something this VM may do through ${lowered}`, {
       host: lowered,
     })
   }
+  const { repo, rule } = chosen
+  const sent =
+    repo === undefined
+      ? rest
+      : [
+          ...rest.slice(0, repo.start),
+          ...repo.granted.split('/'),
+          ...rest.slice(repo.start + width),
+        ]
   const filter = rule.graphql === undefined ? new URLSearchParams(query).toString() : ''
   return {
     _tag: 'Profile',
     credential: grant.credential,
     ...(rule.graphql === undefined ? {} : { graphql: rule.graphql }),
     host: lowered,
+    ...(rule.length === undefined ? {} : { length: rule.length }),
+    ...(at.pages === undefined || repo === undefined ? {} : { pages: at.pages }),
     profile: grant.profile,
+    ...(at.redirects === undefined ? {} : { redirects: at.redirects }),
+    ...(repo === undefined ? {} : { repo: repo.granted }),
     rule: ruleText(rule),
     send: at.send,
     sendsBody: method !== 'GET' && method !== 'HEAD',
     set: rule.set,
-    upstream: `https://${lowered}${path}${filter === '' ? '' : `?${filter}`}`,
+    upstream: `https://${lowered}/${sent.join('/')}${filter === '' ? '' : `?${filter}`}`,
+  }
+}
+
+/**
+ * Route a git request at a profile host with a git rule, or `undefined` if
+ * the path is not a git endpoint, which leaves it to the host's other rules.
+ *
+ * git's smart HTTP is three endpoints under a repository: the ref
+ * advertisement, `info/refs` with a `service`, by GET; the fetch,
+ * `git-upload-pack`; and the push, `git-receive-pack`, each by POST. A
+ * `fetch` rule serves the advertisement for a fetch and the fetch, and a
+ * `push` rule the advertisement for a push and the push, each for a
+ * repository the grant lists for its set. A push is refused at its
+ * advertisement as well as at the push, since the advertisement is where git
+ * asks whether it may push at all: refusing only the second would let a push
+ * start and fail late.
+ *
+ * The repository is exactly the path before the endpoint, with or without
+ * `.git`; anything longer or shorter is not a shape this serves, which is
+ * also what makes `..` unreachable. The upstream is built from the grant's
+ * spelling and a fixed template, `https://<host>/<repo>.git/<endpoint>`: the
+ * request decided which repository applies and nothing else.
+ */
+const routeGitRule = (
+  grant: ProfileGrant,
+  host: string,
+  at: ProfileHost,
+  method: string,
+  rest: readonly string[],
+  service: string | null,
+): Decision | undefined => {
+  const last = rest.at(-1)
+  let operation: GitOperation
+  let head: readonly string[]
+  if (last === 'refs' && rest.at(-2) === 'info') {
+    if (service !== 'git-upload-pack' && service !== 'git-receive-pack') {
+      return deny(404, 'the ref advertisement takes ?service=git-upload-pack or git-receive-pack')
+    }
+    if (method !== 'GET') return deny(405, `${method} is not how a ref advertisement is requested`)
+    operation = service === 'git-upload-pack' ? 'ls-refs' : 'push-refs'
+    head = rest.slice(0, -2)
+  } else if (last === 'git-upload-pack' || last === 'git-receive-pack') {
+    operation = last === 'git-upload-pack' ? 'fetch' : 'push'
+    if (method !== 'POST') return deny(405, `${method} is not how a ${operation} is requested`)
+    head = rest.slice(0, -1)
+  } else {
+    return undefined
+  }
+  const pushes = operation === 'push' || operation === 'push-refs'
+
+  const width = grant.repository?.segments ?? 0
+  if (head.length !== width) {
+    return deny(
+      404,
+      `a git URL at ${host} is /<repository>/…, and a repository here is ${String(width)} segments`,
+    )
+  }
+  const asked = withoutGit(head.join('/'))
+  const reading = (access: GitRule['git']) =>
+    at.allow.flatMap(rule => {
+      if (!('git' in rule) || rule.git !== access) return []
+      const repo = grantedRepo(grant, asked, rule.set)
+      return repo === undefined ? [] : [{ repo, rule }]
+    })
+  const [served] = reading(pushes ? 'push' : 'fetch')
+  if (served === undefined) {
+    const scope = shownRepo(grant, asked)
+    return pushes && reading('fetch').length > 0
+      ? deny(403, `this VM may fetch ${scope}, not push to it`, { scope })
+      : deny(403, `${scope} is not a repository this VM may ${pushes ? 'push to' : 'fetch'}`, {
+          scope,
+        })
+  }
+  return {
+    _tag: 'Profile',
+    credential: grant.credential,
+    git: operation,
+    host,
+    profile: grant.profile,
+    repo: served.repo,
+    rule: ruleText(served.rule),
+    send: at.send,
+    sendsBody: operation === 'fetch' || operation === 'push',
+    set: served.rule.set,
+    upstream: `https://${host}/${served.repo}.git/${gitEndpoints[operation]}`,
   }
 }
 
@@ -1370,6 +1761,7 @@ const decideAt = (
   return refusedAt(
     grants,
     url.pathname.split('/')[1]?.toLowerCase() ?? '',
+    url.pathname,
     route(grants, method, url, addressed),
   )
 }
@@ -1454,6 +1846,7 @@ export const decideAddressed = (
     return refusedAt(
       grants,
       name,
+      parsed.pathname,
       deny(421, `${name} is not answered here for this VM`, { host: name }),
     )
   }
@@ -1470,6 +1863,7 @@ export const decideAddressed = (
       ? refusedAt(
           grants,
           name,
+          parsed.pathname,
           deny(
             403,
             `no grant covers this, and the tunnel does not reach ${name}, so it is not sent without one either`,
@@ -1570,7 +1964,11 @@ const uploadLength = (
   decision: Exclude<Decision, { _tag: 'Deny' }>,
   guest: Headers,
 ): number | undefined => {
-  if (decision._tag !== 'Api' || decision.operation !== 'upload') return undefined
+  const kept =
+    decision._tag === 'Api'
+      ? decision.operation === 'upload'
+      : decision._tag === 'Profile' && decision.length === 'kept'
+  if (!kept) return undefined
   const length = guest.get('content-length')
   if (length === null || guest.has('transfer-encoding') || !/^[0-9]{1,15}$/.test(length)) {
     return undefined
@@ -1627,6 +2025,13 @@ const graphqlFields: ReadonlySet<string> = new Set(['operationName', 'query', 'v
  */
 const carriesBody = (decision: Exclude<Decision, { _tag: 'Deny' }>): boolean =>
   decision._tag === 'Profile' ? decision.sendsBody : sendsBody(decision.operation)
+
+/**
+ * Whether a decision is git's: its headers are built rather than carried, only
+ * what git reads comes back, its 401 is a 502, and its refusals are text.
+ */
+const isGitDecision = (decision: Exclude<Decision, { _tag: 'Deny' }>): boolean =>
+  decision._tag === 'Git' || (decision._tag === 'Profile' && decision.git !== undefined)
 
 /**
  * The fields a GraphQL request may not name, for a decision whose body is
@@ -1915,7 +2320,31 @@ export const upstreamHeaders = (
   token: string | undefined,
   guest: Headers,
 ): Headers => {
-  if (decision._tag !== 'Git') {
+  // The credential's header, set rather than appended: a header of the same
+  // name the guest sent is replaced by the one holding the key.
+  const withKey = (headers: Headers): Headers => {
+    if (token === undefined) return headers
+    if (decision._tag !== 'Profile') {
+      headers.set(
+        'Authorization',
+        decision._tag === 'Git' ? `Basic ${btoa(`x-access-token:${token}`)}` : `Bearer ${token}`,
+      )
+      return headers
+    }
+    const { send } = decision
+    if (send === 'bearer') headers.set('Authorization', `Bearer ${token}`)
+    else if ('header' in send) headers.set(send.header, token)
+    else headers.set('Authorization', `Basic ${btoa(`${send.basic}:${token}`)}`)
+    return headers
+  }
+
+  const git =
+    decision._tag === 'Git'
+      ? decision.operation
+      : decision._tag === 'Profile'
+        ? decision.git
+        : undefined
+  if (git === undefined) {
     // A header the guest's `Connection` names is hop-by-hop too.
     const named = new Set(
       (guest.get('connection') ?? '').split(',').map(name => name.trim().toLowerCase()),
@@ -1934,24 +2363,10 @@ export const upstreamHeaders = (
     const length = uploadLength(decision, guest)
     if (length !== undefined) headers.set('Content-Length', String(length))
     headers.set('Accept-Encoding', 'identity')
-    if (token === undefined) return headers
-    // Set, never appended: a header of the same name the guest sent is
-    // replaced by the one holding the key.
-    if (decision._tag === 'Profile') {
-      const { send } = decision
-      if (send === 'bearer') headers.set('Authorization', `Bearer ${token}`)
-      else if ('header' in send) headers.set(send.header, token)
-      else headers.set('Authorization', `Basic ${btoa(`${send.basic}:${token}`)}`)
-    } else {
-      headers.set('Authorization', `Bearer ${token}`)
-    }
-    return headers
+    return withKey(headers)
   }
 
-  const pack =
-    decision.operation === 'fetch' || decision.operation === 'push'
-      ? packTypes[decision.operation]
-      : undefined
+  const pack = git === 'fetch' || git === 'push' ? packTypes[git] : undefined
   const headers = new Headers({
     'Accept-Encoding': 'identity',
     // git's own name for what it is asking for. Constructed, so a guest cannot
@@ -1959,9 +2374,6 @@ export const upstreamHeaders = (
     Accept: pack === undefined ? '*/*' : pack.result,
     'User-Agent': 'igloo-broker',
   })
-  // A fine-grained personal access token or an App installation token, in the
-  // username slot git itself uses for them.
-  if (token !== undefined) headers.set('Authorization', `Basic ${btoa(`x-access-token:${token}`)}`)
   if (pack !== undefined) {
     headers.set('Content-Type', pack.request)
     // git may compress what it sends. The body is passed through unexamined,
@@ -1970,7 +2382,7 @@ export const upstreamHeaders = (
   }
   const protocol = guest.get('Git-Protocol')
   if (protocol !== null && GIT_PROTOCOL.test(protocol)) headers.set('Git-Protocol', protocol)
-  return headers
+  return withKey(headers)
 }
 
 /**
@@ -2005,7 +2417,11 @@ export const relay = (
   attempt: {
     readonly credential: string | undefined
     readonly host: string
+    /** Set for a git request, whose 401 is a 502. */
+    readonly git?: true
     readonly kind: Exclude<Decision['_tag'], 'Deny'>
+    /** Set for a host whose redirects go back to the guest. */
+    readonly redirects?: true
     readonly scope: string | undefined
   },
   upstreamStatus: number,
@@ -2024,7 +2440,7 @@ export const relay = (
         attempt.credential === undefined
           ? `${attempt.host} wants a credential, and this VM's grant for it holds none`
           : `${attempt.host} refused ${attempt.credential}; the credential the host holds is wrong, expired, or not scoped to ${attempt.scope ?? 'this request'}`,
-      status: attempt.kind === 'Git' ? 502 : 403,
+      status: attempt.kind === 'Git' || attempt.git === true ? 502 : 403,
     }
   }
   // Everything in the 3xx range except 304, which redirects nowhere: it is an
@@ -2032,7 +2448,7 @@ export const relay = (
   if (upstreamStatus >= 300 && upstreamStatus < 400 && upstreamStatus !== 304) {
     // An API's redirect is to a signed URL elsewhere, a log or an asset, which
     // needs no credential: the guest follows it, and the broker does not.
-    if (attempt.kind === 'Api') return undefined
+    if (attempt.kind === 'Api' || attempt.redirects === true) return undefined
     return {
       reason:
         attempt.credential === undefined
@@ -2687,9 +3103,11 @@ const returnedHeaders = (
   decision: Exclude<Decision, { _tag: 'Deny' }>,
   upstream: Headers,
 ): Headers => {
-  const headers = responseHeaders(decision._tag, upstream)
+  const headers = responseHeaders(isGitDecision(decision) ? 'Git' : decision._tag, upstream)
   const link = headers.get('link')
-  if (decision._tag === 'Api' && decision.repo !== undefined && link !== null) {
+  const pages =
+    decision._tag === 'Api' || (decision._tag === 'Profile' && decision.pages === 'github')
+  if (pages && decision.repo !== undefined && link !== null) {
     headers.set('link', pagesOf(link, decision.host, decision.repo))
   }
   return headers
@@ -2856,7 +3274,7 @@ const handle = async (
   }
   // The broker's own answers below are written as its refusals for the same
   // host are.
-  const json = jsonNames(grants).includes(decision.host)
+  const json = jsonNames(grants).includes(decision.host) && !isGitDecision(decision)
 
   // A GraphQL request is read whole and checked before it is allowed, and the
   // body sent is the one the check wrote.
@@ -2890,7 +3308,10 @@ const handle = async (
   // Which credential pays and what it was expected to cover, both settled by
   // the path: a git request is for a repository, and a model call names its
   // model only in a body that is not parsed.
-  const scope = decision._tag === 'Git' || decision._tag === 'Api' ? decision.repo : undefined
+  const scope =
+    decision._tag === 'Git' || decision._tag === 'Api' || decision._tag === 'Profile'
+      ? decision.repo
+      : undefined
   // A model server's grant may hold none, and then the request is sent with
   // none, as the server was configured to take it. An anonymous read is sent
   // with none because no grant covers it.
@@ -2972,7 +3393,16 @@ const handle = async (
 
   const ms = Date.now() - started
   const refused = relay(
-    { credential, host: decision.host, kind: decision._tag, scope },
+    {
+      credential,
+      ...(isGitDecision(decision) ? { git: true } : {}),
+      host: decision.host,
+      kind: decision._tag,
+      ...(decision._tag === 'Profile' && decision.redirects === 'return'
+        ? { redirects: true }
+        : {}),
+      scope,
+    },
     upstream.status,
   )
   if (refused !== undefined) {
