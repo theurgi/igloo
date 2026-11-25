@@ -89,8 +89,8 @@ let
       # runner.
       disk ? null,
       # Git through the host's credential broker, as
-      # { hosts = [ "github.com" ]; } — or null for a VM with no git grant,
-      # which is the default.
+      # { hosts = [ "github.com" ]; }, each a host a grant has git's reader at —
+      # or null for a VM with none, which is the default.
       #
       # The broker answers each host listed itself, through the tunnel, so
       # an ordinary HTTPS URL reaches it as it is. Each host's SSH forms get

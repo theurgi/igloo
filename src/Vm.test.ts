@@ -1,3 +1,4 @@
+import type * as Broker from './broker.ts'
 import type { VmSpec } from './Vm.ts'
 
 import { BunServices } from '@effect/platform-bun'
@@ -12,6 +13,21 @@ import * as BootLog from './BootLog.ts'
 import * as Systemd from './Systemd.ts'
 import * as Tls from './Tls.ts'
 import * as Vm from './Vm.ts'
+
+/** A grant of GitHub's git fetch for one repository, as composition sends it to the broker. */
+const githubGrant: Broker.ProfileGrant = {
+  credential: 'GITHUB_TOKEN',
+  hosts: {
+    'github.com': {
+      allow: [{ git: 'fetch', set: 'fetch' }],
+      deny: [],
+      send: { basic: 'x-access-token' },
+    },
+  },
+  profile: 'github',
+  repos: { 'you/api': ['fetch'] },
+  repository: { ignoreCase: true, segments: 2 },
+}
 
 // A launch narrates itself on stderr for whoever started it. Here that is the
 // test run, where it is noise between the results; the boot record keeps the
@@ -831,7 +847,7 @@ describe('Vm.brokerArgv', () => {
   const spec: VmSpec = {
     ...specIn('/tmp/x', 'demo'),
     broker: true,
-    grants: [{ credential: 'GITHUB_TOKEN', profile: 'github', repos: ['you/api'] }],
+    grants: [githubGrant],
   }
 
   it('runs the broker under Landlock, connecting to its own ports and no others', () => {
@@ -862,7 +878,7 @@ describe('Vm.brokerArgv', () => {
       '8080',
     ])
     assert.deepStrictEqual(JSON.parse(brokerOf(argv)[3] ?? ''), [
-      { credential: 'GITHUB_TOKEN', profile: 'github', repos: ['you/api'] },
+      githubGrant,
       { name: 'llama-swap', port: 8080, profile: 'model-server' },
     ])
   })
@@ -879,9 +895,7 @@ describe('Vm.brokerArgv', () => {
     // why those arrive by `LoadCredential=` instead.
     const argv = brokerOf(Vm.brokerArgv(bins, spec))
     assert.strictEqual(argv[2], '--grants')
-    assert.deepStrictEqual(JSON.parse(argv[3] ?? ''), [
-      { credential: 'GITHUB_TOKEN', profile: 'github', repos: ['you/api'] },
-    ])
+    assert.deepStrictEqual(JSON.parse(argv[3] ?? ''), [githubGrant])
   })
 
   it('starts no tunnel and no TLS listener for a VM with nowhere to tunnel to and no name to answer', () => {
@@ -950,7 +964,7 @@ describe('Vm.tetherOptions, with a tunnel', () => {
   it('opens both for a name the broker answers, with nowhere to tunnel to', () => {
     const args = Vm.tetherOptions({
       ...spec,
-      grants: [{ credential: 'GITHUB_TOKEN', profile: 'github', repos: ['you/api'] }],
+      grants: [githubGrant],
       tunnel: [],
     })
     assert.strictEqual(args.filter(arg => arg === '-R').length, 2)
@@ -1914,7 +1928,7 @@ const killBroker = (spec: VmSpec) =>
 /** The broker's answer to a request on its socket, or its error. */
 const brokerAnswer = (runtimeDir: string): Promise<string> =>
   // oxlint-disable-next-line effecttsgo/global-fetch -- Bun's `unix` option, which HttpClient does not pass on
-  fetch('http://broker/github.com/someone/else/info/refs?service=git-upload-pack', {
+  fetch('http://broker/local/llama-swap/v1/models', {
     unix: `${runtimeDir}-broker/http.sock`,
   }).then(
     response => String(response.status),
@@ -1956,7 +1970,7 @@ describe('Vm, when the broker is killed', () => {
               source: { _tag: 'File', path: sourceFile } as const,
             },
           ],
-          grants: [{ credential: 'GITHUB_TOKEN', profile: 'github', repos: ['you/api'] } as const],
+          grants: [githubGrant],
           runtimeDir,
         }
         yield* Effect.addFinalizer(() => Systemd.stopSlice('systemctl', sliceOf(spec)))
