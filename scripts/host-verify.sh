@@ -2947,6 +2947,31 @@ EOF
 				verdict FAIL profile-anonymous-read "read artifacts/profile.txt, then logs/up-broker/broker.log"
 			fi
 
+			# ---------------------------------------- a service the guest runs --
+			#
+			# What a login is given, a service is given too, or a server the
+			# guest runs in the background reaches neither the tunnel nor the
+			# broker. chronyd is a service the configuration defines, and every
+			# guest runs it from boot; its environment is read from the process
+			# rather than from its unit, so it is what the service really has.
+			# Not sshd's: sshd writes its process title over its environment.
+			section "a service the guest runs"
+			service_vars='HTTPS_PROXY NO_PROXY NODE_EXTRA_CA_CERTS NIX_SSL_CERT_FILE ANTHROPIC_API_KEY IGLOO_VERIFY_TOKEN'
+			{
+				echo "=== a login's"
+				guest "for v in $service_vars; do printf '%s=%s\n' \"\$v\" \"\$(printenv \"\$v\")\"; done"
+				echo
+				echo "=== chronyd's"
+				guest "pid=\$(systemctl show -p MainPID --value chronyd.service) && tr '\0' '\n' </proc/\$pid/environ | grep -E '^($(tr ' ' '|' <<<"$service_vars"))=' | sort -t= -k1,1"
+			} >"$out/artifacts/service-env.txt" 2>&1
+			login_has=$(sed -n "/^=== a login's\$/,/^\$/p" "$out/artifacts/service-env.txt" | grep -E '^[A-Z_]+=.' | sort -t= -k1,1)
+			service_has=$(sed -n "/^=== chronyd's\$/,\$p" "$out/artifacts/service-env.txt" | grep -E '^[A-Z_]+=')
+			if [ "$(grep -c . <<<"$login_has")" -eq 6 ] && [ "$login_has" = "$service_has" ]; then
+				verdict PASS service-env "a service the guest runs has the login's proxy, trust variables and placeholder keys, each with the same value"
+			else
+				verdict FAIL service-env "read artifacts/service-env.txt"
+			fi
+
 			# ------------------------------------------------- a model server --
 			#
 			# The stand-in on this machine's loopback, reached the way an agent in the
