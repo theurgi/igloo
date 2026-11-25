@@ -8,29 +8,38 @@
  * holds no upstream it is authorized to construct a request to.
  *
  * Code for protocols, data for services. A **profile** grant is a service as
- * data: the hosts its key goes to, how the key is sent at each, and the rules
- * of the sets a credential chose there, which this file reads and never runs
- * (`ProfileGrant`). `github` is still code of its own: it fetches and pushes
- * over git's smart HTTP protocol, and reads and writes through GitHub's API,
- * for a fixed set of repositories. Beside them, a `model-server` grant calls a
- * model server on this host's loopback, at a port the grant names. In each
- * case the upstream request is *constructed* — from the grant's own copy of
- * what it permits — so nothing a guest sends reaches the upstream URL, and the
- * credential header, where there is one, is always this file's. A git
+ * data: the hosts its key goes to, how the key is sent at each, what a
+ * repository is in its paths, and the rules of the sets a credential chose
+ * there, for the whole account or per repository, which this file reads and
+ * never runs (`ProfileGrant`). What is code is what many services share: git's
+ * smart HTTP (`gitReader`), GraphQL's reader (`graphqlQuery`), and the
+ * repository slot (`grantedRepo`); and one exception named for whose behaviour
+ * it is, GitHub's page links (`pagesOf`). Beside them, a `model-server` grant
+ * calls a model server on this host's loopback, at a port the grant names. In
+ * each case the upstream request is *constructed* — from the grant's own copy
+ * of what it permits — so nothing a guest sends reaches the upstream URL, and
+ * the credential header, where there is one, is always this file's. A git
  * request's other headers are built here too; any other request carries the
  * guest's, less its credentials and what describes its connection. That makes
  * absolute-form targets, a `Host` that disagrees with the URL and a colliding
  * `Authorization` into consequences of the shape rather than checks that could
  * be forgotten.
  *
- * A request is authorized by its path alone, and on the TLS listener by the name
- * it was addressed to as well, which stands where the path form puts the host;
- * a profile's hosts are answered by name alone. Its body is streamed upstream
- * as it arrives and never read: what a service does with it, the tools a
- * provider runs on a model's behalf included, is the service's. One body is
- * read: a GraphQL request at a rule with GraphQL's reader, where a query and a
+ * A request is authorized by its path, and on the TLS listener by the name it
+ * was addressed to as well, which stands as the path's first segment; a
+ * profile's hosts are answered by name alone. Its body is streamed upstream as
+ * it arrives and never read: what a service does with it, the tools a provider
+ * runs on a model's behalf included, is the service's. One body is read: a
+ * GraphQL request at a rule with GraphQL's reader, where a query and a
  * mutation share a path, so only the body can say which it is
  * (`graphqlQuery`).
+ *
+ * No grant limits a body's size. A body is streamed, so the broker holds
+ * little of it at once however large it is, and the upstream's own limit is
+ * the one that applies: a service's refusal reaches the guest as the service
+ * gave it. A body that never ends is ended by `headerTimeoutMs`, or by an
+ * upstream that answers before it has all of it. The one body read, a GraphQL
+ * request's, is held whole, and so is held to `graphqlBodyLimit`.
  *
  * Deliberately free of dependencies. It is packaged from this file alone, so its
  * closure is the runtime and nothing else, and a compromise reaches no library
@@ -47,94 +56,6 @@ import { lstatSync, readdirSync, readFileSync, unlinkSync } from 'node:fs'
 
 const usage =
   'usage: broker <socket-path> [--grants <json>] [--proxy <socket-path>] [--tunnel <json>] [--tls <socket-path>]'
-
-/**
- * The profiles this file is the code of, and the upstream each reaches.
- *
- * The host is fixed by the profile rather than configured, so a grant cannot
- * name a destination: what a profile knows about an upstream — that it speaks
- * git's smart HTTP, that it takes a token in the username slot — is knowledge
- * about that one host, and pointing it somewhere else would carry the knowledge
- * without the host it was true of. A model server is the one upstream a grant
- * places, and it is placed no further than a port: see `ModelServerGrant`.
- *
- * A `git` profile fetches from the repositories a grant lists, and reads its
- * forge's API, at `api`, for them, and pushes to and writes through the API
- * for those in its `write`, uploading a release's assets at `uploads`.
- *
- * No grant limits a body's size. A body is streamed, so the broker holds
- * little of it at once however large it is, and the upstream's own limit is
- * the one that applies: a provider's refusal reaches the guest as the provider
- * gave it. A body that never ends is ended by `headerTimeoutMs`, or by an
- * upstream that answers before it has all of it. The one body read, a GraphQL
- * request's, is held whole, and so is held to `graphqlBodyLimit`.
- */
-export const profiles = {
-  github: { api: 'api.github.com', host: 'github.com', kind: 'git', uploads: 'uploads.github.com' },
-} as const
-
-export type ProfileName = keyof typeof profiles
-
-export const isProfileName = (value: unknown): value is ProfileName =>
-  typeof value === 'string' && Object.hasOwn(profiles, value)
-
-/**
- * The names a git profile is answered at: its host, its API's, and the one its
- * API takes uploads at. A guest's client reaches each by its own name, through
- * the tunnel, which hands the connection to the broker's TLS listener rather
- * than to the host. A remote then reads as the repository's own URL, which is
- * how a client that reads remotes recognises one, and a URL the API gives in
- * an answer, a release's for its assets among them, leads back to the broker,
- * which is where a client that follows one goes.
- */
-const answeredAt = (name: ProfileName): readonly string[] => {
-  const profile = profiles[name]
-  return [profile.host, profile.api, profile.uploads]
-}
-
-/**
- * Every name this file's own code may answer TLS for, whichever of them a
- * project's grants use. The certificate covers these and the hosts of every
- * profile igloo ships, so that granting one changes neither the certificate
- * nor the authority the guest is built trusting.
- */
-export const tlsNamesCovered: readonly string[] = [
-  ...new Set(Object.keys(profiles).filter(isProfileName).flatMap(answeredAt)),
-]
-
-/**
- * The names the broker's own code answers for a forge, which no profile may
- * name: a request is routed by the name it was addressed to.
- */
-export const forgeNames: readonly string[] = answeredAt('github')
-
-/**
- * Every git profile's API and the host it takes uploads at. Their clients
- * read an error's reason from the `message` of a JSON body, as the API writes
- * one, and show a response with none as its status alone.
- */
-const apiNames: readonly string[] = Object.keys(profiles)
-  .filter(isProfileName)
-  .flatMap(name => [profiles[name].api, profiles[name].uploads])
-
-/**
- * Fetch over git's smart HTTP, and read through the forge's API, for a fixed
- * set of repositories, and push to and write through the API those of them in
- * `write`. At most one per profile: a request to the API may name no
- * repository, so nothing in it could choose between two.
- *
- * `repos` and `write` are the broker's own copy of what is permitted. They are
- * compared against a request, never built from one.
- */
-export interface GitGrant {
-  /** The credential to inject, under the name systemd loaded it as. */
-  readonly credential: string
-  readonly profile: 'github'
-  /** `owner/repo`, the repositories this grant may fetch and read, and no more. */
-  readonly repos: readonly string[]
-  /** `owner/repo`, the repositories it may push to and write through the API as well, each fetched and read as one in `repos` is. */
-  readonly write?: readonly string[]
-}
 
 /**
  * Call a model server on this host's loopback, at the port the grant names.
@@ -166,8 +87,8 @@ export type Send = 'bearer' | { readonly basic: string } | { readonly header: st
 
 /**
  * What a repository is in a profile's paths: `segments` path segments, as
- * GitHub's `owner/repo` is two, compared ignoring case where the service
- * matches them so. A rule writes `{repo}` where a path names one, and a grant
+ * `owner/repo` is two, compared ignoring case where the service matches them
+ * so. A rule writes `{repo}` where a path names one, and a grant
  * lists the repositories each set applies to.
  */
 export interface Repository {
@@ -201,7 +122,7 @@ export interface PathRule {
  * git's smart HTTP, for `{repo}` at the rule's host: `fetch`, the ref
  * advertisement and the fetch, or `push`, the advertisement a push asks for
  * and the push. The reader fixes each request's method and path
- * (`routeGitRule`).
+ * (`gitReader`).
  */
 export interface GitRule {
   readonly git: 'fetch' | 'push'
@@ -256,7 +177,7 @@ export interface ProfileGrant {
   readonly repository?: Repository
 }
 
-export type Grant = GitGrant | ModelServerGrant | ProfileGrant
+export type Grant = ModelServerGrant | ProfileGrant
 
 /** Anything whose fields can be read by name: a non-null object, an array included. */
 const isObject = (value: unknown): value is Record<string, unknown> =>
@@ -265,36 +186,27 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
 export const isProfileGrant = (grant: Grant): grant is ProfileGrant => 'hosts' in grant
 
 export const isModelServerGrant = (grant: Grant): grant is ModelServerGrant =>
-  grant.profile === 'model-server' && !isProfileGrant(grant)
-
-export const isGitGrant = (grant: Grant): grant is GitGrant =>
-  !isModelServerGrant(grant) && !isProfileGrant(grant)
+  !isProfileGrant(grant)
 
 /**
- * The names a broker holding `grants` answers TLS for: each git grant's, and
- * each host of a profile grant's, once.
+ * The names a broker holding `grants` answers TLS for: each host of a profile
+ * grant's, once. A guest's client reaches each by its own name, through the
+ * tunnel, which hands the connection to the broker's TLS listener rather than
+ * to the host. A remote then reads as the repository's own URL, which is how
+ * a client that reads remotes recognises one, and a URL an API gives in an
+ * answer, a release's for its assets among them, leads back to the broker,
+ * which is where a client that follows one goes.
  */
 export const tlsNames = (grants: readonly Grant[]): readonly string[] => [
-  ...new Set(
-    grants.flatMap(grant =>
-      isProfileGrant(grant)
-        ? Object.keys(grant.hosts)
-        : isGitGrant(grant)
-          ? answeredAt(grant.profile)
-          : [],
-    ),
-  ),
+  ...new Set(grants.filter(isProfileGrant).flatMap(grant => Object.keys(grant.hosts))),
 ]
 
 /**
  * The names whose clients read an error's reason from the `message` of a JSON
- * body: `apiNames`, and each host of a profile grant. A refusal the broker
- * writes for one of them is written that way.
+ * body: each host of a profile grant. A refusal the broker writes for one of
+ * them is written that way, but at one of git's endpoints (`isGitPath`).
  */
-const jsonNames = (grants: readonly Grant[]): readonly string[] => [
-  ...apiNames,
-  ...grants.filter(isProfileGrant).flatMap(grant => Object.keys(grant.hosts)),
-]
+const jsonNames = (grants: readonly Grant[]): readonly string[] => tlsNames(grants)
 
 /**
  * What a profile may be called: lowercase letters, digits and `-`, as a
@@ -711,35 +623,19 @@ export type ModelServerOperation = 'chat-completions' | 'list-models' | 'respons
  */
 export type AnonymousOperation = FetchOperation | 'read'
 
-/**
- * A request through a forge's API: a read or a write under a repository, an
- * upload of a release's asset, or a GraphQL query.
- */
-export type ApiOperation = 'graphql' | 'read' | 'upload' | 'write'
-
-export type Operation = AnonymousOperation | ApiOperation | GitOperation | ModelServerOperation
+export type Operation = AnonymousOperation | GitOperation | ModelServerOperation
 
 /**
  * Where a request is going, once it is known to be one this broker serves.
  *
- * Split by kind rather than carrying one `Allow` with optional fields, because
- * a git request is for one repository and a profile's names none, and the
- * headers each sends and returns are built differently. A model server's
- * request is built as a profile's is, and goes to a server the grant names,
- * with a credential only if the grant holds one. An anonymous one goes to the
- * host it was addressed to with no credential at all.
+ * Split by kind rather than carrying one `Allow` with optional fields,
+ * because each is sent differently. A profile's request goes to one of its
+ * hosts with the key sent as the host says, its headers carried but for git's,
+ * which are built. A model server's goes to a server the grant names, with a
+ * credential only if the grant holds one. An anonymous one goes to the host it
+ * was addressed to with no credential at all.
  */
 export type Decision =
-  | {
-      readonly _tag: 'Git'
-      readonly credential: string
-      readonly host: string
-      readonly operation: GitOperation
-      readonly profile: GitGrant['profile']
-      /** The repository as the *grant* spells it, not as the request did. */
-      readonly repo: string
-      readonly upstream: string
-    }
   | {
       readonly _tag: 'ModelServer'
       readonly credential?: string
@@ -748,16 +644,6 @@ export type Decision =
       readonly operation: ModelServerOperation
       /** The server's name, as the grant spells it. */
       readonly server: string
-      readonly upstream: string
-    }
-  | {
-      readonly _tag: 'Api'
-      readonly credential: string
-      readonly host: string
-      readonly operation: ApiOperation
-      readonly profile: GitGrant['profile']
-      /** The repository as the *grant* spells it, for a request under one. */
-      readonly repo?: string
       readonly upstream: string
     }
   | {
@@ -801,13 +687,13 @@ export type Decision =
        * rather than only inside a sentence.
        */
       readonly asked?: Asked
-      /** Set for a request addressed to one of `apiNames`, whose refusal is written in JSON. */
+      /** Set for a request addressed to one of `jsonNames`, whose refusal is written in JSON. */
       readonly json?: true
       readonly reason: string
       readonly status: number
     }
 
-/** A git host, a repository or a model server, as a request named it. */
+/** A host, a repository or a model server, as a request named it. */
 interface Asked {
   readonly host?: string
   readonly scope?: string
@@ -847,9 +733,6 @@ const refusedAt = (
 /** One segment of a repository's name, with no path traversal and nothing that needs encoding. */
 const REPO_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 
-/** GitHub's repository: `owner/repo`, matched ignoring case. */
-const ownerRepo: Repository = { ignoreCase: true, segments: 2 }
-
 /**
  * Git protocol version, as git sends it. Forwarded rather than constructed
  * because it is a negotiation between the guest's git and the upstream, and
@@ -865,7 +748,7 @@ const withoutGit = (repo: string): string => (repo.endsWith('.git') ? repo.slice
  * Whether `repo` names a repository a grant may hold, as `repository` has
  * them: that many segments, each a name, with or without `.git`.
  */
-export const isRepo = (repo: string, repository: Repository = ownerRepo): boolean => {
+export const isRepo = (repo: string, repository: Repository): boolean => {
   const segments = withoutGit(repo).split('/')
   return (
     segments.length === repository.segments && segments.every(segment => REPO_SEGMENT.test(segment))
@@ -874,42 +757,16 @@ export const isRepo = (repo: string, repository: Repository = ownerRepo): boolea
 
 /**
  * The form two spellings of one repository are compared in: without `.git`,
- * and lowercased where the service matches names ignoring case, as GitHub
- * does, so a grant for `owner/repo` covers a clone of `Owner/Repo`. The
+ * and lowercased where the service matches names ignoring case, so that a
+ * grant for `owner/repo` covers a clone of `Owner/Repo` there. The
  * *upstream* URL is built from the grant's spelling, so this normalisation
  * never decides what is requested.
  */
-export const normaliseRepo = (repo: string, repository: Repository = ownerRepo): string =>
+export const normaliseRepo = (repo: string, repository: Repository): string =>
   repository.ignoreCase ? withoutGit(repo).toLowerCase() : withoutGit(repo)
 
-/**
- * The repository in `among` that `wanted`, already normalised, names, as the
- * grant spells it.
- */
-const grantedAs = (among: readonly string[] | undefined, wanted: string): string | undefined =>
-  among?.find(candidate => normaliseRepo(candidate) === wanted)
-/** The fields a grant of each kind carries. */
-const grantFields = {
-  git: new Set(['credential', 'profile', 'repos', 'write']),
-  'model-server': new Set(['credential', 'name', 'port', 'profile']),
-} as const
-
-/** A git grant's list of repositories, or why it is not one. */
-const repoList = (
-  profile: string,
-  field: string,
-  value: unknown,
-): Array<string> | { message: string } => {
-  if (!Array.isArray(value)) return { message: `the ${profile} grant's ${field} is not a list` }
-  const named: Array<string> = []
-  for (const repo of value as unknown[]) {
-    if (typeof repo !== 'string' || !isRepo(repo)) {
-      return { message: `${JSON.stringify(repo)} is not owner/repo` }
-    }
-    named.push(repo)
-  }
-  return named
-}
+/** The fields a model server's grant carries. */
+const modelServerFields: ReadonlySet<string> = new Set(['credential', 'name', 'port', 'profile'])
 
 /**
  * Read the grants a broker was started with.
@@ -931,9 +788,9 @@ export const parseGrants = (json: string): { grants: Grant[] } | { message: stri
   const grants: Array<Grant> = []
   for (const entry of raw as unknown[]) {
     if (!isObject(entry)) return { message: 'a grant must be an object' }
-    const { credential, profile, repos } = entry
+    const { credential, profile } = entry
 
-    if ('hosts' in entry) {
+    if (profile !== 'model-server') {
       const read = readProfileGrant(entry)
       if ('message' in read) return read
       const { grant } = read
@@ -943,7 +800,7 @@ export const parseGrants = (json: string): { grants: Grant[] } | { message: stri
         }
       }
       // A request is routed by the name it was addressed to, so a name is one
-      // grant's or none, and never one the broker's own code answers.
+      // grant's or none.
       const taken = tlsNames(grants)
       const shared = Object.keys(grant.hosts).find(host => taken.includes(host))
       if (shared !== undefined) {
@@ -955,72 +812,36 @@ export const parseGrants = (json: string): { grants: Grant[] } | { message: stri
       continue
     }
 
-    if (profile === 'model-server') {
-      const unread = Object.keys(entry).find(key => !grantFields['model-server'].has(key))
-      if (unread !== undefined) {
-        return { message: `the model-server grant sets ${unread}, which this broker does not read` }
-      }
-      const { name, port } = entry
-      if (typeof name !== 'string' || !isModelServerName(name)) {
-        return { message: `${JSON.stringify(name)} is not a model server's name` }
-      }
-      if (!isTcpPort(port)) {
-        return { message: `the ${name} model server's port, ${JSON.stringify(port)}, is not one` }
-      }
-      if (credential !== undefined && (typeof credential !== 'string' || credential === '')) {
-        return { message: `the ${name} model server's credential is not a name` }
-      }
-      if (grants.some(grant => isModelServerGrant(grant) && grant.name === name)) {
-        return {
-          message: `there are two model servers named ${name}, and a request could not choose one`,
-        }
-      }
-      grants.push({ ...(credential === undefined ? {} : { credential }), name, port, profile })
-      continue
-    }
-
-    if (!isProfileName(profile)) {
-      return {
-        message: `unknown profile ${JSON.stringify(profile)}; the broker's own are ${Object.keys(profiles).join(', ')}, and any other is a profile grant, with hosts`,
-      }
-    }
     // Refused rather than ignored: a field this file does not read is a limit
     // someone wrote down that nothing would enforce.
-    const unread = Object.keys(entry).find(key => !grantFields[profiles[profile].kind].has(key))
+    const unread = Object.keys(entry).find(key => !modelServerFields.has(key))
     if (unread !== undefined) {
-      return { message: `the ${profile} grant sets ${unread}, which this broker does not read` }
+      return { message: `the model-server grant sets ${unread}, which this broker does not read` }
     }
-    if (typeof credential !== 'string' || credential === '') {
-      return { message: 'a grant needs a credential name' }
+    const { name, port } = entry
+    if (typeof name !== 'string' || !isModelServerName(name)) {
+      return { message: `${JSON.stringify(name)} is not a model server's name` }
     }
-
-    // One per profile: a request that names no repository, or no credential,
-    // could not choose between two.
-    if (grants.some(grant => grant.profile === profile)) {
-      return { message: `there are two ${profile} grants, and a request could not choose one` }
+    if (!isTcpPort(port)) {
+      return { message: `the ${name} model server's port, ${JSON.stringify(port)}, is not one` }
     }
-
-    const read = repoList(profile, 'repos', repos)
-    if ('message' in read) return read
-    const written = entry['write'] === undefined ? [] : repoList(profile, 'write', entry['write'])
-    if ('message' in written) return written
-    if (read.length + written.length === 0) {
-      return { message: `the ${profile} grant names no repositories` }
+    if (credential !== undefined && (typeof credential !== 'string' || credential === '')) {
+      return { message: `the ${name} model server's credential is not a name` }
     }
-    grants.push({
-      credential,
-      profile,
-      repos: read,
-      ...(written.length === 0 ? {} : { write: written }),
-    })
+    if (grants.some(grant => isModelServerGrant(grant) && grant.name === name)) {
+      return {
+        message: `there are two model servers named ${name}, and a request could not choose one`,
+      }
+    }
+    grants.push({ ...(credential === undefined ? {} : { credential }), name, port, profile })
   }
   return { grants }
 }
 
 /**
  * What the guest holds where a client reads its key, so that an unmodified
- * client reaches the broker: a profile's placeholders, `GH_TOKEN`, and a model
- * server's key where a harness reads one.
+ * client reaches the broker: each variable a granted profile's
+ * `placeholders` names.
  *
  * A **placeholder**, and that is load-bearing rather than tidy: a client
  * refuses to construct itself with no key at all, so a VM that deliberately
@@ -1036,22 +857,6 @@ export const guestPlaceholderKey = 'igloo-broker-holds-the-real-key'
 
 /** The first path segment of every request for a model server. */
 const modelServerPrefix = 'local'
-
-/**
- * The variables the guest is given for `grants` beside a profile's
- * placeholders, which composition sets from the profile. Every value is plain
- * text with no `"` or `\`: NixOS writes these into a shell script and a PAM
- * file inside double quotes, unescaped, so a quote in a value ends it.
- */
-export const guestEnvironment = (grants: readonly Grant[]): Record<string, string> => {
-  const environment: Record<string, string> = {}
-  // GitHub's CLI reaches its API by name, which the broker answers, and makes
-  // no request without a token. Its own name for one, ahead of `GITHUB_TOKEN`.
-  if (grants.some(grant => isGitGrant(grant) && grant.profile === 'github')) {
-    environment['GH_TOKEN'] = guestPlaceholderKey
-  }
-  return environment
-}
 
 /**
  * The endpoints a model server serves, and the operation each one is: the
@@ -1085,56 +890,6 @@ const sendsBody = (operation: Operation): boolean =>
 /** How each model server operation is requested: a listing is read, the rest are sent a body. */
 const methodOf = (operation: ModelServerOperation): 'GET' | 'POST' =>
   sendsBody(operation) ? 'POST' : 'GET'
-
-/** The methods that write through a forge's API. */
-const writeMethods: ReadonlySet<string> = new Set(['DELETE', 'PATCH', 'POST', 'PUT'])
-
-/**
- * What a repository in a grant's `write` may be written at through the REST
- * API, and by which methods: a path under `repos/<owner>/<repo>/`, a segment at
- * a time, where `*` is any one segment and a last `**` any number of them, none
- * included.
- *
- * What GitHub's CLI writes: issues and pull requests, with their comments,
- * labels, reviews and merges; releases and their assets; a workflow run's rerun
- * and cancel, and a workflow's dispatch; and a commit's statuses and checks.
- * The rest of what a token that writes a repository may write is left out, its
- * settings, collaborators, webhooks, deploy keys, Actions secrets and variables
- * and runner registration among it: each reaches past the repository, to the
- * people it lets in, the hosts a webhook calls, the machines a key opens, or
- * the jobs a runner is given.
- */
-const apiWrites: Readonly<Record<string, readonly string[]>> = {
-  'actions/jobs/*/rerun': ['POST'],
-  'actions/runs/*/cancel': ['POST'],
-  'actions/runs/*/force-cancel': ['POST'],
-  'actions/runs/*/rerun': ['POST'],
-  'actions/runs/*/rerun-failed-jobs': ['POST'],
-  'actions/workflows/*/dispatches': ['POST'],
-  'check-runs': ['POST'],
-  'check-runs/*': ['PATCH'],
-  'check-runs/*/rerequest': ['POST'],
-  'check-suites': ['POST'],
-  'check-suites/*/rerequest': ['POST'],
-  'issues/**': [...writeMethods],
-  'pulls/**': [...writeMethods],
-  'releases/**': [...writeMethods],
-  'statuses/*': ['POST'],
-}
-
-/**
- * What `apiWrites` admits and is refused all the same, in its form.
- *
- * A Codespace made from a pull request: a machine of its own, billed to the
- * token's account and open to the internet, that runs the code on the pull
- * request's branch with whatever Codespaces secrets that account gives the
- * repository. It reaches past the repository, as a runner's registration does.
- * GitHub matches a path's fixed segments by case, so these are compared as
- * they are written.
- */
-const apiWritesRefused: Readonly<Record<string, readonly string[]>> = {
-  'pulls/*/codespaces': [...writeMethods],
-}
 
 /**
  * Whether `pattern`, a rule's path, matches `path`, a sequence of segments: `*`
@@ -1182,26 +937,6 @@ const ruleText = (rule: Rule): string =>
     : `${rule.method === '*' ? '*' : rule.method.join(',')} ${rule.path === '' ? '/' : rule.path}`
 
 /**
- * Whether `table`, paths in `apiWrites`' form, lets `method` write at `path`,
- * a sequence of segments.
- */
-const listedIn = (
-  table: Readonly<Record<string, readonly string[]>>,
-  method: string,
-  path: readonly string[],
-): boolean =>
-  Object.entries(table).some(
-    ([listed, methods]) => methods.includes(method) && pathMatches(listed, path),
-  )
-
-/**
- * Whether `method` may write at `tail`, the path past a repository: one
- * `apiWrites` lists and `apiWritesRefused` does not.
- */
-const writesTo = (method: string, tail: readonly string[]): boolean =>
-  listedIn(apiWrites, method, tail) && !listedIn(apiWritesRefused, method, tail)
-
-/**
  * The repository of `grant` that `asked`, a request's spelling of one, names,
  * as the grant spells it and without `.git`, if its list holds `set`.
  */
@@ -1224,7 +959,7 @@ const shownRepo = (grant: ProfileGrant, asked: string): string =>
  * host is none of them.
  *
  * A `deny` rule that matches refuses it, whatever is chosen; then git's
- * reader takes a git endpoint at a host with a git rule (`routeGitRule`);
+ * reader takes a git endpoint at a host with a git rule (`gitReader`);
  * then a chosen rule that matches allows it, one naming `{repo}` only for a
  * repository whose list holds its set; and anything else is refused. Order
  * means nothing: of the chosen rules that match, one with no reader is taken
@@ -1264,7 +999,7 @@ const routeProfile = (
     )
   }
   if (at.allow.some(rule => 'git' in rule)) {
-    const git = routeGitRule(grant, lowered, at, method, rest, query.get('service'))
+    const git = gitReader(grant, lowered, at, method, rest, query.get('service'))
     if (git !== undefined) return git
   }
 
@@ -1364,7 +1099,7 @@ const routeProfile = (
  * spelling and a fixed template, `https://<host>/<repo>.git/<endpoint>`: the
  * request decided which repository applies and nothing else.
  */
-const routeGitRule = (
+const gitReader = (
   grant: ProfileGrant,
   host: string,
   at: ProfileHost,
@@ -1429,248 +1164,6 @@ const routeGitRule = (
   }
 }
 
-/**
- * Route a request for a git grant's API, or `undefined` if the path's host is
- * no held grant's API.
- *
- * A read under `repos/<owner>/<repo>/` for a repository a grant lists is sent
- * with that grant's credential, and so is a write there that `apiWrites` lists,
- * for a repository in the grant's `write`. The upstream path is the grant's
- * spelling of the repository, then the rest of the path as the request had it,
- * segment by segment: `decide` has already refused a percent-escape and an
- * empty segment, and the URL parser has resolved every `.` and `..`, so no
- * segment can leave the repository it follows. The query is carried, rebuilt
- * so that each name and value is encoded. A read of the API's root is sent with
- * the credential too, and without its query.
- *
- * A GraphQL query, a `POST` to `graphql`, is sent with the credential too, and
- * its body as it arrived. It names what it reads and writes in that body, some
- * of it by node IDs that say which repository they belong to only after a
- * lookup, so no grant's repositories could be matched against it even by
- * reading it: the token's own scope is all that bounds it.
- *
- * Everything else is refused.
- */
-const routeApi = (
-  grants: readonly Grant[],
-  method: string,
-  segments: readonly string[],
-  query: URLSearchParams,
-): Decision | undefined => {
-  const [host, ...rest] = segments
-  if (host === undefined) return undefined
-  const lowered = host.toLowerCase()
-  const held = grants.filter(isGitGrant).filter(grant => profiles[grant.profile].api === lowered)
-  const [grant] = held
-  if (grant === undefined) return undefined
-
-  if (rest.length === 1 && rest[0] === 'graphql') {
-    if (method !== 'POST') return deny(405, `${method} is not how /graphql is requested`)
-    return {
-      _tag: 'Api',
-      credential: grant.credential,
-      host: lowered,
-      operation: 'graphql',
-      profile: grant.profile,
-      upstream: `https://${lowered}/graphql`,
-    }
-  }
-  const writes = writeMethods.has(method)
-  if (!writes && method !== 'GET' && method !== 'HEAD') {
-    return deny(405, `${method} is not a method this VM may use through ${lowered}`, {
-      host: lowered,
-    })
-  }
-  const [area, owner, repo, ...tail] = rest
-  // The API's root names its endpoints and, asked with a token, that token's
-  // scopes, which is what `gh auth status` reads once it has a login.
-  if (area === undefined && !writes) {
-    return {
-      _tag: 'Api',
-      credential: grant.credential,
-      host: lowered,
-      operation: 'read',
-      profile: grant.profile,
-      upstream: `https://${lowered}/`,
-    }
-  }
-  if (area !== 'repos') {
-    return deny(
-      403,
-      `/${rest.join('/')} is not something this VM may ${writes ? 'write' : 'read'} through ${lowered}`,
-      { host: lowered },
-    )
-  }
-  if (owner === undefined || repo === undefined) {
-    return deny(404, 'a repository is named at /repos/<owner>/<repo>')
-  }
-
-  const wanted = `${owner}/${repo}`.toLowerCase()
-  for (const candidate of held) {
-    const writable = grantedAs(candidate.write, wanted)
-    const allowed = writable ?? grantedAs(candidate.repos, wanted)
-    if (allowed === undefined) continue
-    if (writes && writable === undefined) {
-      return deny(403, `this VM may read ${wanted}, not write to it`, { scope: wanted })
-    }
-    if (writes && !writesTo(method, tail)) {
-      return deny(403, `${method} /${rest.join('/')} is not a write this VM may make`, {
-        scope: wanted,
-      })
-    }
-    const path = withoutGit(allowed)
-    const filter = new URLSearchParams(query).toString()
-    return {
-      _tag: 'Api',
-      credential: candidate.credential,
-      host: lowered,
-      operation: writes ? 'write' : 'read',
-      profile: candidate.profile,
-      repo: path,
-      upstream: `https://${lowered}/repos/${[path, ...tail].join('/')}${filter === '' ? '' : `?${filter}`}`,
-    }
-  }
-  return deny(403, `${wanted} is not a repository this VM may ${writes ? 'write to' : 'read'}`, {
-    scope: wanted,
-  })
-}
-
-/**
- * Route a request for the host a git grant's API takes uploads at, or
- * `undefined` if the path's host is no held grant's.
- *
- * GitHub takes a release's asset there, as a `POST` to
- * `repos/<owner>/<repo>/releases/<id>/assets` with the asset's name in the
- * query. One for a repository in a grant's `write` is sent with that grant's
- * credential, its upstream built as an API write's is. Everything else there is
- * refused.
- */
-const routeUploads = (
-  grants: readonly Grant[],
-  method: string,
-  segments: readonly string[],
-  query: URLSearchParams,
-): Decision | undefined => {
-  const [host, ...rest] = segments
-  if (host === undefined) return undefined
-  const lowered = host.toLowerCase()
-  const held = grants
-    .filter(isGitGrant)
-    .filter(grant => profiles[grant.profile].uploads === lowered)
-  if (held.length === 0) return undefined
-
-  const [area, owner, repo, releases, release, assets, ...beyond] = rest
-  if (
-    area !== 'repos' ||
-    owner === undefined ||
-    repo === undefined ||
-    releases !== 'releases' ||
-    release === undefined ||
-    assets !== 'assets' ||
-    beyond.length > 0
-  ) {
-    return deny(403, `/${rest.join('/')} is not something this VM may send to ${lowered}`, {
-      host: lowered,
-    })
-  }
-  if (method !== 'POST') return deny(405, `${method} is not how a release's asset is uploaded`)
-
-  const wanted = `${owner}/${repo}`.toLowerCase()
-  for (const candidate of held) {
-    const writable = grantedAs(candidate.write, wanted)
-    if (writable === undefined) {
-      if (grantedAs(candidate.repos, wanted) === undefined) continue
-      return deny(403, `this VM may read ${wanted}, not write to it`, { scope: wanted })
-    }
-    const path = withoutGit(writable)
-    const filter = new URLSearchParams(query).toString()
-    return {
-      _tag: 'Api',
-      credential: candidate.credential,
-      host: lowered,
-      operation: 'upload',
-      profile: candidate.profile,
-      repo: path,
-      upstream: `https://${lowered}/repos/${path}/releases/${release}/assets${filter === '' ? '' : `?${filter}`}`,
-    }
-  }
-  return deny(403, `${wanted} is not a repository this VM may write to`, { scope: wanted })
-}
-
-/**
- * Route a git request, or `undefined` if the path is not a git endpoint at all —
- * which is what lets a model server's endpoint be tried against the same path
- * without weakening any of the refusals below.
- */
-const routeGit = (
-  grants: readonly Grant[],
-  method: string,
-  segments: readonly string[],
-  service: string | null,
-): Decision | undefined => {
-  const last = segments.at(-1)
-
-  let operation: GitOperation
-  let head: readonly string[]
-  if (last === 'refs' && segments.at(-2) === 'info') {
-    if (service !== 'git-upload-pack' && service !== 'git-receive-pack') {
-      return deny(404, 'the ref advertisement takes ?service=git-upload-pack or git-receive-pack')
-    }
-    if (method !== 'GET') return deny(405, `${method} is not how a ref advertisement is requested`)
-    operation = service === 'git-upload-pack' ? 'ls-refs' : 'push-refs'
-    head = segments.slice(0, -2)
-  } else if (last === 'git-upload-pack' || last === 'git-receive-pack') {
-    operation = last === 'git-upload-pack' ? 'fetch' : 'push'
-    if (method !== 'POST') return deny(405, `${method} is not how a ${operation} is requested`)
-    head = segments.slice(0, -1)
-  } else {
-    return undefined
-  }
-  const pushes = operation === 'push' || operation === 'push-refs'
-
-  // Exactly host, owner and repository. Anything longer or shorter is not a
-  // shape this broker serves, which is also what makes `..` unreachable.
-  const [host, owner, repo] = head
-  if (head.length !== 3 || host === undefined || owner === undefined || repo === undefined) {
-    return deny(404, 'a brokered git URL is /<host>/<owner>/<repo>/…')
-  }
-
-  const wanted = normaliseRepo(`${owner}/${repo}`)
-  const lowered = host.toLowerCase()
-  const forHost = grants
-    .filter(isGitGrant)
-    .filter(grant => profiles[grant.profile].host === lowered)
-  if (forHost.length === 0) return deny(403, `${host} is not brokered for this VM`, { host })
-
-  for (const grant of forHost) {
-    const writable = grantedAs(grant.write, wanted)
-    const allowed = writable ?? grantedAs(grant.repos, wanted)
-    if (allowed === undefined) continue
-    // Refused at the advertisement as well as at the push, since the
-    // advertisement is where git asks whether it may push at all: refusing only
-    // the second would let a push start and fail late.
-    if (pushes && writable === undefined) {
-      return deny(403, 'this VM may fetch, not push', { scope: wanted })
-    }
-    // Built from the grant's spelling and a fixed template. The request decided
-    // which grant applies and nothing else.
-    const upstreamHost = profiles[grant.profile].host
-    const path = withoutGit(allowed)
-    return {
-      _tag: 'Git',
-      credential: grant.credential,
-      host: upstreamHost,
-      operation,
-      profile: grant.profile,
-      repo: path,
-      upstream: `https://${upstreamHost}/${path}.git/${gitEndpoints[operation]}`,
-    }
-  }
-  return deny(403, `${wanted} is not a repository this VM may ${pushes ? 'push to' : 'fetch'}`, {
-    scope: wanted,
-  })
-}
-
 /** Where each git request goes, under a repository's `.git`. */
 const gitEndpoints: Readonly<Record<GitOperation, string>> = {
   fetch: 'git-upload-pack',
@@ -1727,14 +1220,11 @@ const routeModelServer = (
 /**
  * Whether this request is one the grants permit, and if so what to send upstream.
  *
- * Pure. `target` is the request URL as received; nothing is taken from it except
- * the path, as a sequence of segments matched against a fixed shape or a
- * profile's rules, git's `service`, and the query of a forge's API request or
- * a profile's. A refusal is set to be written in JSON when the path's first segment, the host the request
- * is for, is one of `jsonNames`, whatever refused it.
- *
- * A profile grant's hosts are not routed here: they are answered by name
- * alone (`decideAddressed`).
+ * Pure. `target` is the request URL as received; nothing is taken from it
+ * except the path, as a sequence of segments matched against a model server's
+ * endpoints or a profile's rules, and a profile's query, git's `service` among
+ * it. On the plain listener that is a model server's alone: a profile grant's
+ * hosts are answered by name (`decideAddressed`).
  */
 export const decide = (grants: readonly Grant[], method: string, target: string): Decision =>
   decideAt(grants, method, target, false)
@@ -1788,21 +1278,10 @@ const route = (
     .slice(1)
   if (segments.some(segment => segment === '')) return deny(404, 'empty path segment')
 
-  // A profile's host first, by its name, then a forge's API and its uploads,
-  // by their hosts: their paths are the service's own, and one could end in
-  // what reads as a git endpoint. Then git, and only then a model server: a
-  // git endpoint has a shape of its own, so trying it first keeps every
-  // refusal it makes — the push at the advertisement, the wrong method, the
-  // path that is not three segments — rather than letting an unrecognised git
-  // path fall through to a model server's "no such endpoint".
+  // A profile's host by its name, where the request was addressed to one,
+  // and a model server by its path.
   const profile = addressed ? routeProfile(grants, method, segments, url.searchParams) : undefined
   if (profile !== undefined) return profile
-  const api = routeApi(grants, method, segments, url.searchParams)
-  if (api !== undefined) return api
-  const upload = routeUploads(grants, method, segments, url.searchParams)
-  if (upload !== undefined) return upload
-  const git = routeGit(grants, method, segments, url.searchParams.get('service'))
-  if (git !== undefined) return git
   const local = routeModelServer(grants, method, segments)
   if (local !== undefined) return local
   return deny(404, 'not an endpoint this broker serves')
@@ -1950,25 +1429,22 @@ const unforwardedRequestHeaders: ReadonlySet<string> = new Set([
 const bodyHeaders = ['content-encoding', 'content-type'] as const
 
 /**
- * The length an upload of a release's asset goes upstream with: the one its
- * `Content-Length` declares, a whole number with no `Transfer-Encoding` beside
- * it, or `undefined`, and then it goes in chunks as every other body does.
+ * The length a body goes upstream with at a rule with `length = "kept"`: the
+ * one its `Content-Length` declares, a whole number with no
+ * `Transfer-Encoding` beside it, or `undefined`, and then it goes in chunks
+ * as every other body does.
  *
- * GitHub takes an asset only with its length, and refuses one sent in chunks,
- * so it goes framed as the guest framed it. `fetch` sends a stated length
- * and then every byte of the body, however many there are, so bytes past it
- * would reach the upstream as the start of another request on the broker's
- * connection: `heldTo` keeps the body to the length it is sent with.
+ * A service may take an upload only with its length, and refuse one sent in
+ * chunks, so it goes framed as the guest framed it. `fetch` sends a stated
+ * length and then every byte of the body, however many there are, so bytes
+ * past it would reach the upstream as the start of another request on the
+ * broker's connection: `heldTo` keeps the body to the length it is sent with.
  */
 const uploadLength = (
   decision: Exclude<Decision, { _tag: 'Deny' }>,
   guest: Headers,
 ): number | undefined => {
-  const kept =
-    decision._tag === 'Api'
-      ? decision.operation === 'upload'
-      : decision._tag === 'Profile' && decision.length === 'kept'
-  if (!kept) return undefined
+  if (decision._tag !== 'Profile' || decision.length !== 'kept') return undefined
   const length = guest.get('content-length')
   if (length === null || guest.has('transfer-encoding') || !/^[0-9]{1,15}$/.test(length)) {
     return undefined
@@ -2031,7 +1507,7 @@ const carriesBody = (decision: Exclude<Decision, { _tag: 'Deny' }>): boolean =>
  * what git reads comes back, its 401 is a 502, and its refusals are text.
  */
 const isGitDecision = (decision: Exclude<Decision, { _tag: 'Deny' }>): boolean =>
-  decision._tag === 'Git' || (decision._tag === 'Profile' && decision.git !== undefined)
+  decision._tag === 'Profile' && decision.git !== undefined
 
 /**
  * The fields a GraphQL request may not name, for a decision whose body is
@@ -2295,21 +1771,20 @@ const packTypes = {
  * already compressed and a token stream is read as it arrives — and removes the
  * mismatch instead of tracking it.
  *
- * A git request's headers are built, and carry of the guest's only what git
- * negotiates with the upstream, each checked first.
+ * The headers of a request git's reader allowed are built, and carry of the
+ * guest's only what git negotiates with the upstream, each checked first.
  *
- * A profile's request carries the guest's headers but those in
+ * Any other profile's request carries the guest's headers but those in
  * `unforwardedRequestHeaders`, so a harness reaches its provider as it would
  * from the host: its API version, its betas, its session and cache hints, its
  * own name. None of them can send the request elsewhere or attach a
  * credential, since the URL is built from the grant, the credential is set
  * after the guest's are dropped, replacing a header of the same name, and so
  * are dropped the headers a front end could take another method, path or
- * origin from. A model server's request is built the same way, as is one
- * through a forge's API, and so is an anonymous read, whose credentials are
- * dropped and none set. An asset's upload carries the length `uploadLength`
- * gives it, if any, and a GraphQL request the type of the body the broker
- * wrote for it.
+ * origin from. A model server's request is built the same way, and so is an
+ * anonymous read, whose credentials are dropped and none set. A body at a
+ * rule that keeps its length carries the length `uploadLength` gives it, if
+ * any, and a GraphQL request the type of the body the broker wrote for it.
  *
  * `token` is the value of the credential the decision names, and `undefined`
  * only for a model server that takes none and an anonymous read: `handle`
@@ -2325,10 +1800,7 @@ export const upstreamHeaders = (
   const withKey = (headers: Headers): Headers => {
     if (token === undefined) return headers
     if (decision._tag !== 'Profile') {
-      headers.set(
-        'Authorization',
-        decision._tag === 'Git' ? `Basic ${btoa(`x-access-token:${token}`)}` : `Bearer ${token}`,
-      )
+      headers.set('Authorization', `Bearer ${token}`)
       return headers
     }
     const { send } = decision
@@ -2338,12 +1810,7 @@ export const upstreamHeaders = (
     return headers
   }
 
-  const git =
-    decision._tag === 'Git'
-      ? decision.operation
-      : decision._tag === 'Profile'
-        ? decision.git
-        : undefined
+  const git = decision._tag === 'Profile' ? decision.git : undefined
   if (git === undefined) {
     // A header the guest's `Connection` names is hop-by-hop too.
     const named = new Set(
@@ -2398,8 +1865,9 @@ export const upstreamHeaders = (
  * client retries a 502 as an outage, for minutes, and stops at a 403 with the
  * reason shown, so every other request gets a 403. A **redirect** names a
  * destination this grant did not authorize, and following it would send the
- * credential there, so it is answered with a 502 — but for an API's, which is
- * to a signed URL that needs no credential, and goes back to the guest.
+ * credential there, so it is answered with a 502 — but at a host whose
+ * redirects are returned, an API's that redirects to a signed URL needing no
+ * credential, a log's or an asset's, where it goes back to the guest.
  *
  * `scope` is what the credential was expected to cover, a repository where
  * there is one, because "this token is wrong" and "this token does not reach
@@ -2416,12 +1884,12 @@ export const upstreamHeaders = (
 export const relay = (
   attempt: {
     readonly credential: string | undefined
+    /** Whether it is git's request, whose 401 is a 502. */
+    readonly git: boolean
     readonly host: string
-    /** Set for a git request, whose 401 is a 502. */
-    readonly git?: true
     readonly kind: Exclude<Decision['_tag'], 'Deny'>
-    /** Set for a host whose redirects go back to the guest. */
-    readonly redirects?: true
+    /** Whether the host's redirects go back to the guest. */
+    readonly redirects: boolean
     readonly scope: string | undefined
   },
   upstreamStatus: number,
@@ -2440,15 +1908,15 @@ export const relay = (
         attempt.credential === undefined
           ? `${attempt.host} wants a credential, and this VM's grant for it holds none`
           : `${attempt.host} refused ${attempt.credential}; the credential the host holds is wrong, expired, or not scoped to ${attempt.scope ?? 'this request'}`,
-      status: attempt.kind === 'Git' || attempt.git === true ? 502 : 403,
+      status: attempt.git ? 502 : 403,
     }
   }
   // Everything in the 3xx range except 304, which redirects nowhere: it is an
   // answer about a cached response and a client acts on it locally.
   if (upstreamStatus >= 300 && upstreamStatus < 400 && upstreamStatus !== 304) {
-    // An API's redirect is to a signed URL elsewhere, a log or an asset, which
-    // needs no credential: the guest follows it, and the broker does not.
-    if (attempt.kind === 'Api' || attempt.redirects === true) return undefined
+    // A signed URL elsewhere, a log or an asset, which needs no credential:
+    // the guest follows it, and the broker does not.
+    if (attempt.redirects) return undefined
     return {
       reason:
         attempt.credential === undefined
@@ -3058,18 +2526,15 @@ const unforwardedResponseHeaders: ReadonlySet<string> = new Set([
 /**
  * The headers returned to the guest.
  *
- * For git, only what git reads, so an upstream cannot set a cookie or an
- * authentication challenge inside the VM. For every other request, the
- * upstream's headers but those in `unforwardedResponseHeaders`: a harness
- * reads its retry delay, its rate limits and the request id it reports from
- * them. A redirect `relay` passes on, an API's or an anonymous read's, keeps
- * its `Location`.
+ * For `git`'s request, only what git reads, so an upstream cannot set a
+ * cookie or an authentication challenge inside the VM. For every other
+ * request, the upstream's headers but those in `unforwardedResponseHeaders`:
+ * a harness reads its retry delay, its rate limits and the request id it
+ * reports from them. A redirect `relay` passes on, a host's that returns
+ * them or an anonymous read's, keeps its `Location`.
  */
-export const responseHeaders = (
-  kind: Exclude<Decision['_tag'], 'Deny'>,
-  upstream: Headers,
-): Headers => {
-  if (kind !== 'Git') {
+export const responseHeaders = (git: boolean, upstream: Headers): Headers => {
+  if (!git) {
     const headers = new Headers()
     for (const [name, value] of upstream) {
       if (!unforwardedResponseHeaders.has(name)) headers.append(name, value)
@@ -3098,16 +2563,22 @@ export const pagesOf = (link: string, host: string, repo: string): string =>
     `<https://${host}/repos/${repo}`,
   )
 
-/** The headers returned for a decision: `responseHeaders`', and an API read's pages kept here. */
+/**
+ * The headers returned for a decision: `responseHeaders`', and, at a host
+ * whose pages are GitHub's, page links kept under the repository asked for.
+ */
 const returnedHeaders = (
   decision: Exclude<Decision, { _tag: 'Deny' }>,
   upstream: Headers,
 ): Headers => {
-  const headers = responseHeaders(isGitDecision(decision) ? 'Git' : decision._tag, upstream)
+  const headers = responseHeaders(isGitDecision(decision), upstream)
   const link = headers.get('link')
-  const pages =
-    decision._tag === 'Api' || (decision._tag === 'Profile' && decision.pages === 'github')
-  if (pages && decision.repo !== undefined && link !== null) {
+  if (
+    decision._tag === 'Profile' &&
+    decision.pages === 'github' &&
+    decision.repo !== undefined &&
+    link !== null
+  ) {
     headers.set('link', pagesOf(link, decision.host, decision.repo))
   }
   return headers
@@ -3131,16 +2602,15 @@ const returnedHeaders = (
  * immediately. A model server's call may wait on its model loading too.
  *
  * A push's body is its pack, as large as what is pushed, and the upstream
- * answers only once it has all of it and has applied it, so a push is given
- * the minutes a model call is. So is an asset's upload, whose body is the
- * asset, for the same reason.
+ * answers only once it has all of it and has applied it, so a push needs the
+ * minutes a model call does. So does an upload, whose body is the asset, for
+ * the same reason.
  *
- * A profile's request is given the long wait whatever it is: one rule may
- * cover a model call, a write that waits on the capacity for what it creates
- * and a read alike, and a wait a rule chose would be one more thing a profile
- * could get wrong. The rest, git's fetch, its advertisements, a read through
- * the forge's API and an anonymous read, are given the short one: nothing is
- * generating their answer.
+ * A profile's request is given the long wait whatever it is: one profile may
+ * cover a model call, a push, a write that waits on the capacity for what it
+ * creates and a read alike, and a wait a rule chose would be one more thing a
+ * profile could get wrong. An anonymous read is given the short one: nothing
+ * is generating its answer.
  */
 const headerTimeoutMs = { long: 600_000, short: 30_000 } as const
 
@@ -3306,12 +2776,9 @@ const handle = async (
   }
 
   // Which credential pays and what it was expected to cover, both settled by
-  // the path: a git request is for a repository, and a model call names its
-  // model only in a body that is not parsed.
-  const scope =
-    decision._tag === 'Git' || decision._tag === 'Api' || decision._tag === 'Profile'
-      ? decision.repo
-      : undefined
+  // the path: a request under a repository is for that one, and a model call
+  // names its model only in a body that is not parsed.
+  const scope = decision._tag === 'Profile' ? decision.repo : undefined
   // A model server's grant may hold none, and then the request is sent with
   // none, as the server was configured to take it. An anonymous read is sent
   // with none because no grant covers it.
@@ -3343,12 +2810,7 @@ const handle = async (
     () => {
       abort.abort()
     },
-    decision._tag === 'Profile' ||
-      decision._tag === 'ModelServer' ||
-      decision.operation === 'push' ||
-      decision.operation === 'upload'
-      ? headerTimeoutMs.long
-      : headerTimeoutMs.short,
+    decision._tag === 'Anonymous' ? headerTimeoutMs.short : headerTimeoutMs.long,
   )
 
   const length = uploadLength(decision, request.headers)
@@ -3395,12 +2857,10 @@ const handle = async (
   const refused = relay(
     {
       credential,
-      ...(isGitDecision(decision) ? { git: true } : {}),
+      git: isGitDecision(decision),
       host: decision.host,
       kind: decision._tag,
-      ...(decision._tag === 'Profile' && decision.redirects === 'return'
-        ? { redirects: true }
-        : {}),
+      redirects: decision._tag === 'Profile' && decision.redirects === 'return',
       scope,
     },
     upstream.status,
@@ -3977,7 +3437,7 @@ const listen = (
     // pauses while the model works, which nothing here means to bound.
     idleTimeout: 0,
     // Unbounded, so that the limit a body meets is its upstream's, as
-    // `profiles` says. Bun's default would refuse a body past 128 MiB with a
+    // this file's head says. Bun's default would refuse a body past 128 MiB with a
     // bare 413, before any of this file runs.
     maxRequestBodySize: Number.MAX_SAFE_INTEGER,
     ...(tls === undefined ? {} : { tls }),
@@ -3994,16 +3454,15 @@ const grantFacts = (grant: Grant): Readonly<Record<string, Fact>> =>
         profile: grant.profile,
         server: grant.name,
       }
-    : isGitGrant(grant)
-      ? { credential: grant.credential, profile: grant.profile, repos: grant.repos }
-      : {
-          credential: grant.credential,
-          hosts: Object.keys(grant.hosts).toSorted(),
-          profile: grant.profile,
-          sets: [
-            ...new Set(Object.values(grant.hosts).flatMap(at => at.allow.map(rule => rule.set))),
-          ].toSorted(),
-        }
+    : {
+        credential: grant.credential,
+        hosts: Object.keys(grant.hosts).toSorted(),
+        profile: grant.profile,
+        ...(grant.repos === undefined ? {} : { repos: Object.keys(grant.repos).toSorted() }),
+        sets: [
+          ...new Set(Object.values(grant.hosts).flatMap(at => at.allow.map(rule => rule.set))),
+        ].toSorted(),
+      }
 
 const main = (): void => {
   const argv = process.argv.slice(2)

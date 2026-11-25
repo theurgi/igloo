@@ -154,7 +154,6 @@ export const fromConfig = (
   // the whole of its egress.
   const broker = grants.length > 0 || Broker.tunnels(tunnel)
   const brokerEnv = {
-    ...Broker.guestEnvironment(grants),
     ...placeholders,
     // Both spellings, because half the ecosystem reads one and half the other,
     // and `NODE_USE_ENV_PROXY` because Node's own `fetch` ignores the variables
@@ -218,9 +217,7 @@ export const fromConfig = (
       .map(grant =>
         Broker.isModelServerGrant(grant)
           ? `${grant.profile} ${grant.name} port=${String(grant.port)}${grant.credential === undefined ? '' : ` ${grant.credential}`}`
-          : Broker.isProfileGrant(grant)
-            ? profileLine(grant)
-            : `${grant.profile} ${grant.credential} repos=${grant.repos.toSorted().join(',')}${grant.write === undefined ? '' : ` write=${grant.write.toSorted().join(',')}`}`,
+          : profileLine(grant),
       )
       .toSorted(),
     `brokerMem=${config.policy.brokerMem === undefined ? 'unbounded' : String(config.policy.brokerMem)}`,

@@ -64,7 +64,7 @@ export interface RunnerSpec {
   readonly disk: { readonly image: string } | undefined
   /**
    * The hosts the broker answers git for, whose SSH remotes the guest rewrites
-   * to HTTPS, or `undefined` for a VM with no git grant.
+   * to HTTPS, or `undefined` for a VM granted no host with git's reader.
    */
   readonly gitBroker: { readonly hosts: readonly string[] } | undefined
   readonly hostName: string

@@ -13,7 +13,6 @@ import { isIPv4, isIPv6 } from 'node:net'
 import * as path from 'node:path'
 
 import * as BootLog from './BootLog.ts'
-import { profiles, tlsNamesCovered } from './broker.ts'
 import * as Flake from './Flake.ts'
 import * as Profiles from './Profiles.ts'
 import * as Project from './Project.ts'
@@ -98,9 +97,9 @@ const ordinary = [
 ]
 
 /**
- * The profiles igloo itself has, by name and host: those its broker's code
- * answers, and those it ships. A user's or a project's profile is not among
- * them, and its hosts are replaced in a report like any other host.
+ * The profiles igloo itself has, by name and host: those it ships. A user's
+ * or a project's profile is not among them, and its hosts are replaced in a
+ * report like any other host.
  */
 export interface Named {
   readonly hosts: readonly string[]
@@ -108,16 +107,12 @@ export interface Named {
 }
 
 /**
- * igloo's own profiles, from those it ships, or its code's alone where they
- * could not be read: a report is for what went wrong, which may be that.
+ * igloo's own profiles, from those it ships, or none where they could not be
+ * read: a report is for what went wrong, which may be that.
  */
 export const namedBy = (shipped: ReadonlyMap<string, Profiles.Profile> | undefined): Named => ({
-  hosts: [
-    ...Object.values(profiles).map(profile => profile.host),
-    ...tlsNamesCovered,
-    ...(shipped === undefined ? [] : Profiles.hostsOf(shipped)),
-  ],
-  names: [...Object.keys(profiles), ...(shipped?.keys() ?? [])],
+  hosts: shipped === undefined ? [] : Profiles.hostsOf(shipped),
+  names: [...(shipped?.keys() ?? [])],
 })
 
 /** What a report keeps as igloo's own, for the profiles in `named`. */

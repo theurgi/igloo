@@ -176,17 +176,14 @@ const specFor = Effect.fnUntraced(function* (input: { readonly cid: Option.Optio
   const runtime = yield* runtimeDir(project.id)
   // Made, or found, only for a broker that answers a name: its authority is
   // built into the runner, so it has to exist before the plan does. It covers
-  // every name igloo's own code and profiles are answered at, granted or not,
-  // so granting one of them changes neither the certificate nor the
-  // authority; and the hosts of the user layer's and the project's profiles
-  // this project grants, so a change to those makes both again, which
-  // rebuilds the guest once.
+  // every host of igloo's profiles, granted or not, so granting one of them
+  // changes neither the certificate nor the authority; and the hosts of the
+  // user layer's and the project's profiles this project grants, so a change
+  // to those makes both again, which rebuilds the guest once.
   const answered = Broker.tlsNames(Spec.grantsOf(config.policy))
   const tls =
     answered.length > 0
-      ? yield* Tls.ensure(project.tlsDir, [
-          ...new Set([...Broker.tlsNamesCovered, ...Profiles.hostsOf(shipped), ...answered]),
-        ])
+      ? yield* Tls.ensure(project.tlsDir, [...new Set([...Profiles.hostsOf(shipped), ...answered])])
       : undefined
   const plan = Spec.fromConfig(config, {
     iglooFlakePath,
