@@ -234,9 +234,10 @@ cached, and the host holds that memory for as long as the guest keeps the cache.
 carries its requests, as a positive whole number of MiB. A bounded broker uses no swap, so the bound
 is all the memory it has. Like `mem`, a project's value replaces the user layer's. Unset in both,
 the broker has no bound, as an agent running on the host would have none. Its memory grows with how
-many requests and tunnels the guest has open at once, not with how much they carry, and a bound set
-too low fails the requests that reach it. Either way, if memory runs out the kernel kills the broker
-before anything else, and its unit starts it again. See
+many requests and tunnels the guest has open at once, not with how much they carry, but for a call
+to a model server whose `models` are listed, which it holds whole while it reads it: up to about 30
+MiB for one at the 8 MiB limit. A bound set too low fails the requests that reach it. Either way, if
+memory runs out the kernel kills the broker before anything else, and its unit starts it again. See
 [Troubleshooting](troubleshooting.md#when-the-broker-is-killed).
 
 **`disk`** gives the VM a disk of its own, mounted in the guest at `/persist`, as a positive whole
@@ -294,7 +295,8 @@ reach through a profile has to be in `tunnelCeiling`, but for igloo's own, as ig
 
 **`modelServers`** names model servers listening on this machine's loopback, such as llama-server or
 Ollama, that the VM may call through the broker. Like `secrets`, a project's own go to that project,
-and the user layer's to the projects each one lists.
+and the user layer's to the projects each one lists. A server's `models` limits the models a call to
+it may name, for a server such as llama-swap that loads whichever model is asked for.
 [Model servers on this machine](credentials.md#model-servers-on-this-machine) covers them.
 
 ### A user layer's policy

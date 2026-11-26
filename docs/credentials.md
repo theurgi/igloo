@@ -647,6 +647,7 @@ Or in the user layer, for the projects it lists:
 {
   programs.igloo.policy.modelServers.llama-swap = {
     port = 8080;
+    models = [ "Qwen3.5-0.8B" "Qwen3.5-2B" ];
     projects = [ "${config.home.homeDirectory}/projects/demo" ];
   };
 }
@@ -656,6 +657,7 @@ Or in the user layer, for the projects it lists:
 | ---------- | ------------------------------------------------------------------------------------------------------------- |
 | `port`     | The port the server listens on at `127.0.0.1`.                                                                |
 | `key`      | Only for a server that requires one: `{ file = "…"; }` or `{ command = [ … ]; }`.                             |
+| `models`   | The only models a call may name, as the server names them. Unset, a call may name any.                        |
 | `projects` | User layer only: the projects' root directories, as for [`secrets`](#in-the-user-layer-for-several-projects). |
 
 The name, `llama-swap` above, is lowercase letters, digits and `-`. It is part of the URL the guest
@@ -673,6 +675,14 @@ is read the way a credential's [source](#sources) is, under the same rules.
   endpoints read other clients' recorded requests and its logs, unload models, and pass any request
   through to the server behind it; llama-server's own save its state to files and restore it, load
   and unload models, and change its settings.
+- **Models:** with `models`, the broker reads each call's body and refuses one whose `model` is not
+  listed, comparing names exactly, with a `403` naming the model, before the server sees it.
+  `GET v1/models` then lists only those. A call is read whole, up to 8 MiB, and refused past that
+  with a `413`. So that the broker and the server read the same call, it is refused unless it is
+  sent as `application/json`, with no parameter but `charset=utf-8` and no `Content-Encoding`, and
+  is one JSON object in UTF-8, with no byte-order mark, no key named twice in any object, and a
+  `model` that is a string. The broker's log names the model of each call, passed or refused.
+  Without `models`, the body is streamed to the server unread.
 - **Key:** with `key`, the broker sends it as a bearer token; without, it sends no credential. The
   guest's own `Authorization` is dropped either way. A server answering `401` comes back as a `403`
   saying it wants a key.
@@ -687,9 +697,12 @@ is read the way a credential's [source](#sources) is, under the same rules.
 The broker passes a model call's body on as the guest wrote it, so what the request asks of the
 server is the server's to decide:
 
-- **Models.** A request may name any model the server has, and loading one costs this machine's
-  memory. A server that loads models on demand, as llama-swap does, loads whichever is named. Bound
-  that in the server's own configuration.
+- **Models.** Without `models`, a request may name any model the server has, and loading one costs
+  this machine's memory. A server that loads models on demand, as llama-swap does, loads whichever
+  is named, and may stop the model another client is using to do it. Set `models` to the ones the VM
+  may load: llama-swap has no way to limit one client to some of its models. With `models` set, a
+  listed name is still the server's to resolve: an alias on it in the server's configuration loads
+  whatever the alias points to.
 - **Fetches.** Some servers reach the network for a request, from this machine: past the tunnel's
   address checks, LAN included. llama-server downloads an image, audio or video given as an
   `http(s)` URL, in a chat message or an embedding or reranking input, when it runs with a
@@ -744,11 +757,12 @@ A key written in either file is not used: the broker drops it.
 The broker decides from a request's method, its path and the name it was sent to where it goes and
 which credential it carries. It does not read the body, which it streams upstream as it arrives, but
 for a GraphQL request at a rule that reads one, as Runpod's does, to refuse a mutation
-([`runpod`](#runpod)). So **the model** is not checked: any model passes, or none, with whatever
-`max_tokens` the request sets. Nor are **the provider's own tools**: a request may ask for web
-search, web fetch, code execution or an MCP connector, use OpenRouter's plugins or a `:online`
-model, or give an image by URL for the provider to download, under every
-[network mode](network.md#network-modes).
+([`runpod`](#runpod)), and a call to a model server whose `models` are listed, to refuse a model not
+listed ([model servers](#model-servers-on-this-machine)). So **the model** is not checked at a
+provider: any model passes, or none, with whatever `max_tokens` the request sets. Nor are **the
+provider's own tools**: a request may ask for web search, web fetch, code execution or an MCP
+connector, use OpenRouter's plugins or a `:online` model, or give an image by URL for the provider
+to download, under every [network mode](network.md#network-modes).
 
 What a provider does on a model's behalf is the provider's. Under `restricted` that means workspace
 data can leave through a provider-side tool to any address, past the destinations `tunnel` lists.
@@ -794,12 +808,13 @@ On every brokered request:
   `remote: broker: …`.
 - Every refusal the broker writes itself carries `x-should-retry: false`, except the one that may
   pass: an upstream that did not answer.
-- No request body is refused for its size, but a GraphQL request a rule reads, which is read whole
-  and refused past 256 KiB. The upstream's own limit is the one a body meets, and at a profile's
-  host the upstream's refusal comes back as it gave it. A call is given up on when its upstream has
-  not answered within 10 minutes of any request to a profile's host or a model server, or 30 seconds
-  of a read no grant covers, or when the guest leaves before it answers; a body still being sent
-  then is cut off.
+- No request body is refused for its size, but the two the broker reads whole: a GraphQL request a
+  rule reads, refused past 256 KiB, and a call to a model server whose `models` are listed, refused
+  past 8 MiB. The upstream's own limit is the one a body meets, and at a profile's host the
+  upstream's refusal comes back as it gave it. A call is given up on when its upstream has not
+  answered within 10 minutes of any request to a profile's host or a model server, or 30 seconds of
+  a read no grant covers, or when the guest leaves before it answers; a body still being sent then
+  is cut off.
 - The broker serves as many requests and tunnels at once as the guest opens. Its memory is not
   bounded unless you set `brokerMem`; see [Configuration](configuration.md#policy-settings) and
   [when the broker is killed](troubleshooting.md#when-the-broker-is-killed).

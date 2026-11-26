@@ -2045,19 +2045,35 @@ EOF
 
 	# A stand-in for a model server on this machine's loopback, at a port nothing
 	# else holds. It records every request that reaches it, so one the broker
-	# refused shows as absent.
+	# refused shows as absent. It has two models, and its grant lists one.
 	cat >"$scratch/model-server.ts" <<-'EOF'
 		// model-server <log> — listen on a loopback port, print it, and answer as an
-		// OpenAI-compatible server would: its model listing, and a 404 for anything
-		// else. Each request's method, path and Authorization go to <log>.
+		// OpenAI-compatible server would: its model listing, a chat completion, and
+		// a 404 for anything else. Each request's method, path and Authorization go
+		// to <log>, and a POST's model and size in bytes after them.
 		import { appendFileSync } from 'node:fs'
 		const server = Bun.serve({
-			fetch(request) {
+			async fetch(request) {
 				const { pathname } = new URL(request.url)
 				const authorization = request.headers.get('authorization') ?? '-'
-				appendFileSync(process.argv[2] ?? '/dev/null', `${request.method} ${pathname} ${authorization}\n`)
-				return pathname === '/v1/models'
-					? Response.json({ data: [{ id: 'igloo-verify-model', object: 'model' }], object: 'list' })
+				const body = request.method === 'POST' ? new Uint8Array(await request.arrayBuffer()) : undefined
+				let model = '-'
+				try {
+					model = String(JSON.parse(new TextDecoder().decode(body)).model)
+				} catch {}
+				const call = body === undefined ? '' : ` ${model} ${body.byteLength}`
+				appendFileSync(process.argv[2] ?? '/dev/null', `${request.method} ${pathname} ${authorization}${call}\n`)
+				if (pathname === '/v1/models') {
+					return Response.json({
+						data: [
+							{ id: 'igloo-verify-model', object: 'model' },
+							{ id: 'igloo-verify-unlisted', object: 'model' },
+						],
+						object: 'list',
+					})
+				}
+				return pathname === '/v1/chat/completions' && request.method === 'POST'
+					? Response.json({ choices: [], model, object: 'chat.completion' })
 					: new Response('404 page not found\n', { status: 404 })
 			},
 			hostname: '127.0.0.1',
@@ -2118,6 +2134,7 @@ EOF
   tunnelCeiling = [ "gitlab.com" ];
   modelServers.igloo-verify = {
     port = $model_port;
+    models = [ "igloo-verify-model" ];
     projects = [ "$project" ];
   };
 }
@@ -2997,7 +3014,7 @@ EOF
 				cat "$scratch/model-server.log" 2>&1
 			} >"$out/artifacts/model-server.txt" 2>&1
 
-			if grep -q 'igloo-verify-model' "$out/artifacts/model-server.txt" &&
+			if grep -q '"igloo-verify-model"' "$out/artifacts/model-server.txt" &&
 				grep -qx 'GET /v1/models -' "$scratch/model-server.log"; then
 				verdict PASS model-server-reached "a guest's model listing reaches a server on this machine's loopback, through the broker under Landlock, with no credential sent"
 			else
@@ -3009,6 +3026,42 @@ EOF
 				verdict PASS model-server-endpoints "an endpoint of the server's that is not a model call stops at the broker, and never reaches the server"
 			else
 				verdict FAIL model-server-endpoints "read artifacts/model-server.txt"
+			fi
+
+			# The grant lists one of the stand-in's two models: a call naming it
+			# reaches the server, one naming the other stops at the broker and
+			# never reaches it, and the listing names only the one.
+			post_model() { # post_model <model>
+				guest "bash -s $1" <<'GUEST'
+timeout 30 curl -sS --noproxy '*' -w ' status %{http_code}\n' -H 'Content-Type: application/json' \
+	--data-binary "{\"model\":\"$1\",\"messages\":[]}" \
+	http://127.0.0.1:3128/local/igloo-verify/v1/chat/completions 2>&1 | head -c 600
+GUEST
+			}
+			{
+				echo "=== a call naming the listed model"
+				post_model igloo-verify-model 2>&1
+				echo
+				echo "=== a call naming the model the grant does not list"
+				post_model igloo-verify-unlisted 2>&1
+				echo
+				echo "=== what reached the server"
+				cat "$scratch/model-server.log" 2>&1
+			} >"$out/artifacts/model-server-models.txt" 2>&1
+			if grep -q '^POST /v1/chat/completions - igloo-verify-model ' "$scratch/model-server.log" &&
+				grep -q 'igloo-verify-model.* status 200$' "$out/artifacts/model-server-models.txt" &&
+				grep -q 'does not list "igloo-verify-unlisted"' "$out/artifacts/model-server-models.txt" &&
+				grep -qx ' status 403' "$out/artifacts/model-server-models.txt" &&
+				! grep -q 'igloo-verify-unlisted' "$scratch/model-server.log"; then
+				verdict PASS model-server-models "a call naming the model the grant lists reaches the server, and one naming another stops at the broker with a 403 and never reaches it"
+			else
+				verdict FAIL model-server-models "read artifacts/model-server-models.txt, then logs/up-broker/broker.log"
+			fi
+			if grep -q '"igloo-verify-model"' "$out/artifacts/model-server.txt" &&
+				! grep -q 'igloo-verify-unlisted' "$out/artifacts/model-server.txt"; then
+				verdict PASS model-server-listing "the guest's model listing names the model the grant lists, and not the server's other"
+			else
+				verdict FAIL model-server-listing "read artifacts/model-server.txt"
 			fi
 
 			# -------------------------------------------- the size of a body --
@@ -3514,6 +3567,11 @@ EOF
 			cat >"$broker_config/igloo/igloo-policy.nix" <<EOF
 {
   brokerMem = 64;
+  modelServers.igloo-verify = {
+    port = $model_port;
+    models = [ "igloo-verify-model" ];
+    projects = [ "$project" ];
+  };
   secrets.IGLOO_VERIFY_BROKERED = {
     source = { file = "$broker_config/from-file"; };
     mode = "broker";
@@ -3718,7 +3776,9 @@ EOF
 				# `brokerMem` bounds the broker's unit, and a broker past its bound is
 				# killed for memory and started again. A bound takes swap away with it,
 				# so a host with swap kills it too rather than paging it out. The broker
-				# streams what it carries, so no one request takes it past; instead its
+				# streams most of what it carries, and holds whole a call to a model
+				# server whose models are listed, up to its limit: one call at that
+				# limit passes under the bound and leaves the broker running. Then its
 				# cgroup is given a bound below what it holds. Its unit starts it again
 				# in a fresh cgroup, under `brokerMem`. Last, since it kills the broker.
 				internet_broker=$(own_units 'igloo-*-broker.service' | head -1)
@@ -3726,6 +3786,18 @@ EOF
 					broker_cgroup=$(systemctl --user show -P ControlGroup "$internet_broker")
 					slice_events="/sys/fs/cgroup${broker_cgroup%/*}/memory.events"
 					{
+						echo "=== a model call at the limit, 8 MiB, under the bound"
+						held_restarts=$(systemctl --user show -P NRestarts "$internet_broker")
+						guest 'bash -s' <<'GUEST' 2>&1
+start='{"model":"igloo-verify-model","messages":[],"pad":"' end='"}'
+{ printf %s "$start"; head -c $((8 * 1024 * 1024 - ${#start} - ${#end})) /dev/zero | tr '\0' a; printf %s "$end"; } |
+	timeout 60 curl -sS --noproxy '*' -o /dev/null -w 'held status %{http_code}\n' -H 'Content-Type: application/json' \
+		--data-binary @- http://127.0.0.1:3128/local/igloo-verify/v1/chat/completions 2>&1 | head -c 600
+GUEST
+						echo "restarts: $held_restarts before, $(systemctl --user show -P NRestarts "$internet_broker") after"
+						echo "peak: $(cat "/sys/fs/cgroup$broker_cgroup/memory.peak" 2>&1)"
+						grep -c "^POST /v1/chat/completions - igloo-verify-model 8388608$" "$scratch/model-server.log" 2>&1 | sed 's/^/reached the server whole: /'
+						echo
 						echo "=== the bound"
 						systemctl --user show "$internet_broker" -p MemoryMax -p MemorySwapMax
 						echo
@@ -3746,6 +3818,14 @@ EOF
 						echo "=== igloo ls"
 						own_ls 2>&1
 					} >"$out/artifacts/broker-memory.txt" 2>&1
+					held_line=$(grep -m1 '^restarts: ' "$out/artifacts/broker-memory.txt")
+					if grep -qx 'held status 200' "$out/artifacts/broker-memory.txt" &&
+						grep -qx 'reached the server whole: [1-9][0-9]*' "$out/artifacts/broker-memory.txt" &&
+						[ -n "$held_line" ] && [ "$(awk '{print $2}' <<<"$held_line")" = "$(awk '{print $4}' <<<"$held_line")" ]; then
+						verdict PASS broker-mem-held "a model call at the 8 MiB limit, held whole to check its model, reaches the server under brokerMem = 64 and leaves the broker running"
+					else
+						verdict FAIL broker-mem-held "a model call at the limit did not pass under brokerMem, or the broker restarted — read artifacts/broker-memory.txt"
+					fi
 					if grep -qx 'MemoryMax=67108864' "$out/artifacts/broker-memory.txt" &&
 						grep -qx 'MemorySwapMax=0' "$out/artifacts/broker-memory.txt"; then
 						verdict PASS broker-mem-bound "brokerMem in the user layer bounds the broker's unit, swap included, and nothing else does"

@@ -1411,6 +1411,32 @@ describe('Config.compose: modelServers', () => {
     )
   })
 
+  it('reads the models a call may name, in either layer', () => {
+    const models = ['Qwen3.5-0.8B', 'Qwen3.5-2B']
+    assert.deepStrictEqual(composed({ project: ownServer({ models }) }).modelServers, [
+      { layer: 'project', models, name: 'llama-swap', port: 8080 },
+    ])
+    assert.deepStrictEqual(composed({ project: {}, user: sharedServer({ models }) }).modelServers, [
+      { layer: 'user', models, name: 'llama-swap', port: 8080 },
+    ])
+  })
+
+  it('refuses models that are not a list of names, and a list of none', () => {
+    for (const models of ['Qwen3.5-2B', [7], [''], { a: 'Qwen3.5-2B' }, null]) {
+      assert.include(
+        refused({ project: ownServer({ models }) }),
+        '`modelServers.llama-swap.models` must be a list of non-empty strings',
+        JSON.stringify(models),
+      )
+    }
+    for (const written of [
+      { project: ownServer({ models: [] }) },
+      { project: {}, user: sharedServer({ models: [] }) },
+    ]) {
+      assert.include(refused(written), '`modelServers.llama-swap.models` lists no model')
+    }
+  })
+
   it('takes a port and a key, and no address, since the server is always on loopback', () => {
     for (const field of ['host', 'url', 'address', 'baseUrl']) {
       const message = refused({ project: ownServer({ [field]: '192.168.1.10' }) })

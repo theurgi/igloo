@@ -130,11 +130,13 @@ interface Defined {
  * A model server on this machine's loopback that this project's broker may
  * call: one its own layer declared, or one the user layer declared and gave to
  * it. `key` is where the key it takes is read from, absent for a server that
- * takes none.
+ * takes none. `models` are the only models a call to it may name, where it
+ * lists any; absent, a call may name any.
  */
 export interface ModelServerDeclaration {
   readonly key?: Secrets.Source
   readonly layer: 'project' | 'user'
+  readonly models?: readonly string[]
   readonly name: string
   readonly port: number
 }
@@ -1085,9 +1087,10 @@ interface ServerEntry {
 }
 
 /**
- * One layer's `modelServers`: a port on this machine's loopback each, and
- * where the key is read from for a server that wants one. The address is not a
- * setting, so nothing written here can send a request off this machine.
+ * One layer's `modelServers`: a port on this machine's loopback each, where
+ * the key is read from for a server that wants one, and the models a call may
+ * name, for a server that would load any model it is asked for. The address is
+ * not a setting, so nothing written here can send a request off this machine.
  */
 const readServers = (
   where: string,
@@ -1116,11 +1119,18 @@ const readServers = (
         )
       }
       for (const key of Object.keys(entry)) {
-        if (key === 'port' || key === 'key' || (key === 'projects' && layer === 'user')) continue
+        if (
+          key === 'port' ||
+          key === 'key' ||
+          key === 'models' ||
+          (key === 'projects' && layer === 'user')
+        ) {
+          continue
+        }
         return yield* bad(
           key === 'projects'
             ? `${where}: \`${setting}.projects\` is for a model server the user layer gives to several projects. One declared here is this project's alone, so leave it out.`
-            : `${where}: \`${setting}.${key}\` is not a setting. A model server takes \`port\`${layer === 'user' ? ', `projects`' : ''} and, for one that wants a key, \`key\`. It is always reached on this machine's loopback, so there is no address to set.`,
+            : `${where}: \`${setting}.${key}\` is not a setting. A model server takes \`port\`${layer === 'user' ? ', `projects`' : ''}, \`models\` and, for one that wants a key, \`key\`. It is always reached on this machine's loopback, so there is no address to set.`,
         )
       }
       const port = entry['port']
@@ -1131,13 +1141,37 @@ const readServers = (
       }
       const key =
         'key' in entry ? yield* readSource(where, `${setting}.key`, entry['key']) : undefined
+      const models =
+        'models' in entry
+          ? yield* readModels(where, `${setting}.models`, entry['models'])
+          : undefined
       servers.set(name, {
-        body: { ...(key === undefined ? {} : { key }), port },
+        body: {
+          ...(key === undefined ? {} : { key }),
+          ...(models === undefined ? {} : { models }),
+          port,
+        },
         projects: layer === 'user' ? yield* readProjects(where, setting, entry['projects']) : [],
       })
     }
     return servers
   })
+
+/**
+ * The models a call to a model server may name: a list of at least one, since
+ * a list of none would refuse every call while reading as a limit, and each a
+ * name the server knows a model by, which the broker compares exactly.
+ */
+const readModels = (
+  where: string,
+  setting: string,
+  raw: unknown,
+): Result.Result<readonly string[], ConfigError> =>
+  Array.isArray(raw) && raw.length === 0
+    ? bad(
+        `${where}: \`${setting}\` lists no model, which would refuse every call. List the models a call may name, as the server names them, or leave \`models\` out to allow any.`,
+      )
+    : readStringList(where, setting, raw)
 
 /**
  * Which model servers this project's broker may call: the ones its own layer

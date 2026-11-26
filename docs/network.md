@@ -203,8 +203,9 @@ written by the same person the ports are published to.
   search the web or connect to an MCP server, and the provider reaches any address it likes, so
   workspace data can leave that way. Turn those tools off in the provider's settings or the agent's
   own if that matters.
-- `restricted` stops at a model server too. What the server does for a request is its own, and some
-  servers fetch for one, from this machine's network: see
+- `restricted` stops at a model server too. What the server does for a request is its own, which
+  model it loads among it unless the server's `models` are listed, and some servers fetch for one,
+  from this machine's network: see
   [what a model server can still reach](credentials.md#what-a-model-server-can-still-reach).
 - [`igloo fallback`](troubleshooting.md#igloo-fallback) runs on the host's own network, with none of
   this applied.

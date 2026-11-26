@@ -410,6 +410,18 @@ describe('Spec.fromConfig, for a model server', () => {
     assert.notInclude(JSON.stringify(plan.runner), 'broker-credentials')
   })
 
+  it('grants the broker the models a server’s declaration lists', () => {
+    const plan = planFor({ modelServers: [{ ...keyless, models: ['Qwen3.5-0.8B', 'Qwen3.5-2B'] }] })
+    assert.deepStrictEqual(plan.grants, [
+      {
+        models: ['Qwen3.5-0.8B', 'Qwen3.5-2B'],
+        name: 'llama-swap',
+        port: 8080,
+        profile: 'model-server',
+      },
+    ])
+  })
+
   it('records the server, its port and its key’s name as what the broker was started with', () => {
     const base = planFor({ modelServers: [keyless] })
     assert.include(base.hostSide, 'model-server llama-swap port=8080')
@@ -417,9 +429,14 @@ describe('Spec.fromConfig, for a model server', () => {
       planFor({ modelServers: [{ ...keyless, port: 8081 }] }),
       planFor({ modelServers: [{ ...keyless, name: 'llama' }] }),
       planFor({ modelServers: [{ ...keyless, key: file('/k') }] }),
+      planFor({ modelServers: [{ ...keyless, models: ['Qwen3.5-2B'] }] }),
     ]) {
       assert.notStrictEqual(changed.hostSide, base.hostSide)
     }
+    assert.strictEqual(
+      planFor({ modelServers: [{ ...keyless, models: ['a', 'b'] }] }).hostSide,
+      planFor({ modelServers: [{ ...keyless, models: ['b', 'a'] }] }).hostSide,
+    )
     assert.strictEqual(
       planFor({ modelServers: [keyless, keyed] }).hostSide,
       planFor({ modelServers: [keyed, keyless] }).hostSide,

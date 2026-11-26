@@ -1550,6 +1550,27 @@ describe('Broker.decide, for a model server', () => {
     )
   })
 
+  it('carries no query to a call, where a server could read another model from it', () => {
+    const decision = local('/local/llama-swap/v1/chat/completions?model=Qwen3.5-35B-A3B')
+    assert.strictEqual(
+      decision._tag === 'ModelServer' ? decision.upstream : decision._tag,
+      'http://127.0.0.1:8080/v1/chat/completions',
+    )
+  })
+
+  it('carries the models a grant lists, and none for a grant that lists none', () => {
+    const listing: readonly Broker.Grant[] = [
+      { models: ['Qwen3.5-2B'], name: 'llama-swap', port: 8080, profile: 'model-server' },
+    ]
+    const models = (decision: Broker.Decision) =>
+      decision._tag === 'ModelServer' ? decision.models : decision._tag
+    assert.deepStrictEqual(
+      models(Broker.decide(listing, 'POST', `${base}/local/llama-swap/v1/chat/completions`)),
+      ['Qwen3.5-2B'],
+    )
+    assert.isUndefined(models(local('/local/llama-swap/v1/chat/completions')))
+  })
+
   it('cannot be pointed at another address or port by the request', () => {
     for (const target of [
       'http://192.168.1.10:8080/local/llama-swap/v1/chat/completions',
@@ -1825,6 +1846,36 @@ describe('Broker.parseGrants', () => {
       message('[{"credential":"","name":"llama-swap","port":8080,"profile":"model-server"}]'),
       'credential',
     )
+  })
+
+  it('reads the models a model server’s grant lists', () => {
+    assert.deepStrictEqual(
+      Broker.parseGrants(
+        '[{"models":["Qwen3.5-0.8B","Qwen3.5-2B"],"name":"llama-swap","port":8080,"profile":"model-server"}]',
+      ),
+      {
+        grants: [
+          {
+            models: ['Qwen3.5-0.8B', 'Qwen3.5-2B'],
+            name: 'llama-swap',
+            port: 8080,
+            profile: 'model-server',
+          },
+        ],
+      },
+    )
+  })
+
+  it('refuses models that are not a list of names', () => {
+    for (const models of [[], 'Qwen3.5-2B', [''], [7], null, {}]) {
+      assert.include(
+        message(
+          JSON.stringify([{ models, name: 'llama-swap', port: 8080, profile: 'model-server' }]),
+        ),
+        'models are not a list of names',
+        JSON.stringify(models),
+      )
+    }
   })
 
   it('refuses two model servers by one name, which a request could not choose between', () => {
@@ -5163,6 +5214,426 @@ describe('Broker.serveRequests, for a model server', () => {
           assert.strictEqual(response.status, 403)
           assert.strictEqual(response.headers.get('x-should-retry'), 'false')
           assert.include(await response.text(), '127.0.0.1:8080 wants a credential')
+        },
+      ),
+    ))
+})
+
+describe('Broker.scanCall', () => {
+  const scan = (text: string | Uint8Array) =>
+    Broker.scanCall(typeof text === 'string' ? encode(text) : text)
+
+  it('reads the top-level model, as decoded, and no model named deeper', () => {
+    assert.deepStrictEqual(scan(' {"model":"Qwen3.5-2B","stream":true} \n'), {
+      model: 'Qwen3.5-2B',
+    })
+    assert.deepStrictEqual(scan('{"m\\u006fdel":"Qwen3.5-\\u0032B"}'), { model: 'Qwen3.5-2B' })
+    assert.deepStrictEqual(scan('{"messages":[{"model":"x"}],"options":{"model":"y"}}'), {
+      model: undefined,
+    })
+    assert.deepStrictEqual(scan('{"model":7}'), { model: null })
+    assert.deepStrictEqual(scan('{"model":null}'), { model: null })
+  })
+
+  it('finds a key named twice in one object, at any depth, as decoded', () => {
+    for (const text of [
+      '{"model":"a","model":"b"}',
+      '{"model":"a","m\\u006fdel":"b"}',
+      '{"a":{"b":1,"c":{"d":[]},"b":2}}',
+      '{"x":[{"x":1},{"y":[{"z":1,"z":1}]}]}',
+      '{"a":"}","a":"{"}',
+      '{"a\\"":1,"a\\u0022":2}',
+      '{"\\\\":1,"\\u005c":2}',
+    ]) {
+      assert.strictEqual(scan(text), 'repeated', text)
+    }
+  })
+
+  it('passes the same key in different objects, and a value spelled like a key', () => {
+    for (const text of [
+      '{"a":1,"b":{"a":2},"c":[{"a":3},{"a":4}]}',
+      '{"a":"a","b":["a","a"],"c":{"a":"b"}}',
+      '{"a":"x\\"}","b":"\\\\","c":{"a":1}}',
+      '{"tool":1,"tools":2,"Tools":3}',
+      '{"a":[],"b":{},"c":[1,-0.5,2e10,true,false,null,"\\ud83d\\ude00"]}',
+    ]) {
+      assert.isObject(scan(text), text)
+    }
+  })
+
+  it('refuses what is not JSON in UTF-8, a byte-order mark and half a surrogate pair among it', () => {
+    for (const text of [
+      '{"model":"a"',
+      '{"model":"a"}{}',
+      '{"model":"a",}',
+      '{"model" "a"}',
+      '{"a":01}',
+      '{"a":1.}',
+      '{"a":tru}',
+      '{"a":"\\q"}',
+      '{"a":"\t"}',
+      '{"a":"\\ud83d"}',
+      '{"a":"\\ude00"}',
+      "{'model':'a'}",
+    ]) {
+      assert.strictEqual(scan(text), 'invalid', text)
+    }
+    assert.strictEqual(
+      scan(new Uint8Array([...encode('{"a":"'), 0xc3, 0x28, ...encode('"}')])),
+      'invalid',
+    )
+    assert.strictEqual(
+      scan(new Uint8Array([0xef, 0xbb, 0xbf, ...encode('{"model":"a"}')])),
+      'invalid',
+    )
+  })
+
+  it('refuses a value that is not an object', () => {
+    for (const text of ['[{"model":"a"}]', '"model"', '7', 'null', '']) {
+      assert.strictEqual(scan(text), 'not-object', text)
+    }
+  })
+
+  it('reads every text JSON.parse reads the same way, but those it refuses', () => {
+    const atoms = [
+      '{',
+      '}',
+      '[',
+      ']',
+      ',',
+      ':',
+      '"a"',
+      '"model"',
+      '"m\\u006fdel"',
+      '"Q"',
+      '1',
+      '-0.5e3',
+      'true',
+      'null',
+      ' ',
+      '"é"',
+    ]
+    let seed = 1
+    const next = (n: number): number => {
+      seed = (seed * 1103515245 + 12345) % 2147483648
+      return seed % n
+    }
+    for (let round = 0; round < 20_000; round++) {
+      let text = '{'
+      for (let atom = next(10); atom >= 0; atom--) text += atoms[next(atoms.length)] ?? ''
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(text)
+      } catch {
+        assert.isString(scan(text), text)
+        continue
+      }
+      const read = scan(text)
+      if (read === 'repeated') continue
+      const model =
+        typeof parsed === 'object' && parsed !== null && 'model' in parsed
+          ? parsed.model
+          : undefined
+      assert.deepStrictEqual(
+        read,
+        { model: typeof model === 'string' || model === undefined ? model : null },
+        text,
+      )
+    }
+  })
+})
+
+describe('Broker.modelCallHeaders', () => {
+  const refused = (headers: Record<string, string>) =>
+    Broker.modelCallHeaders(new Headers(headers)) !== undefined
+
+  it('passes JSON, with a charset of UTF-8 or none', () => {
+    for (const type of [
+      'application/json',
+      'application/json; charset=utf-8',
+      'application/json;charset="UTF-8"',
+    ]) {
+      assert.isFalse(refused({ 'content-type': type }), type)
+    }
+  })
+
+  it('refuses another type, a JSON type a server matching its text would not read as JSON, and another parameter', () => {
+    for (const type of [
+      'application/x-www-form-urlencoded',
+      'multipart/form-data; boundary=x',
+      'text/plain',
+      'Application/JSON',
+      'application/json-seq',
+      'text/plain; x=application/json',
+      'application/json; charset=latin1',
+      'application/json; charset=utf-8; boundary=x',
+      'application/json, application/json',
+    ]) {
+      assert.isTrue(refused({ 'content-type': type }), type)
+    }
+    assert.isTrue(refused({}))
+  })
+
+  it('refuses any Content-Encoding', () => {
+    for (const encoding of ['gzip', 'identity', 'br']) {
+      assert.isTrue(refused({ 'content-encoding': encoding, 'content-type': 'application/json' }))
+    }
+  })
+})
+
+describe('Broker.listedModels', () => {
+  const models = ['Qwen3.5-0.8B', 'Qwen3.5-2B']
+
+  it('keeps only the listed models, compared exactly, and the rest of the listing', () => {
+    const listing = {
+      data: [
+        { created: 1, id: 'Qwen3.5-0.8B', object: 'model', owned_by: 'llama-swap' },
+        { id: 'Qwen3.5-35B-A3B', object: 'model' },
+        { id: 'qwen3.5-2b', object: 'model' },
+        { id: 'Qwen3.5-2B', object: 'model' },
+      ],
+      object: 'list',
+    }
+    const listed = Broker.listedModels(JSON.stringify(listing), models)
+    assert.deepStrictEqual('body' in listed ? JSON.parse(listed.body) : listed, {
+      data: [
+        { created: 1, id: 'Qwen3.5-0.8B', object: 'model', owned_by: 'llama-swap' },
+        { id: 'Qwen3.5-2B', object: 'model' },
+      ],
+      object: 'list',
+    })
+  })
+
+  it('refuses a listing it cannot filter', () => {
+    for (const text of [
+      'not json',
+      '[]',
+      '{"object":"list"}',
+      '{"data":{}}',
+      '{"data":[{"name":"Qwen3.5-2B"}]}',
+      '{"data":[{"id":7}]}',
+      '{"data":["Qwen3.5-2B"]}',
+    ]) {
+      assert.property(Broker.listedModels(text, models), 'reason', text)
+    }
+  })
+})
+
+describe('Broker.serveRequests, for a model server whose models are listed', () => {
+  const listing: readonly Broker.Grant[] = [
+    {
+      models: ['Qwen3.5-0.8B', 'Qwen3.5-2B'],
+      name: 'llama-swap',
+      port: 8080,
+      profile: 'model-server',
+    },
+  ]
+  const sent: Array<{
+    readonly body: Uint8Array
+    readonly init: RequestInit
+    readonly url: string
+  }> = []
+  const server = async (url: string, init: RequestInit): Promise<Response> => {
+    sent.push({ body: new Uint8Array(await new Response(init.body).arrayBuffer()), init, url })
+    return new Response('data: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } })
+  }
+  const json = { 'content-type': 'application/json' }
+  const post = (
+    broker: Served,
+    body: string | Uint8Array,
+    headers: Record<string, string> = json,
+    path = 'v1/chat/completions',
+  ) =>
+    broker.fetch(
+      new Request(`http://broker/local/llama-swap/${path}`, { body, headers, method: 'POST' }),
+    )
+  const events = (audited: ReadonlyArray<unknown>, event: string) =>
+    audited.filter(
+      (line): line is Record<string, unknown> =>
+        typeof line === 'object' && line !== null && 'event' in line && line.event === event,
+    )
+
+  it('sends a call naming a listed model on byte for byte, and logs the model', () => {
+    sent.length = 0
+    return auditing(audited =>
+      serving(listing, new Map(), server, async broker => {
+        const body = encode(
+          '{ "model" : "Qwen3.5-2B",\n "messages": [{"content": "\\u00e9 é 1e5"}] }',
+        )
+        for (const path of [
+          'v1/chat/completions',
+          'v1/responses',
+          'v1/embeddings',
+          'v1/rerank',
+          'v1/systemone',
+        ]) {
+          const response = await post(
+            broker,
+            body,
+            { 'content-type': 'application/json; charset=utf-8' },
+            path,
+          )
+          assert.strictEqual(response.status, 200, path)
+          await response.text()
+        }
+        assert.strictEqual(sent.length, 5)
+        for (const { body: received } of sent) assert.deepStrictEqual(received, body)
+        assert.strictEqual(
+          new Headers(sent[0]?.init.headers).get('content-type'),
+          'application/json; charset=utf-8',
+        )
+        assert.deepStrictEqual(
+          events(audited, 'allow').map(({ model, server: name }) => ({ model, name })),
+          Array.from({ length: 5 }, () => ({ model: 'Qwen3.5-2B', name: 'llama-swap' })),
+        )
+      }),
+    )
+  })
+
+  it('refuses a call naming a model the policy does not list, naming it, before the server sees it', () => {
+    sent.length = 0
+    return auditing(audited =>
+      serving(listing, new Map(), server, async broker => {
+        const response = await post(broker, '{"model":"Qwen3.5-35B-A3B","messages":[]}')
+        assert.strictEqual(response.status, 403)
+        assert.strictEqual(response.headers.get('x-should-retry'), 'false')
+        const text = await response.text()
+        assert.include(text, '"Qwen3.5-35B-A3B"')
+        assert.include(text, "this VM's policy does not list")
+        assert.strictEqual(sent.length, 0)
+        assert.deepStrictEqual(
+          events(audited, 'deny').map(({ model, server: name, status }) => ({
+            model,
+            name,
+            status,
+          })),
+          [{ model: 'Qwen3.5-35B-A3B', name: 'llama-swap', status: 403 }],
+        )
+      }),
+    )
+  })
+
+  it('refuses a call two parsers could read differently, before the server sees it', () => {
+    sent.length = 0
+    const refusals: ReadonlyArray<
+      readonly [string, string | Uint8Array, Record<string, string>, number]
+    > = [
+      [
+        'a form carrying another model',
+        'model=Qwen3.5-2B&x={"model":"Qwen3.5-2B","a":"&model=Qwen3.5-35B-A3B&"}',
+        { 'content-type': 'application/x-www-form-urlencoded' },
+        415,
+      ],
+      [
+        'JSON sent as a form',
+        '{"model":"Qwen3.5-2B","a":"&model=Qwen3.5-35B-A3B&"}',
+        { 'content-type': 'application/x-www-form-urlencoded' },
+        415,
+      ],
+      ['no type', encode('{"model":"Qwen3.5-2B"}'), {}, 415],
+      ['an encoding', '{"model":"Qwen3.5-2B"}', { ...json, 'content-encoding': 'gzip' }, 415],
+      [
+        'malformed UTF-8',
+        new Uint8Array([...encode('{"model":"Qwen3.5-2B","a":"'), 0xff, ...encode('"}')]),
+        json,
+        400,
+      ],
+      [
+        'a byte-order mark',
+        new Uint8Array([0xef, 0xbb, 0xbf, ...encode('{"model":"Qwen3.5-2B"}')]),
+        json,
+        400,
+      ],
+      ['a repeated model', '{"model":"Qwen3.5-2B","model":"Qwen3.5-35B-A3B"}', json, 400],
+      [
+        'a repeated model, escaped',
+        '{"model":"Qwen3.5-2B","m\\u006fdel":"Qwen3.5-35B-A3B"}',
+        json,
+        400,
+      ],
+      ['a batch', '[{"model":"Qwen3.5-2B"}]', json, 400],
+      ['no model', '{"messages":[]}', json, 400],
+      ['a model that is not a string', '{"model":["Qwen3.5-2B"]}', json, 400],
+      ['not JSON', '{"model":"Qwen3.5-2B"', json, 400],
+    ]
+    return auditing(() =>
+      serving(listing, new Map(), server, async broker => {
+        for (const [what, body, headers, status] of refusals) {
+          const response = await post(broker, body, headers)
+          assert.strictEqual(response.status, status, what)
+          await response.text()
+        }
+        assert.strictEqual(sent.length, 0)
+      }),
+    )
+  })
+
+  it('refuses a call past the limit with a 413, and sends one at it', () => {
+    sent.length = 0
+    const padded = (bytes: number) => {
+      const head = '{"model":"Qwen3.5-2B","pad":"'
+      return `${head}${'a'.repeat(bytes - head.length - 2)}"}`
+    }
+    return auditing(() =>
+      serving(listing, new Map(), server, async broker => {
+        const past = await post(broker, padded(Broker.modelBodyLimit + 1))
+        assert.strictEqual(past.status, 413)
+        await past.text()
+        assert.strictEqual(sent.length, 0)
+        const at = await post(broker, padded(Broker.modelBodyLimit))
+        assert.strictEqual(at.status, 200)
+        await at.text()
+        assert.strictEqual(sent[0]?.body.byteLength, Broker.modelBodyLimit)
+      }),
+    )
+  })
+
+  it('lists only the listed models', () =>
+    auditing(() =>
+      serving(
+        listing,
+        new Map(),
+        () =>
+          Promise.resolve(
+            Response.json({
+              data: [{ id: 'Qwen3.5-0.8B' }, { id: 'Qwen3.5-35B-A3B' }, { id: 'Qwen3.5-2B' }],
+              object: 'list',
+            }),
+          ),
+        async broker => {
+          const response = await broker.fetch(
+            new Request('http://broker/local/llama-swap/v1/models'),
+          )
+          assert.strictEqual(response.status, 200)
+          assert.strictEqual(response.headers.get('content-type'), 'application/json')
+          assert.deepStrictEqual(await response.json(), {
+            data: [{ id: 'Qwen3.5-0.8B' }, { id: 'Qwen3.5-2B' }],
+            object: 'list',
+          })
+        },
+      ),
+    ))
+
+  it('passes on no listing it cannot filter, and a server’s error as it came', () =>
+    auditing(() =>
+      serving(
+        listing,
+        new Map(),
+        url =>
+          Promise.resolve(
+            url.endsWith('/v1/models')
+              ? new Response('Qwen3.5-35B-A3B\nQwen3.5-2B\n', {
+                  headers: { 'content-type': 'text/plain' },
+                })
+              : new Response('{"error":"loading"}', { status: 503 }),
+          ),
+        async broker => {
+          const unread = await broker.fetch(new Request('http://broker/local/llama-swap/v1/models'))
+          assert.strictEqual(unread.status, 502)
+          assert.notInclude(await unread.text(), 'Qwen3.5-35B-A3B')
+          const failed = await post(broker, '{"model":"Qwen3.5-2B"}')
+          assert.strictEqual(failed.status, 503)
+          assert.strictEqual(await failed.text(), '{"error":"loading"}')
         },
       ),
     ))

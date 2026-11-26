@@ -29,17 +29,19 @@
  * was addressed to as well, which stands as the path's first segment; a
  * profile's hosts are answered by name alone. Its body is streamed upstream as
  * it arrives and never read: what a service does with it, the tools a provider
- * runs on a model's behalf included, is the service's. One body is read: a
+ * runs on a model's behalf included, is the service's. Two bodies are read: a
  * GraphQL request at a rule with GraphQL's reader, where a query and a
  * mutation share a path, so only the body can say which it is
- * (`graphqlQuery`).
+ * (`graphqlQuery`); and a call to a model server whose grant lists its
+ * models, which names the model the server loads only in its body
+ * (`modelCall`).
  *
- * No grant limits a body's size. A body is streamed, so the broker holds
+ * No other body's size is limited. A body is streamed, so the broker holds
  * little of it at once however large it is, and the upstream's own limit is
  * the one that applies: a service's refusal reaches the guest as the service
  * gave it. A body that never ends is ended by `headerTimeoutMs`, or by an
- * upstream that answers before it has all of it. The one body read, a GraphQL
- * request's, is held whole, and so is held to `graphqlBodyLimit`.
+ * upstream that answers before it has all of it. The two bodies read are held
+ * whole, and so are held to `graphqlBodyLimit` and `modelBodyLimit`.
  *
  * Deliberately free of dependencies. It is packaged from this file alone, so its
  * closure is the runtime and nothing else, and a compromise reaches no library
@@ -51,6 +53,7 @@
  * error. Names are, because a name is what an operator needs to see.
  */
 
+import { isUtf8 } from 'node:buffer'
 import { createSocket } from 'node:dgram'
 import { lstatSync, readdirSync, readFileSync, unlinkSync } from 'node:fs'
 
@@ -68,9 +71,17 @@ const usage =
  *
  * `credential` is the key sent as a bearer token, absent for a server that
  * takes none. At most one per name: the name is what a request chooses by.
+ *
+ * `models`, where it is set, are the only models a call may name: a call's
+ * body is read and refused unless its `model` is one of them, compared
+ * exactly, and the listing names only those (`modelCall`, `listedModels`).
+ * A server that loads whichever model a call names, and stops another to do
+ * it, is held to those by the broker, since nothing in such a server limits
+ * one client to some of its models. Absent, a call's body is streamed unread.
  */
 export interface ModelServerGrant {
   readonly credential?: string
+  readonly models?: readonly string[]
   /** What the guest calls it, in the path that reaches it, and what the log says. */
   readonly name: string
   readonly port: number
@@ -647,6 +658,8 @@ export type Decision =
       readonly credential?: string
       /** `127.0.0.1:<port>`: where the request goes. */
       readonly host: string
+      /** The grant's `models`, the only ones a call may name, where it lists any. */
+      readonly models?: readonly string[]
       readonly operation: ModelServerOperation
       /** The server's name, as the grant spells it. */
       readonly server: string
@@ -772,7 +785,13 @@ export const normaliseRepo = (repo: string, repository: Repository): string =>
   repository.ignoreCase ? withoutGit(repo).toLowerCase() : withoutGit(repo)
 
 /** The fields a model server's grant carries. */
-const modelServerFields: ReadonlySet<string> = new Set(['credential', 'name', 'port', 'profile'])
+const modelServerFields: ReadonlySet<string> = new Set([
+  'credential',
+  'models',
+  'name',
+  'port',
+  'profile',
+])
 
 /**
  * Read the grants a broker was started with.
@@ -824,7 +843,7 @@ export const parseGrants = (json: string): { grants: Grant[] } | { message: stri
     if (unread !== undefined) {
       return { message: `the model-server grant sets ${unread}, which this broker does not read` }
     }
-    const { name, port } = entry
+    const { models, name, port } = entry
     if (typeof name !== 'string' || !isModelServerName(name)) {
       return { message: `${JSON.stringify(name)} is not a model server's name` }
     }
@@ -834,12 +853,26 @@ export const parseGrants = (json: string): { grants: Grant[] } | { message: stri
     if (credential !== undefined && (typeof credential !== 'string' || credential === '')) {
       return { message: `the ${name} model server's credential is not a name` }
     }
+    if (
+      models !== undefined &&
+      (!Array.isArray(models) ||
+        models.length === 0 ||
+        !models.every(model => typeof model === 'string' && model !== ''))
+    ) {
+      return { message: `the ${name} model server's models are not a list of names` }
+    }
     if (grants.some(grant => isModelServerGrant(grant) && grant.name === name)) {
       return {
         message: `there are two model servers named ${name}, and a request could not choose one`,
       }
     }
-    grants.push({ ...(credential === undefined ? {} : { credential }), name, port, profile })
+    grants.push({
+      ...(credential === undefined ? {} : { credential }),
+      ...(models === undefined ? {} : { models: models as readonly string[] }),
+      name,
+      port,
+      profile,
+    })
   }
   return { grants }
 }
@@ -1220,6 +1253,7 @@ const routeModelServer = (
       _tag: 'ModelServer',
       ...(grant.credential === undefined ? {} : { credential: grant.credential }),
       host,
+      ...(grant.models === undefined ? {} : { models: grant.models }),
       operation,
       server: grant.name,
       upstream: `http://${host}/${path}`,
@@ -1734,32 +1768,397 @@ export const graphqlQuery = (
 /**
  * A body read whole, if it is no longer than `limit` bytes, and `undefined`
  * as soon as it runs past it, which stops reading it.
+ *
+ * Gathered into one buffer as it arrives, sized at the start to the length
+ * `headers` state where they state one within `limit`, so that a body is
+ * held once rather than as its chunks and then as their copy. A stated length
+ * is a guess at the size and nothing more: the body is read to its end
+ * however long it turns out to be, up to `limit`.
  */
 const readWhole = async (
   source: ReadableStream<Uint8Array> | null,
   limit: number,
-): Promise<Uint8Array | undefined> => {
+  headers?: Headers,
+): Promise<Uint8Array<ArrayBuffer> | undefined> => {
   if (source === null) return new Uint8Array()
+  const stated = headers?.get('content-length')
+  let whole = new Uint8Array(
+    stated !== undefined && stated !== null && /^[0-9]{1,15}$/.test(stated)
+      ? Math.min(Number(stated), limit)
+      : 64 * 1024,
+  )
   const reader = source.getReader()
-  const chunks: Uint8Array[] = []
   let bytes = 0
   for (;;) {
     const chunk = await reader.read()
     if (chunk.done) break
-    bytes += chunk.value.byteLength
-    if (bytes > limit) {
+    if (bytes + chunk.value.byteLength > limit) {
       await reader.cancel()
       return undefined
     }
-    chunks.push(chunk.value)
+    if (bytes + chunk.value.byteLength > whole.byteLength) {
+      const grown = new Uint8Array(
+        Math.min(limit, Math.max(bytes + chunk.value.byteLength, whole.byteLength * 2)),
+      )
+      grown.set(whole.subarray(0, bytes))
+      whole = grown
+    }
+    whole.set(chunk.value, bytes)
+    bytes += chunk.value.byteLength
   }
-  const whole = new Uint8Array(bytes)
+  return whole.subarray(0, bytes)
+}
+
+/**
+ * `bytes` as a stream of pieces of it, so that sending a body held whole
+ * makes no second copy of it.
+ */
+const piecesOf = (bytes: Uint8Array<ArrayBuffer>): ReadableStream<Uint8Array> => {
   let at = 0
-  for (const chunk of chunks) {
-    whole.set(chunk, at)
-    at += chunk.byteLength
+  return new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (at >= bytes.byteLength) {
+        controller.close()
+        return
+      }
+      controller.enqueue(bytes.subarray(at, at + 64 * 1024))
+      at += 64 * 1024
+    },
+  })
+}
+
+/**
+ * The most of a model call's body that is read, in bytes, at a model server
+ * whose grant lists its models, and the most of its listing. The body is held
+ * whole, so this is what one call can make the broker hold: enough for a
+ * model's longest context with images in it, and small beside the memory a
+ * broker is given.
+ */
+export const modelBodyLimit = 8 * 1024 * 1024
+
+/**
+ * A body as UTF-8 text, or `undefined` for one that is not: malformed, or
+ * opening with a byte-order mark, which a decoder would otherwise drop
+ * without a word and a second reader might not.
+ */
+const strictText = (bytes: Uint8Array): string | undefined => {
+  let text: string
+  try {
+    text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes)
+  } catch {
+    return undefined
   }
-  return whole
+  return text.startsWith('\uFEFF') ? undefined : text
+}
+
+/**
+ * Why a model call's headers keep it from being read, or `undefined` if
+ * they do not.
+ *
+ * A server may read a call's `model` from a body by what its type says it
+ * is: one sent as a form rather than as JSON is read as fields, from the query
+ * as well, so a JSON text naming one model can carry another as a form field
+ * inside a string. So a call is `application/json`, written as a server
+ * matching that text exactly reads it, and with no parameter but a charset of
+ * UTF-8, which says what the body is held to anyway. A body is sent as it
+ * came, and a server reads an encoded one as it came too, so a call with any
+ * `Content-Encoding` would be read here as one thing and there as another.
+ */
+export const modelCallHeaders = (guest: Headers): string | undefined => {
+  if (guest.has('content-encoding')) {
+    return 'a call to a model server whose models are listed is sent with no Content-Encoding'
+  }
+  const [type, ...parameters] = (guest.get('content-type') ?? '').split(';')
+  if (
+    type?.trim() !== 'application/json' ||
+    parameters.length > 1 ||
+    !parameters.every(parameter => /^charset=(?:utf-8|"utf-8")$/i.test(parameter.trim()))
+  ) {
+    return 'a call to a model server whose models are listed is sent as application/json'
+  }
+  return undefined
+}
+
+/**
+ * A model name as a refusal and the log give it: whole, but for one so long
+ * that only its start says anything.
+ */
+const shownModel = (model: string): string =>
+  model.length > 200 ? `${model.slice(0, 200)}…` : model
+
+/**
+ * The model a call names, if it is one of `models`, or why the call is
+ * refused.
+ *
+ * The body is sent as it came, so the call this read and the call the server
+ * reads are one call only because nothing here admits a text two parsers
+ * could read differently (`scanCall`). What is left is one JSON object, read
+ * the same by any parser, whose `model` is a string. It is compared with
+ * `models` exactly: what a name resolves to, an alias among it, is the
+ * server's.
+ */
+export const modelCall = (
+  raw: Uint8Array,
+  models: readonly string[],
+):
+  | { readonly model: string }
+  | { readonly model?: string; readonly reason: string; readonly status: 400 | 403 } => {
+  const call = scanCall(raw)
+  if (call === 'invalid') {
+    return { reason: 'a model call is sent as JSON in UTF-8, and this one is not', status: 400 }
+  }
+  if (call === 'not-object') {
+    return { reason: 'a model call is one JSON object, and this one is not', status: 400 }
+  }
+  if (call === 'repeated') {
+    return {
+      reason:
+        'a model call names a key twice in one object, which two parsers can read differently',
+      status: 400,
+    }
+  }
+  const { model } = call
+  if (typeof model !== 'string') {
+    return {
+      reason: 'a model call names its model, as a string, and this one does not',
+      status: 400,
+    }
+  }
+  if (!models.includes(model)) {
+    return {
+      model: shownModel(model),
+      reason: `this VM's policy does not list ${JSON.stringify(shownModel(model))} among the server's models, which are ${models.join(', ')}`,
+      status: 403,
+    }
+  }
+  return { model }
+}
+
+/** One UTF-8 decoder, for a string already known to be well formed. */
+const utf8 = new TextDecoder()
+
+/** Whether a byte is whitespace between JSON's tokens. */
+const isJsonSpace = (byte: number | undefined): boolean =>
+  byte === 0x20 || byte === 0x09 || byte === 0x0a || byte === 0x0d
+
+/** The bytes a backslash may escape in a JSON string, besides `u`: `"\\/bfnrt`. */
+const jsonEscapes: ReadonlySet<number> = new Set([0x22, 0x5c, 0x2f, 0x62, 0x66, 0x6e, 0x72, 0x74])
+
+/** The four hex digits at `at` as a number, or -1 if they are not four hex digits. */
+const hexAt = (text: Uint8Array, at: number): number => {
+  const digits = text.subarray(at, at + 4)
+  return digits.length === 4 && /^[0-9a-fA-F]{4}$/.test(utf8.decode(digits))
+    ? Number.parseInt(utf8.decode(digits), 16)
+    : -1
+}
+
+/**
+ * Where the JSON string opening at `start` ends, past its closing quote, or
+ * -1 if it is not one. An escape naming half a surrogate pair is not one
+ * either: parsers differ in what they read it as.
+ */
+const stringEnd = (text: Uint8Array, start: number): number => {
+  let at = start + 1
+  while (at < text.length) {
+    const byte = text[at] ?? 0
+    if (byte === 0x22) return at + 1
+    if (byte < 0x20) return -1
+    if (byte !== 0x5c) {
+      at++
+      continue
+    }
+    const escaped = text[at + 1]
+    if (escaped !== 0x75) {
+      if (escaped === undefined || !jsonEscapes.has(escaped)) return -1
+      at += 2
+      continue
+    }
+    const unit = hexAt(text, at + 2)
+    if (unit < 0 || (unit >= 0xdc00 && unit <= 0xdfff)) return -1
+    if (unit < 0xd800 || unit > 0xdbff) {
+      at += 6
+      continue
+    }
+    const low = text[at + 6] === 0x5c && text[at + 7] === 0x75 ? hexAt(text, at + 8) : -1
+    if (low < 0xdc00 || low > 0xdfff) return -1
+    at += 12
+  }
+  return -1
+}
+
+/** Where the JSON number starting at `start` ends, or -1 if it is not one. */
+const numberEnd = (text: Uint8Array, start: number): number => {
+  const isDigit = (at: number): boolean => (text[at] ?? 0) >= 0x30 && (text[at] ?? 0) <= 0x39
+  const digits = (at: number): number => {
+    let end = at
+    while (isDigit(end)) end++
+    return end
+  }
+  let at = text[start] === 0x2d ? start + 1 : start
+  if (text[at] === 0x30) at++
+  else if (isDigit(at)) at = digits(at)
+  else return -1
+  if (text[at] === 0x2e) {
+    if (!isDigit(at + 1)) return -1
+    at = digits(at + 1)
+  }
+  if (text[at] === 0x65 || text[at] === 0x45) {
+    at++
+    if (text[at] === 0x2b || text[at] === 0x2d) at++
+    if (!isDigit(at)) return -1
+    at = digits(at)
+  }
+  return at
+}
+
+/** `true`, `false` and `null`, by their first byte. */
+const jsonLiterals: ReadonlyMap<number, Uint8Array> = new Map(
+  ['true', 'false', 'null'].map(word => [word.charCodeAt(0), new TextEncoder().encode(word)]),
+)
+
+/**
+ * A model call's body read as JSON, and its top-level `model` if it names
+ * one; or what keeps it from being read as one call by every parser.
+ *
+ * `invalid` is a body that is not UTF-8, opens with a byte-order mark, or is
+ * not JSON as RFC 8259 writes it; `not-object` one whose value is not an
+ * object; `repeated` one with an object anywhere in it that names a key
+ * twice, keys compared as decoded, so that `"\u006dodel"` repeats
+ * `"model"`, since one parser reads such an object by its first value and
+ * another by its last.
+ *
+ * Read from the bytes in one pass, with nothing decoded but the keys and the
+ * model, since a call is held whole and most of it is a few long strings, a
+ * file's text or an image's data, which a copy would double.
+ */
+export const scanCall = (
+  text: Uint8Array,
+): 'invalid' | 'not-object' | 'repeated' | { readonly model: unknown } => {
+  if (!isUtf8(text) || (text[0] === 0xef && text[1] === 0xbb && text[2] === 0xbf)) {
+    return 'invalid'
+  }
+  const skip = (from: number): number => {
+    let at = from
+    while (isJsonSpace(text[at])) at++
+    return at
+  }
+  if (text[skip(0)] !== 0x7b) return 'not-object'
+
+  // One entry per open bracket: the keys seen so far for an object, `null`
+  // for an array.
+  const open: Array<Set<string> | null> = []
+  let next: 'close-or-comma' | 'colon' | 'key' | 'key-or-close' | 'value' | 'value-or-close' =
+    'value'
+  let modelNext = false
+  let model: unknown
+  let at = skip(0)
+  for (;;) {
+    at = skip(at)
+    const byte = text[at]
+    if (byte === undefined) return 'invalid'
+    const top = open.at(-1)
+    if (next === 'colon') {
+      if (byte !== 0x3a) return 'invalid'
+      next = 'value'
+      at++
+      continue
+    }
+    if (next === 'close-or-comma') {
+      if (byte === 0x2c) next = top instanceof Set ? 'key' : 'value'
+      else if ((byte === 0x7d && top instanceof Set) || (byte === 0x5d && top === null)) {
+        open.pop()
+        if (open.length === 0) return skip(at + 1) === text.length ? { model } : 'invalid'
+      } else return 'invalid'
+      at++
+      continue
+    }
+    if (next === 'key' || next === 'key-or-close') {
+      if (byte === 0x7d && next === 'key-or-close') {
+        open.pop()
+        if (open.length === 0) return skip(at + 1) === text.length ? { model } : 'invalid'
+        next = 'close-or-comma'
+        at++
+        continue
+      }
+      const end = byte === 0x22 ? stringEnd(text, at) : -1
+      if (end < 0 || !(top instanceof Set)) return 'invalid'
+      const key = String(JSON.parse(utf8.decode(text.subarray(at, end))))
+      if (top.has(key)) return 'repeated'
+      top.add(key)
+      modelNext = open.length === 1 && key === 'model'
+      next = 'colon'
+      at = end
+      continue
+    }
+    // A value, or the close of an array that has none.
+    const isModel = modelNext
+    modelNext = false
+    if (isModel) model = byte === 0x22 ? undefined : null
+    if (byte === 0x7b) {
+      open.push(new Set())
+      next = 'key-or-close'
+      at++
+      continue
+    }
+    if (byte === 0x5b) {
+      open.push(null)
+      next = 'value-or-close'
+      at++
+      continue
+    }
+    if (byte === 0x5d && next === 'value-or-close') {
+      open.pop()
+      next = 'close-or-comma'
+      at++
+      continue
+    }
+    let end: number
+    if (byte === 0x22) {
+      end = stringEnd(text, at)
+      if (end >= 0 && isModel) model = String(JSON.parse(utf8.decode(text.subarray(at, end))))
+    } else if (byte === 0x2d || (byte >= 0x30 && byte <= 0x39)) {
+      end = numberEnd(text, at)
+    } else {
+      const word = jsonLiterals.get(byte)
+      end =
+        word !== undefined && text.subarray(at, at + word.length).every((b, i) => b === word[i])
+          ? at + word.length
+          : -1
+    }
+    if (end < 0) return 'invalid'
+    next = 'close-or-comma'
+    at = end
+  }
+}
+
+/**
+ * A model server's listing, as the JSON written for the guest, holding only
+ * the entries whose `id` is one of `models`, compared exactly; or why it
+ * cannot be.
+ *
+ * Read as the listing every OpenAI-compatible server gives, an object whose
+ * `data` is a list of objects each with an `id`. One of another shape is
+ * not passed on, since what it names could not be filtered.
+ */
+export const listedModels = (
+  text: string,
+  models: readonly string[],
+): { readonly body: string } | { readonly reason: string } => {
+  let listing: unknown
+  try {
+    listing = JSON.parse(text)
+  } catch {
+    listing = undefined
+  }
+  const data = isObject(listing) && !Array.isArray(listing) ? listing['data'] : undefined
+  const named = (entry: unknown): entry is { readonly id: string } =>
+    isObject(entry) && typeof entry['id'] === 'string'
+  if (!isObject(listing) || !Array.isArray(data) || !data.every(named)) {
+    return { reason: 'the model server listed its models in a shape the broker does not read' }
+  }
+  return {
+    body: JSON.stringify({ ...listing, data: data.filter(({ id }) => models.includes(id)) }),
+  }
 }
 
 /** What git calls the body it sends and the one it gets back, on a fetch and a push. */
@@ -2675,14 +3074,16 @@ type Fact = boolean | number | string | readonly Fact[] | { readonly [key: strin
 /**
  * One line of audit, as JSON.
  *
- * A fixed set of fields, never a header, a query string or a body. Redaction of
- * arbitrary content is not something this can promise: a guest-supplied header
- * can hold anything, including a credential of its own, so the answer is to
- * record named facts rather than to filter captured text.
+ * A fixed set of fields, never a header, a query string or a body, but for
+ * the one field read from a body to decide it, a model call's `model`.
+ * Redaction of arbitrary content is not something this can promise: a
+ * guest-supplied header can hold anything, including a credential of its own,
+ * so the answer is to record named facts rather than to filter captured text.
  *
- * A field means the same on every line it is on: `credential` and `credentials`
- * name credentials, `host` is the host a request was for, `scope` and `repos`
- * are repositories, `server` is a model server's name, `target` and
+ * A field means the same on every line it is on: `credential` and
+ * `credentials` name credentials, `host` is the host a request was for,
+ * `scope` and `repos` are repositories, `server` is a model server's name,
+ * `model` is the model a call to one named, `target` and
  * `destinations` are tunnel destinations, `address` is the address a
  * destination resolved to, `answered` marks a tunnel the broker's TLS listener
  * took rather than a destination, and `names` are the names that listener
@@ -2788,9 +3189,45 @@ const handle = async (
     written = query.body
   }
 
+  // A call to a model server whose grant lists its models is read whole and
+  // sent only if it names one of them, as the bytes it arrived as.
+  let held: Uint8Array<ArrayBuffer> | undefined
+  let model: string | undefined
+  if (decision._tag === 'ModelServer' && decision.models !== undefined && carriesBody(decision)) {
+    const refused = modelCallHeaders(request.headers)
+    const whole =
+      refused === undefined
+        ? await readWhole(request.body, modelBodyLimit, request.headers)
+        : undefined
+    const call:
+      | ReturnType<typeof modelCall>
+      | { readonly model?: string; readonly reason: string; readonly status: number } =
+      refused !== undefined
+        ? { reason: refused, status: 415 }
+        : whole === undefined
+          ? {
+              reason: `a call to a model server whose models are listed is at most ${String(modelBodyLimit)} bytes`,
+              status: 413,
+            }
+          : modelCall(whole, decision.models)
+    if ('reason' in call) {
+      audit({
+        event: 'deny',
+        host: decision.host,
+        id,
+        ...(call.model === undefined ? {} : { model: call.model }),
+        reason: call.reason,
+        server: decision.server,
+        status: call.status,
+      })
+      return refusal(call.status, call.reason, json)
+    }
+    held = whole
+    model = call.model
+  }
+
   // Which credential pays and what it was expected to cover, both settled by
-  // the path: a request under a repository is for that one, and a model call
-  // names its model only in a body that is not parsed.
+  // the path: a request under a repository is for that one.
   const scope = decision._tag === 'Profile' ? decision.repo : undefined
   // A model server's grant may hold none, and then the request is sent with
   // none, as the server was configured to take it. An anonymous read is sent
@@ -2811,6 +3248,7 @@ const handle = async (
           set: decision.set,
         }
       : { operation: decision.operation }),
+    ...(model === undefined ? {} : { model }),
     ...(scope === undefined ? {} : { scope }),
     ...(decision._tag === 'ModelServer' ? { server: decision.server } : {}),
   })
@@ -2837,14 +3275,15 @@ const handle = async (
   try {
     upstream = await send(decision.upstream, {
       // Streamed as it arrives, never read, and held to its length where it is
-      // sent with one — but for a GraphQL request's, read and written above.
+      // sent with one — but for a GraphQL request's, read and written above,
+      // and a model call's that was read above.
       body: !carriesBody(decision)
         ? undefined
-        : written !== undefined
-          ? written
-          : length === undefined || request.body === null
+        : (written ??
+          (held === undefined ? undefined : piecesOf(held)) ??
+          (length === undefined || request.body === null
             ? request.body
-            : heldTo(request.body, length),
+            : heldTo(request.body, length))),
       headers: upstreamHeaders(decision, token, request.headers),
       method: request.method,
       // Never followed. A redirect chosen by the upstream is a destination this
@@ -2889,6 +3328,33 @@ const handle = async (
     // what the upstream said are different facts and the log is where they meet.
     audit({ event: 'error', id, ms, reason: refused.reason, upstream: upstream.status })
     return refusal(refused.status, refused.reason, json)
+  }
+
+  // A listing from a server whose grant lists its models names only those.
+  // A server's error is not a listing, and goes back as it came.
+  if (
+    decision._tag === 'ModelServer' &&
+    decision.models !== undefined &&
+    decision.operation === 'list-models' &&
+    upstream.ok
+  ) {
+    const whole = await readWhole(upstream.body, modelBodyLimit, upstream.headers)
+    const text = whole === undefined ? undefined : strictText(whole)
+    const listing =
+      text === undefined
+        ? {
+            reason: `the model server's listing is not UTF-8 text of at most ${String(modelBodyLimit)} bytes`,
+          }
+        : listedModels(text, decision.models)
+    if ('reason' in listing) {
+      audit({ event: 'error', id, ms, reason: listing.reason, upstream: upstream.status })
+      return refusal(502, listing.reason, json)
+    }
+    const headers = returnedHeaders(decision, upstream.headers)
+    headers.set('Content-Type', 'application/json')
+    const body = new TextEncoder().encode(listing.body)
+    audit({ bytes: body.byteLength, event: 'response', id, ms, status: upstream.status })
+    return new Response(body, { headers, status: upstream.status })
   }
 
   if (upstream.body === null) {
@@ -3455,9 +3921,10 @@ const listen = (
     // upstream long before `headerTimeoutMs` would, and a token stream that
     // pauses while the model works, which nothing here means to bound.
     idleTimeout: 0,
-    // Unbounded, so that the limit a body meets is its upstream's, as
-    // this file's head says. Bun's default would refuse a body past 128 MiB with a
-    // bare 413, before any of this file runs.
+    // Unbounded, so that the limit a streamed body meets is its upstream's,
+    // and a body that is read meets its own, as this file's head says. Bun's
+    // default would refuse a body past 128 MiB with a bare 413, before any of
+    // this file runs.
     maxRequestBodySize: Number.MAX_SAFE_INTEGER,
     ...(tls === undefined ? {} : { tls }),
     unix: socketPath,

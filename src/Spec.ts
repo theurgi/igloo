@@ -66,6 +66,7 @@ export const grantsOf = (policy: Config.Policy): readonly Broker.Grant[] => [
   }),
   ...policy.modelServers.map(server => ({
     ...(server.key === undefined ? {} : { credential: Config.modelServerKeyName(server.name) }),
+    ...(server.models === undefined ? {} : { models: server.models }),
     name: server.name,
     port: server.port,
     profile: 'model-server' as const,
@@ -216,7 +217,7 @@ export const fromConfig = (
     ...grants
       .map(grant =>
         Broker.isModelServerGrant(grant)
-          ? `${grant.profile} ${grant.name} port=${String(grant.port)}${grant.credential === undefined ? '' : ` ${grant.credential}`}`
+          ? `${grant.profile} ${grant.name} port=${String(grant.port)}${grant.credential === undefined ? '' : ` ${grant.credential}`}${grant.models === undefined ? '' : ` models=${JSON.stringify(grant.models.toSorted())}`}`
           : profileLine(grant),
       )
       .toSorted(),
