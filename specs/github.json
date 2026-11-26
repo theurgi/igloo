@@ -1,0 +1,4391 @@
+{
+  "source": "https://raw.githubusercontent.com/github/rest-api-description/c9c95fe34ced05fe076001f5c55704742bc8e7f8/descriptions/api.github.com/api.github.com.json",
+  "sha256": "6d9bbb20d8865b01464028937f2403954ad46598b4ebd3513dcb1a15b1a84aa7",
+  "paths": ["", "repos/*/*/**"],
+  "operations": [
+    {
+      "group": "meta",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "meta/root",
+      "path": ""
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "repos/delete",
+      "path": "repos/{owner}/{repo}"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get",
+      "path": "repos/{owner}/{repo}"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "repos/update",
+      "path": "repos/{owner}/{repo}"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/list-artifacts-for-repo",
+      "path": "repos/{owner}/{repo}/actions/artifacts"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "actions/delete-artifact",
+      "path": "repos/{owner}/{repo}/actions/artifacts/{artifact_id}"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/get-artifact",
+      "path": "repos/{owner}/{repo}/actions/artifacts/{artifact_id}"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/download-artifact",
+      "path": "repos/{owner}/{repo}/actions/artifacts/{artifact_id}/{archive_format}"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/get-actions-cache-retention-limit-for-repository",
+      "path": "repos/{owner}/{repo}/actions/cache/retention-limit"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "actions/set-actions-cache-retention-limit-for-repository",
+      "path": "repos/{owner}/{repo}/actions/cache/retention-limit"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/get-actions-cache-storage-limit-for-repository",
+      "path": "repos/{owner}/{repo}/actions/cache/storage-limit"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "actions/set-actions-cache-storage-limit-for-repository",
+      "path": "repos/{owner}/{repo}/actions/cache/storage-limit"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/get-actions-cache-usage",
+      "path": "repos/{owner}/{repo}/actions/cache/usage"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "actions/delete-actions-cache-by-key",
+      "path": "repos/{owner}/{repo}/actions/caches"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/get-actions-cache-list",
+      "path": "repos/{owner}/{repo}/actions/caches"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "actions/delete-actions-cache-by-id",
+      "path": "repos/{owner}/{repo}/actions/caches/{cache_id}"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/list-concurrency-groups-for-repository",
+      "path": "repos/{owner}/{repo}/actions/concurrency_groups"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/get-concurrency-group-for-repository",
+      "path": "repos/{owner}/{repo}/actions/concurrency_groups/{concurrency_group_name}"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/get-job-for-workflow-run",
+      "path": "repos/{owner}/{repo}/actions/jobs/{job_id}"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/download-job-logs-for-workflow-run",
+      "path": "repos/{owner}/{repo}/actions/jobs/{job_id}/logs"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "actions/re-run-job-for-workflow-run",
+      "path": "repos/{owner}/{repo}/actions/jobs/{job_id}/rerun"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/download-step-logs-for-workflow-run-job",
+      "path": "repos/{owner}/{repo}/actions/jobs/{job_id}/steps/{step_number}/logs"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/get-custom-oidc-sub-claim-for-repo",
+      "path": "repos/{owner}/{repo}/actions/oidc/customization/sub"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "actions/set-custom-oidc-sub-claim-for-repo",
+      "path": "repos/{owner}/{repo}/actions/oidc/customization/sub"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/list-repo-organization-secrets",
+      "path": "repos/{owner}/{repo}/actions/organization-secrets"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/list-repo-organization-variables",
+      "path": "repos/{owner}/{repo}/actions/organization-variables"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/get-github-actions-permissions-repository",
+      "path": "repos/{owner}/{repo}/actions/permissions"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "actions/set-github-actions-permissions-repository",
+      "path": "repos/{owner}/{repo}/actions/permissions"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/get-workflow-access-to-repository",
+      "path": "repos/{owner}/{repo}/actions/permissions/access"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "actions/set-workflow-access-to-repository",
+      "path": "repos/{owner}/{repo}/actions/permissions/access"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/get-artifact-and-log-retention-settings-repository",
+      "path": "repos/{owner}/{repo}/actions/permissions/artifact-and-log-retention"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "actions/set-artifact-and-log-retention-settings-repository",
+      "path": "repos/{owner}/{repo}/actions/permissions/artifact-and-log-retention"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/get-fork-pr-contributor-approval-permissions-repository",
+      "path": "repos/{owner}/{repo}/actions/permissions/fork-pr-contributor-approval"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "actions/set-fork-pr-contributor-approval-permissions-repository",
+      "path": "repos/{owner}/{repo}/actions/permissions/fork-pr-contributor-approval"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/get-private-repo-fork-pr-workflows-settings-repository",
+      "path": "repos/{owner}/{repo}/actions/permissions/fork-pr-workflows-private-repos"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "actions/set-private-repo-fork-pr-workflows-settings-repository",
+      "path": "repos/{owner}/{repo}/actions/permissions/fork-pr-workflows-private-repos"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/get-allowed-actions-repository",
+      "path": "repos/{owner}/{repo}/actions/permissions/selected-actions"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "actions/set-allowed-actions-repository",
+      "path": "repos/{owner}/{repo}/actions/permissions/selected-actions"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/get-github-actions-default-workflow-permissions-repository",
+      "path": "repos/{owner}/{repo}/actions/permissions/workflow"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "actions/set-github-actions-default-workflow-permissions-repository",
+      "path": "repos/{owner}/{repo}/actions/permissions/workflow"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/get-repo-actions-policies",
+      "path": "repos/{owner}/{repo}/actions/policies"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "actions/create-repo-actions-policy",
+      "path": "repos/{owner}/{repo}/actions/policies"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "actions/delete-repo-actions-policy",
+      "path": "repos/{owner}/{repo}/actions/policies/{policy_id}"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/get-repo-actions-policy",
+      "path": "repos/{owner}/{repo}/actions/policies/{policy_id}"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "actions/update-repo-actions-policy",
+      "path": "repos/{owner}/{repo}/actions/policies/{policy_id}"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/list-self-hosted-runners-for-repo",
+      "path": "repos/{owner}/{repo}/actions/runners"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "actions/delete-self-hosted-runner-from-repo",
+      "path": "repos/{owner}/{repo}/actions/runners/{runner_id}"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/get-self-hosted-runner-for-repo",
+      "path": "repos/{owner}/{repo}/actions/runners/{runner_id}"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "actions/remove-all-custom-labels-from-self-hosted-runner-for-repo",
+      "path": "repos/{owner}/{repo}/actions/runners/{runner_id}/labels"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/list-labels-for-self-hosted-runner-for-repo",
+      "path": "repos/{owner}/{repo}/actions/runners/{runner_id}/labels"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "actions/add-custom-labels-to-self-hosted-runner-for-repo",
+      "path": "repos/{owner}/{repo}/actions/runners/{runner_id}/labels"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "actions/set-custom-labels-for-self-hosted-runner-for-repo",
+      "path": "repos/{owner}/{repo}/actions/runners/{runner_id}/labels"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "actions/remove-custom-label-from-self-hosted-runner-for-repo",
+      "path": "repos/{owner}/{repo}/actions/runners/{runner_id}/labels/{name}"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/get-runner-version-deprecation-for-repo",
+      "path": "repos/{owner}/{repo}/actions/runners/deprecations/{version}"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/list-runner-applications-for-repo",
+      "path": "repos/{owner}/{repo}/actions/runners/downloads"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "actions/generate-runner-jitconfig-for-repo",
+      "path": "repos/{owner}/{repo}/actions/runners/generate-jitconfig"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "actions/create-registration-token-for-repo",
+      "path": "repos/{owner}/{repo}/actions/runners/registration-token"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "actions/create-remove-token-for-repo",
+      "path": "repos/{owner}/{repo}/actions/runners/remove-token"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/list-workflow-runs-for-repo",
+      "path": "repos/{owner}/{repo}/actions/runs"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "actions/delete-workflow-run",
+      "path": "repos/{owner}/{repo}/actions/runs/{run_id}"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/get-workflow-run",
+      "path": "repos/{owner}/{repo}/actions/runs/{run_id}"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/get-reviews-for-run",
+      "path": "repos/{owner}/{repo}/actions/runs/{run_id}/approvals"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "actions/approve-workflow-run",
+      "path": "repos/{owner}/{repo}/actions/runs/{run_id}/approve"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/list-workflow-run-artifacts",
+      "path": "repos/{owner}/{repo}/actions/runs/{run_id}/artifacts"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/get-workflow-run-attempt",
+      "path": "repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt_number}"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/list-jobs-for-workflow-run-attempt",
+      "path": "repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt_number}/jobs"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/download-workflow-run-attempt-logs",
+      "path": "repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt_number}/logs"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "actions/cancel-workflow-run",
+      "path": "repos/{owner}/{repo}/actions/runs/{run_id}/cancel"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/list-concurrency-groups-for-workflow-run",
+      "path": "repos/{owner}/{repo}/actions/runs/{run_id}/concurrency_groups"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "actions/review-custom-gates-for-run",
+      "path": "repos/{owner}/{repo}/actions/runs/{run_id}/deployment_protection_rule"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "actions/force-cancel-workflow-run",
+      "path": "repos/{owner}/{repo}/actions/runs/{run_id}/force-cancel"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/list-jobs-for-workflow-run",
+      "path": "repos/{owner}/{repo}/actions/runs/{run_id}/jobs"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "actions/delete-workflow-run-logs",
+      "path": "repos/{owner}/{repo}/actions/runs/{run_id}/logs"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/download-workflow-run-logs",
+      "path": "repos/{owner}/{repo}/actions/runs/{run_id}/logs"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/get-pending-deployments-for-run",
+      "path": "repos/{owner}/{repo}/actions/runs/{run_id}/pending_deployments"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "actions/review-pending-deployments-for-run",
+      "path": "repos/{owner}/{repo}/actions/runs/{run_id}/pending_deployments"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "actions/re-run-workflow",
+      "path": "repos/{owner}/{repo}/actions/runs/{run_id}/rerun"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "actions/re-run-workflow-failed-jobs",
+      "path": "repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/get-workflow-run-usage",
+      "path": "repos/{owner}/{repo}/actions/runs/{run_id}/timing"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/list-repo-secrets",
+      "path": "repos/{owner}/{repo}/actions/secrets"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "actions/delete-repo-secret",
+      "path": "repos/{owner}/{repo}/actions/secrets/{secret_name}"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/get-repo-secret",
+      "path": "repos/{owner}/{repo}/actions/secrets/{secret_name}"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "actions/create-or-update-repo-secret",
+      "path": "repos/{owner}/{repo}/actions/secrets/{secret_name}"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/get-repo-public-key",
+      "path": "repos/{owner}/{repo}/actions/secrets/public-key"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/list-repo-variables",
+      "path": "repos/{owner}/{repo}/actions/variables"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "actions/create-repo-variable",
+      "path": "repos/{owner}/{repo}/actions/variables"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "actions/delete-repo-variable",
+      "path": "repos/{owner}/{repo}/actions/variables/{name}"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/get-repo-variable",
+      "path": "repos/{owner}/{repo}/actions/variables/{name}"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "actions/update-repo-variable",
+      "path": "repos/{owner}/{repo}/actions/variables/{name}"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/list-repo-workflows",
+      "path": "repos/{owner}/{repo}/actions/workflows"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/get-workflow",
+      "path": "repos/{owner}/{repo}/actions/workflows/{workflow_id}"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "actions/disable-workflow",
+      "path": "repos/{owner}/{repo}/actions/workflows/{workflow_id}/disable"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "actions/create-workflow-dispatch",
+      "path": "repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "actions/enable-workflow",
+      "path": "repos/{owner}/{repo}/actions/workflows/{workflow_id}/enable"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/list-workflow-runs",
+      "path": "repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/get-workflow-usage",
+      "path": "repos/{owner}/{repo}/actions/workflows/{workflow_id}/timing"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/list-activities",
+      "path": "repos/{owner}/{repo}/activity"
+    },
+    {
+      "group": "agents",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "agents/list-repo-organization-secrets",
+      "path": "repos/{owner}/{repo}/agents/organization-secrets"
+    },
+    {
+      "group": "agents",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "agents/list-repo-organization-variables",
+      "path": "repos/{owner}/{repo}/agents/organization-variables"
+    },
+    {
+      "group": "agents",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "agents/list-repo-secrets",
+      "path": "repos/{owner}/{repo}/agents/secrets"
+    },
+    {
+      "group": "agents",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "agents/delete-repo-secret",
+      "path": "repos/{owner}/{repo}/agents/secrets/{secret_name}"
+    },
+    {
+      "group": "agents",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "agents/get-repo-secret",
+      "path": "repos/{owner}/{repo}/agents/secrets/{secret_name}"
+    },
+    {
+      "group": "agents",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "agents/create-or-update-repo-secret",
+      "path": "repos/{owner}/{repo}/agents/secrets/{secret_name}"
+    },
+    {
+      "group": "agents",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "agents/get-repo-public-key",
+      "path": "repos/{owner}/{repo}/agents/secrets/public-key"
+    },
+    {
+      "group": "agents",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "agents/list-repo-variables",
+      "path": "repos/{owner}/{repo}/agents/variables"
+    },
+    {
+      "group": "agents",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "agents/create-repo-variable",
+      "path": "repos/{owner}/{repo}/agents/variables"
+    },
+    {
+      "group": "agents",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "agents/delete-repo-variable",
+      "path": "repos/{owner}/{repo}/agents/variables/{name}"
+    },
+    {
+      "group": "agents",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "agents/get-repo-variable",
+      "path": "repos/{owner}/{repo}/agents/variables/{name}"
+    },
+    {
+      "group": "agents",
+      "host": "api.github.com",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "agents/update-repo-variable",
+      "path": "repos/{owner}/{repo}/agents/variables/{name}"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "issues/list-assignees",
+      "path": "repos/{owner}/{repo}/assignees"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "issues/check-user-can-be-assigned",
+      "path": "repos/{owner}/{repo}/assignees/{assignee}"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "repos/create-attestation",
+      "path": "repos/{owner}/{repo}/attestations"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": ["subject_digest"],
+      "operationId": "repos/list-attestations",
+      "path": "repos/{owner}/{repo}/attestations/{subject_digest}"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/list-autolinks",
+      "path": "repos/{owner}/{repo}/autolinks"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "repos/create-autolink",
+      "path": "repos/{owner}/{repo}/autolinks"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "repos/delete-autolink",
+      "path": "repos/{owner}/{repo}/autolinks/{autolink_id}"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-autolink",
+      "path": "repos/{owner}/{repo}/autolinks/{autolink_id}"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "repos/disable-automated-security-fixes",
+      "path": "repos/{owner}/{repo}/automated-security-fixes"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/check-automated-security-fixes",
+      "path": "repos/{owner}/{repo}/automated-security-fixes"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "repos/enable-automated-security-fixes",
+      "path": "repos/{owner}/{repo}/automated-security-fixes"
+    },
+    {
+      "group": "branches",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/list-branches",
+      "path": "repos/{owner}/{repo}/branches"
+    },
+    {
+      "group": "branches",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": ["branch"],
+      "operationId": "repos/get-branch",
+      "path": "repos/{owner}/{repo}/branches/{branch}"
+    },
+    {
+      "group": "branches",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": ["branch"],
+      "operationId": "repos/delete-branch-protection",
+      "path": "repos/{owner}/{repo}/branches/{branch}/protection"
+    },
+    {
+      "group": "branches",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": ["branch"],
+      "operationId": "repos/get-branch-protection",
+      "path": "repos/{owner}/{repo}/branches/{branch}/protection"
+    },
+    {
+      "group": "branches",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": ["branch"],
+      "operationId": "repos/update-branch-protection",
+      "path": "repos/{owner}/{repo}/branches/{branch}/protection"
+    },
+    {
+      "group": "branches",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": ["branch"],
+      "operationId": "repos/delete-admin-branch-protection",
+      "path": "repos/{owner}/{repo}/branches/{branch}/protection/enforce_admins"
+    },
+    {
+      "group": "branches",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": ["branch"],
+      "operationId": "repos/get-admin-branch-protection",
+      "path": "repos/{owner}/{repo}/branches/{branch}/protection/enforce_admins"
+    },
+    {
+      "group": "branches",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": ["branch"],
+      "operationId": "repos/set-admin-branch-protection",
+      "path": "repos/{owner}/{repo}/branches/{branch}/protection/enforce_admins"
+    },
+    {
+      "group": "branches",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": ["branch"],
+      "operationId": "repos/delete-pull-request-review-protection",
+      "path": "repos/{owner}/{repo}/branches/{branch}/protection/required_pull_request_reviews"
+    },
+    {
+      "group": "branches",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": ["branch"],
+      "operationId": "repos/get-pull-request-review-protection",
+      "path": "repos/{owner}/{repo}/branches/{branch}/protection/required_pull_request_reviews"
+    },
+    {
+      "group": "branches",
+      "host": "api.github.com",
+      "method": "PATCH",
+      "multiSegment": ["branch"],
+      "operationId": "repos/update-pull-request-review-protection",
+      "path": "repos/{owner}/{repo}/branches/{branch}/protection/required_pull_request_reviews"
+    },
+    {
+      "group": "branches",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": ["branch"],
+      "operationId": "repos/delete-commit-signature-protection",
+      "path": "repos/{owner}/{repo}/branches/{branch}/protection/required_signatures"
+    },
+    {
+      "group": "branches",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": ["branch"],
+      "operationId": "repos/get-commit-signature-protection",
+      "path": "repos/{owner}/{repo}/branches/{branch}/protection/required_signatures"
+    },
+    {
+      "group": "branches",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": ["branch"],
+      "operationId": "repos/create-commit-signature-protection",
+      "path": "repos/{owner}/{repo}/branches/{branch}/protection/required_signatures"
+    },
+    {
+      "group": "branches",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": ["branch"],
+      "operationId": "repos/remove-status-check-protection",
+      "path": "repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks"
+    },
+    {
+      "group": "branches",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": ["branch"],
+      "operationId": "repos/get-status-checks-protection",
+      "path": "repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks"
+    },
+    {
+      "group": "branches",
+      "host": "api.github.com",
+      "method": "PATCH",
+      "multiSegment": ["branch"],
+      "operationId": "repos/update-status-check-protection",
+      "path": "repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks"
+    },
+    {
+      "group": "branches",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": ["branch"],
+      "operationId": "repos/remove-status-check-contexts",
+      "path": "repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks/contexts"
+    },
+    {
+      "group": "branches",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": ["branch"],
+      "operationId": "repos/get-all-status-check-contexts",
+      "path": "repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks/contexts"
+    },
+    {
+      "group": "branches",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": ["branch"],
+      "operationId": "repos/add-status-check-contexts",
+      "path": "repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks/contexts"
+    },
+    {
+      "group": "branches",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": ["branch"],
+      "operationId": "repos/set-status-check-contexts",
+      "path": "repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks/contexts"
+    },
+    {
+      "group": "branches",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": ["branch"],
+      "operationId": "repos/delete-access-restrictions",
+      "path": "repos/{owner}/{repo}/branches/{branch}/protection/restrictions"
+    },
+    {
+      "group": "branches",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": ["branch"],
+      "operationId": "repos/get-access-restrictions",
+      "path": "repos/{owner}/{repo}/branches/{branch}/protection/restrictions"
+    },
+    {
+      "group": "branches",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": ["branch"],
+      "operationId": "repos/remove-app-access-restrictions",
+      "path": "repos/{owner}/{repo}/branches/{branch}/protection/restrictions/apps"
+    },
+    {
+      "group": "branches",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": ["branch"],
+      "operationId": "repos/get-apps-with-access-to-protected-branch",
+      "path": "repos/{owner}/{repo}/branches/{branch}/protection/restrictions/apps"
+    },
+    {
+      "group": "branches",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": ["branch"],
+      "operationId": "repos/add-app-access-restrictions",
+      "path": "repos/{owner}/{repo}/branches/{branch}/protection/restrictions/apps"
+    },
+    {
+      "group": "branches",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": ["branch"],
+      "operationId": "repos/set-app-access-restrictions",
+      "path": "repos/{owner}/{repo}/branches/{branch}/protection/restrictions/apps"
+    },
+    {
+      "group": "branches",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": ["branch"],
+      "operationId": "repos/remove-team-access-restrictions",
+      "path": "repos/{owner}/{repo}/branches/{branch}/protection/restrictions/teams"
+    },
+    {
+      "group": "branches",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": ["branch"],
+      "operationId": "repos/get-teams-with-access-to-protected-branch",
+      "path": "repos/{owner}/{repo}/branches/{branch}/protection/restrictions/teams"
+    },
+    {
+      "group": "branches",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": ["branch"],
+      "operationId": "repos/add-team-access-restrictions",
+      "path": "repos/{owner}/{repo}/branches/{branch}/protection/restrictions/teams"
+    },
+    {
+      "group": "branches",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": ["branch"],
+      "operationId": "repos/set-team-access-restrictions",
+      "path": "repos/{owner}/{repo}/branches/{branch}/protection/restrictions/teams"
+    },
+    {
+      "group": "branches",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": ["branch"],
+      "operationId": "repos/remove-user-access-restrictions",
+      "path": "repos/{owner}/{repo}/branches/{branch}/protection/restrictions/users"
+    },
+    {
+      "group": "branches",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": ["branch"],
+      "operationId": "repos/get-users-with-access-to-protected-branch",
+      "path": "repos/{owner}/{repo}/branches/{branch}/protection/restrictions/users"
+    },
+    {
+      "group": "branches",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": ["branch"],
+      "operationId": "repos/add-user-access-restrictions",
+      "path": "repos/{owner}/{repo}/branches/{branch}/protection/restrictions/users"
+    },
+    {
+      "group": "branches",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": ["branch"],
+      "operationId": "repos/set-user-access-restrictions",
+      "path": "repos/{owner}/{repo}/branches/{branch}/protection/restrictions/users"
+    },
+    {
+      "group": "branches",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": ["branch"],
+      "operationId": "repos/rename-branch",
+      "path": "repos/{owner}/{repo}/branches/{branch}/rename"
+    },
+    {
+      "group": "checks",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "checks/create",
+      "path": "repos/{owner}/{repo}/check-runs"
+    },
+    {
+      "group": "checks",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "checks/get",
+      "path": "repos/{owner}/{repo}/check-runs/{check_run_id}"
+    },
+    {
+      "group": "checks",
+      "host": "api.github.com",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "checks/update",
+      "path": "repos/{owner}/{repo}/check-runs/{check_run_id}"
+    },
+    {
+      "group": "checks",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "checks/list-annotations",
+      "path": "repos/{owner}/{repo}/check-runs/{check_run_id}/annotations"
+    },
+    {
+      "group": "checks",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "checks/rerequest-run",
+      "path": "repos/{owner}/{repo}/check-runs/{check_run_id}/rerequest"
+    },
+    {
+      "group": "checks",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "checks/create-suite",
+      "path": "repos/{owner}/{repo}/check-suites"
+    },
+    {
+      "group": "checks",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "checks/get-suite",
+      "path": "repos/{owner}/{repo}/check-suites/{check_suite_id}"
+    },
+    {
+      "group": "checks",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "checks/list-for-suite",
+      "path": "repos/{owner}/{repo}/check-suites/{check_suite_id}/check-runs"
+    },
+    {
+      "group": "checks",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "checks/rerequest-suite",
+      "path": "repos/{owner}/{repo}/check-suites/{check_suite_id}/rerequest"
+    },
+    {
+      "group": "checks",
+      "host": "api.github.com",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "checks/set-suites-preferences",
+      "path": "repos/{owner}/{repo}/check-suites/preferences"
+    },
+    {
+      "group": "code-quality",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "code-quality/list-findings-for-repo",
+      "path": "repos/{owner}/{repo}/code-quality/findings"
+    },
+    {
+      "group": "code-quality",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "code-quality/get-finding",
+      "path": "repos/{owner}/{repo}/code-quality/findings/{finding_number}"
+    },
+    {
+      "group": "code-quality",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "code-quality/get-setup",
+      "path": "repos/{owner}/{repo}/code-quality/setup"
+    },
+    {
+      "group": "code-quality",
+      "host": "api.github.com",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "code-quality/update-setup",
+      "path": "repos/{owner}/{repo}/code-quality/setup"
+    },
+    {
+      "group": "code-scanning",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "code-scanning/get-ai-scan-enablement",
+      "path": "repos/{owner}/{repo}/code-scanning/ai-scan"
+    },
+    {
+      "group": "code-scanning",
+      "host": "api.github.com",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "code-scanning/update-ai-scan-enablement",
+      "path": "repos/{owner}/{repo}/code-scanning/ai-scan"
+    },
+    {
+      "group": "code-scanning",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "code-scanning/list-alerts-for-repo",
+      "path": "repos/{owner}/{repo}/code-scanning/alerts"
+    },
+    {
+      "group": "code-scanning",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "code-scanning/get-alert",
+      "path": "repos/{owner}/{repo}/code-scanning/alerts/{alert_number}"
+    },
+    {
+      "group": "code-scanning",
+      "host": "api.github.com",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "code-scanning/update-alert",
+      "path": "repos/{owner}/{repo}/code-scanning/alerts/{alert_number}"
+    },
+    {
+      "group": "code-scanning",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "code-scanning/get-autofix",
+      "path": "repos/{owner}/{repo}/code-scanning/alerts/{alert_number}/autofix"
+    },
+    {
+      "group": "code-scanning",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "code-scanning/create-autofix",
+      "path": "repos/{owner}/{repo}/code-scanning/alerts/{alert_number}/autofix"
+    },
+    {
+      "group": "code-scanning",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "code-scanning/commit-autofix",
+      "path": "repos/{owner}/{repo}/code-scanning/alerts/{alert_number}/autofix/commits"
+    },
+    {
+      "group": "code-scanning",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "code-scanning/list-alert-instances",
+      "path": "repos/{owner}/{repo}/code-scanning/alerts/{alert_number}/instances"
+    },
+    {
+      "group": "code-scanning",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "code-scanning/list-recent-analyses",
+      "path": "repos/{owner}/{repo}/code-scanning/analyses"
+    },
+    {
+      "group": "code-scanning",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "code-scanning/delete-analysis",
+      "path": "repos/{owner}/{repo}/code-scanning/analyses/{analysis_id}"
+    },
+    {
+      "group": "code-scanning",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "code-scanning/get-analysis",
+      "path": "repos/{owner}/{repo}/code-scanning/analyses/{analysis_id}"
+    },
+    {
+      "group": "code-scanning",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "code-scanning/list-codeql-databases",
+      "path": "repos/{owner}/{repo}/code-scanning/codeql/databases"
+    },
+    {
+      "group": "code-scanning",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "code-scanning/delete-codeql-database",
+      "path": "repos/{owner}/{repo}/code-scanning/codeql/databases/{language}"
+    },
+    {
+      "group": "code-scanning",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "code-scanning/get-codeql-database",
+      "path": "repos/{owner}/{repo}/code-scanning/codeql/databases/{language}"
+    },
+    {
+      "group": "code-scanning",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "code-scanning/create-variant-analysis",
+      "path": "repos/{owner}/{repo}/code-scanning/codeql/variant-analyses"
+    },
+    {
+      "group": "code-scanning",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "code-scanning/get-variant-analysis",
+      "path": "repos/{owner}/{repo}/code-scanning/codeql/variant-analyses/{codeql_variant_analysis_id}"
+    },
+    {
+      "group": "code-scanning",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "code-scanning/get-variant-analysis-repo-task",
+      "path": "repos/{owner}/{repo}/code-scanning/codeql/variant-analyses/{codeql_variant_analysis_id}/repos/{repo_owner}/{repo_name}"
+    },
+    {
+      "group": "code-scanning",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "code-scanning/get-default-setup",
+      "path": "repos/{owner}/{repo}/code-scanning/default-setup"
+    },
+    {
+      "group": "code-scanning",
+      "host": "api.github.com",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "code-scanning/update-default-setup",
+      "path": "repos/{owner}/{repo}/code-scanning/default-setup"
+    },
+    {
+      "group": "code-scanning",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "code-scanning/upload-sarif",
+      "path": "repos/{owner}/{repo}/code-scanning/sarifs"
+    },
+    {
+      "group": "code-scanning",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "code-scanning/get-sarif",
+      "path": "repos/{owner}/{repo}/code-scanning/sarifs/{sarif_id}"
+    },
+    {
+      "group": "code-security",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "code-security/get-configuration-for-repository",
+      "path": "repos/{owner}/{repo}/code-security-configuration"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/codeowners-errors",
+      "path": "repos/{owner}/{repo}/codeowners/errors"
+    },
+    {
+      "group": "codespaces",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "codespaces/list-in-repository-for-authenticated-user",
+      "path": "repos/{owner}/{repo}/codespaces"
+    },
+    {
+      "group": "codespaces",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "codespaces/create-with-repo-for-authenticated-user",
+      "path": "repos/{owner}/{repo}/codespaces"
+    },
+    {
+      "group": "codespaces",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "codespaces/list-devcontainers-in-repository-for-authenticated-user",
+      "path": "repos/{owner}/{repo}/codespaces/devcontainers"
+    },
+    {
+      "group": "codespaces",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "codespaces/repo-machines-for-authenticated-user",
+      "path": "repos/{owner}/{repo}/codespaces/machines"
+    },
+    {
+      "group": "codespaces",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "codespaces/pre-flight-with-repo-for-authenticated-user",
+      "path": "repos/{owner}/{repo}/codespaces/new"
+    },
+    {
+      "group": "codespaces",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "codespaces/check-permissions-for-devcontainer",
+      "path": "repos/{owner}/{repo}/codespaces/permissions_check"
+    },
+    {
+      "group": "codespaces",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "codespaces/list-repo-secrets",
+      "path": "repos/{owner}/{repo}/codespaces/secrets"
+    },
+    {
+      "group": "codespaces",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "codespaces/delete-repo-secret",
+      "path": "repos/{owner}/{repo}/codespaces/secrets/{secret_name}"
+    },
+    {
+      "group": "codespaces",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "codespaces/get-repo-secret",
+      "path": "repos/{owner}/{repo}/codespaces/secrets/{secret_name}"
+    },
+    {
+      "group": "codespaces",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "codespaces/create-or-update-repo-secret",
+      "path": "repos/{owner}/{repo}/codespaces/secrets/{secret_name}"
+    },
+    {
+      "group": "codespaces",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "codespaces/get-repo-public-key",
+      "path": "repos/{owner}/{repo}/codespaces/secrets/public-key"
+    },
+    {
+      "group": "collaborators",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/list-collaborators",
+      "path": "repos/{owner}/{repo}/collaborators"
+    },
+    {
+      "group": "collaborators",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "repos/remove-collaborator",
+      "path": "repos/{owner}/{repo}/collaborators/{username}"
+    },
+    {
+      "group": "collaborators",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/check-collaborator",
+      "path": "repos/{owner}/{repo}/collaborators/{username}"
+    },
+    {
+      "group": "collaborators",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "repos/add-collaborator",
+      "path": "repos/{owner}/{repo}/collaborators/{username}"
+    },
+    {
+      "group": "collaborators",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-collaborator-permission-level",
+      "path": "repos/{owner}/{repo}/collaborators/{username}/permission"
+    },
+    {
+      "group": "commits",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/list-commit-comments-for-repo",
+      "path": "repos/{owner}/{repo}/comments"
+    },
+    {
+      "group": "commits",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "repos/delete-commit-comment",
+      "path": "repos/{owner}/{repo}/comments/{comment_id}"
+    },
+    {
+      "group": "commits",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-commit-comment",
+      "path": "repos/{owner}/{repo}/comments/{comment_id}"
+    },
+    {
+      "group": "commits",
+      "host": "api.github.com",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "repos/update-commit-comment",
+      "path": "repos/{owner}/{repo}/comments/{comment_id}"
+    },
+    {
+      "group": "reactions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "reactions/list-for-commit-comment",
+      "path": "repos/{owner}/{repo}/comments/{comment_id}/reactions"
+    },
+    {
+      "group": "reactions",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "reactions/create-for-commit-comment",
+      "path": "repos/{owner}/{repo}/comments/{comment_id}/reactions"
+    },
+    {
+      "group": "reactions",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "reactions/delete-for-commit-comment",
+      "path": "repos/{owner}/{repo}/comments/{comment_id}/reactions/{reaction_id}"
+    },
+    {
+      "group": "commits",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/list-commits",
+      "path": "repos/{owner}/{repo}/commits"
+    },
+    {
+      "group": "commits",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": ["commit_sha"],
+      "operationId": "repos/list-branches-for-head-commit",
+      "path": "repos/{owner}/{repo}/commits/{commit_sha}/branches-where-head"
+    },
+    {
+      "group": "commits",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": ["commit_sha"],
+      "operationId": "repos/list-comments-for-commit",
+      "path": "repos/{owner}/{repo}/commits/{commit_sha}/comments"
+    },
+    {
+      "group": "commits",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": ["commit_sha"],
+      "operationId": "repos/create-commit-comment",
+      "path": "repos/{owner}/{repo}/commits/{commit_sha}/comments"
+    },
+    {
+      "group": "commits",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": ["commit_sha"],
+      "operationId": "repos/list-pull-requests-associated-with-commit",
+      "path": "repos/{owner}/{repo}/commits/{commit_sha}/pulls"
+    },
+    {
+      "group": "commits",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": ["ref"],
+      "operationId": "repos/get-commit",
+      "path": "repos/{owner}/{repo}/commits/{ref}"
+    },
+    {
+      "group": "checks",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": ["ref"],
+      "operationId": "checks/list-for-ref",
+      "path": "repos/{owner}/{repo}/commits/{ref}/check-runs"
+    },
+    {
+      "group": "checks",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": ["ref"],
+      "operationId": "checks/list-suites-for-ref",
+      "path": "repos/{owner}/{repo}/commits/{ref}/check-suites"
+    },
+    {
+      "group": "commits",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": ["ref"],
+      "operationId": "repos/get-combined-status-for-ref",
+      "path": "repos/{owner}/{repo}/commits/{ref}/status"
+    },
+    {
+      "group": "commits",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": ["ref"],
+      "operationId": "repos/list-commit-statuses-for-ref",
+      "path": "repos/{owner}/{repo}/commits/{ref}/statuses"
+    },
+    {
+      "group": "metrics",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-community-profile-metrics",
+      "path": "repos/{owner}/{repo}/community/profile"
+    },
+    {
+      "group": "commits",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": ["basehead"],
+      "operationId": "repos/compare-commits",
+      "path": "repos/{owner}/{repo}/compare/{basehead}"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": ["path"],
+      "operationId": "repos/delete-file",
+      "path": "repos/{owner}/{repo}/contents/{path}"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": ["path"],
+      "operationId": "repos/get-content",
+      "path": "repos/{owner}/{repo}/contents/{path}"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": ["path"],
+      "operationId": "repos/create-or-update-file-contents",
+      "path": "repos/{owner}/{repo}/contents/{path}"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/list-contributors",
+      "path": "repos/{owner}/{repo}/contributors"
+    },
+    {
+      "group": "copilot",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "copilot/get-copilot-cloud-agent-configuration",
+      "path": "repos/{owner}/{repo}/copilot/cloud-agent/configuration"
+    },
+    {
+      "group": "copilot",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "copilot/get-repository-code-review-settings",
+      "path": "repos/{owner}/{repo}/copilot/code-review/settings"
+    },
+    {
+      "group": "copilot",
+      "host": "api.github.com",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "copilot/update-repository-code-review-settings",
+      "path": "repos/{owner}/{repo}/copilot/code-review/settings"
+    },
+    {
+      "group": "dependabot",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "dependabot/list-alerts-for-repo",
+      "path": "repos/{owner}/{repo}/dependabot/alerts"
+    },
+    {
+      "group": "dependabot",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "dependabot/get-alert",
+      "path": "repos/{owner}/{repo}/dependabot/alerts/{alert_number}"
+    },
+    {
+      "group": "dependabot",
+      "host": "api.github.com",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "dependabot/update-alert",
+      "path": "repos/{owner}/{repo}/dependabot/alerts/{alert_number}"
+    },
+    {
+      "group": "dependabot",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "dependabot/get-repository-runner-settings",
+      "path": "repos/{owner}/{repo}/dependabot/runner-settings"
+    },
+    {
+      "group": "dependabot",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "dependabot/set-repository-runner-settings",
+      "path": "repos/{owner}/{repo}/dependabot/runner-settings"
+    },
+    {
+      "group": "dependabot",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "dependabot/list-repo-secrets",
+      "path": "repos/{owner}/{repo}/dependabot/secrets"
+    },
+    {
+      "group": "dependabot",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "dependabot/delete-repo-secret",
+      "path": "repos/{owner}/{repo}/dependabot/secrets/{secret_name}"
+    },
+    {
+      "group": "dependabot",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "dependabot/get-repo-secret",
+      "path": "repos/{owner}/{repo}/dependabot/secrets/{secret_name}"
+    },
+    {
+      "group": "dependabot",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "dependabot/create-or-update-repo-secret",
+      "path": "repos/{owner}/{repo}/dependabot/secrets/{secret_name}"
+    },
+    {
+      "group": "dependabot",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "dependabot/get-repo-public-key",
+      "path": "repos/{owner}/{repo}/dependabot/secrets/public-key"
+    },
+    {
+      "group": "dependency-graph",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "dependency-graph/diff-range",
+      "path": "repos/{owner}/{repo}/dependency-graph/compare/{basehead}"
+    },
+    {
+      "group": "dependency-graph",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "dependency-graph/export-sbom",
+      "path": "repos/{owner}/{repo}/dependency-graph/sbom"
+    },
+    {
+      "group": "dependency-graph",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "dependency-graph/fetch-sbom-report",
+      "path": "repos/{owner}/{repo}/dependency-graph/sbom/fetch-report/{sbom_uuid}"
+    },
+    {
+      "group": "dependency-graph",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "dependency-graph/generate-sbom-report",
+      "path": "repos/{owner}/{repo}/dependency-graph/sbom/generate-report"
+    },
+    {
+      "group": "dependency-graph",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "dependency-graph/create-repository-snapshot",
+      "path": "repos/{owner}/{repo}/dependency-graph/snapshots"
+    },
+    {
+      "group": "deployments",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/list-deployments",
+      "path": "repos/{owner}/{repo}/deployments"
+    },
+    {
+      "group": "deployments",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "repos/create-deployment",
+      "path": "repos/{owner}/{repo}/deployments"
+    },
+    {
+      "group": "deployments",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "repos/delete-deployment",
+      "path": "repos/{owner}/{repo}/deployments/{deployment_id}"
+    },
+    {
+      "group": "deployments",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-deployment",
+      "path": "repos/{owner}/{repo}/deployments/{deployment_id}"
+    },
+    {
+      "group": "deployments",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/list-deployment-statuses",
+      "path": "repos/{owner}/{repo}/deployments/{deployment_id}/statuses"
+    },
+    {
+      "group": "deployments",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "repos/create-deployment-status",
+      "path": "repos/{owner}/{repo}/deployments/{deployment_id}/statuses"
+    },
+    {
+      "group": "deployments",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-deployment-status",
+      "path": "repos/{owner}/{repo}/deployments/{deployment_id}/statuses/{status_id}"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "repos/create-dispatch-event",
+      "path": "repos/{owner}/{repo}/dispatches"
+    },
+    {
+      "group": "deployments",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-all-environments",
+      "path": "repos/{owner}/{repo}/environments"
+    },
+    {
+      "group": "deployments",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "repos/delete-an-environment",
+      "path": "repos/{owner}/{repo}/environments/{environment_name}"
+    },
+    {
+      "group": "deployments",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-environment",
+      "path": "repos/{owner}/{repo}/environments/{environment_name}"
+    },
+    {
+      "group": "deployments",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "repos/create-or-update-environment",
+      "path": "repos/{owner}/{repo}/environments/{environment_name}"
+    },
+    {
+      "group": "deployments",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-all-deployment-protection-rules",
+      "path": "repos/{owner}/{repo}/environments/{environment_name}/deployment_protection_rules"
+    },
+    {
+      "group": "deployments",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "repos/create-deployment-protection-rule",
+      "path": "repos/{owner}/{repo}/environments/{environment_name}/deployment_protection_rules"
+    },
+    {
+      "group": "deployments",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "repos/disable-deployment-protection-rule",
+      "path": "repos/{owner}/{repo}/environments/{environment_name}/deployment_protection_rules/{protection_rule_id}"
+    },
+    {
+      "group": "deployments",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-custom-deployment-protection-rule",
+      "path": "repos/{owner}/{repo}/environments/{environment_name}/deployment_protection_rules/{protection_rule_id}"
+    },
+    {
+      "group": "deployments",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/list-custom-deployment-rule-integrations",
+      "path": "repos/{owner}/{repo}/environments/{environment_name}/deployment_protection_rules/apps"
+    },
+    {
+      "group": "deployments",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/list-deployment-branch-policies",
+      "path": "repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies"
+    },
+    {
+      "group": "deployments",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "repos/create-deployment-branch-policy",
+      "path": "repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies"
+    },
+    {
+      "group": "deployments",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "repos/delete-deployment-branch-policy",
+      "path": "repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies/{branch_policy_id}"
+    },
+    {
+      "group": "deployments",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-deployment-branch-policy",
+      "path": "repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies/{branch_policy_id}"
+    },
+    {
+      "group": "deployments",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "repos/update-deployment-branch-policy",
+      "path": "repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies/{branch_policy_id}"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/list-environment-secrets",
+      "path": "repos/{owner}/{repo}/environments/{environment_name}/secrets"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "actions/delete-environment-secret",
+      "path": "repos/{owner}/{repo}/environments/{environment_name}/secrets/{secret_name}"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/get-environment-secret",
+      "path": "repos/{owner}/{repo}/environments/{environment_name}/secrets/{secret_name}"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "actions/create-or-update-environment-secret",
+      "path": "repos/{owner}/{repo}/environments/{environment_name}/secrets/{secret_name}"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/get-environment-public-key",
+      "path": "repos/{owner}/{repo}/environments/{environment_name}/secrets/public-key"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/list-environment-variables",
+      "path": "repos/{owner}/{repo}/environments/{environment_name}/variables"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "actions/create-environment-variable",
+      "path": "repos/{owner}/{repo}/environments/{environment_name}/variables"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "actions/delete-environment-variable",
+      "path": "repos/{owner}/{repo}/environments/{environment_name}/variables/{name}"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "actions/get-environment-variable",
+      "path": "repos/{owner}/{repo}/environments/{environment_name}/variables/{name}"
+    },
+    {
+      "group": "actions",
+      "host": "api.github.com",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "actions/update-environment-variable",
+      "path": "repos/{owner}/{repo}/environments/{environment_name}/variables/{name}"
+    },
+    {
+      "group": "activity",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "activity/list-repo-events",
+      "path": "repos/{owner}/{repo}/events"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/list-forks",
+      "path": "repos/{owner}/{repo}/forks"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "repos/create-fork",
+      "path": "repos/{owner}/{repo}/forks"
+    },
+    {
+      "group": "git",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "git/create-blob",
+      "path": "repos/{owner}/{repo}/git/blobs"
+    },
+    {
+      "group": "git",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "git/get-blob",
+      "path": "repos/{owner}/{repo}/git/blobs/{file_sha}"
+    },
+    {
+      "group": "git",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "git/create-commit",
+      "path": "repos/{owner}/{repo}/git/commits"
+    },
+    {
+      "group": "git",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": ["commit_sha"],
+      "operationId": "git/get-commit",
+      "path": "repos/{owner}/{repo}/git/commits/{commit_sha}"
+    },
+    {
+      "group": "git",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": ["ref"],
+      "operationId": "git/list-matching-refs",
+      "path": "repos/{owner}/{repo}/git/matching-refs/{ref}"
+    },
+    {
+      "group": "git",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": ["ref"],
+      "operationId": "git/get-ref",
+      "path": "repos/{owner}/{repo}/git/ref/{ref}"
+    },
+    {
+      "group": "git",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "git/create-ref",
+      "path": "repos/{owner}/{repo}/git/refs"
+    },
+    {
+      "group": "git",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": ["ref"],
+      "operationId": "git/delete-ref",
+      "path": "repos/{owner}/{repo}/git/refs/{ref}"
+    },
+    {
+      "group": "git",
+      "host": "api.github.com",
+      "method": "PATCH",
+      "multiSegment": ["ref"],
+      "operationId": "git/update-ref",
+      "path": "repos/{owner}/{repo}/git/refs/{ref}"
+    },
+    {
+      "group": "git",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "git/create-tag",
+      "path": "repos/{owner}/{repo}/git/tags"
+    },
+    {
+      "group": "git",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "git/get-tag",
+      "path": "repos/{owner}/{repo}/git/tags/{tag_sha}"
+    },
+    {
+      "group": "git",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "git/create-tree",
+      "path": "repos/{owner}/{repo}/git/trees"
+    },
+    {
+      "group": "git",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": ["tree_sha"],
+      "operationId": "git/get-tree",
+      "path": "repos/{owner}/{repo}/git/trees/{tree_sha}"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-hash-algorithm",
+      "path": "repos/{owner}/{repo}/hash-algorithm"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/list-webhooks",
+      "path": "repos/{owner}/{repo}/hooks"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "repos/create-webhook",
+      "path": "repos/{owner}/{repo}/hooks"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "repos/delete-webhook",
+      "path": "repos/{owner}/{repo}/hooks/{hook_id}"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-webhook",
+      "path": "repos/{owner}/{repo}/hooks/{hook_id}"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "repos/update-webhook",
+      "path": "repos/{owner}/{repo}/hooks/{hook_id}"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-webhook-config-for-repo",
+      "path": "repos/{owner}/{repo}/hooks/{hook_id}/config"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "repos/update-webhook-config-for-repo",
+      "path": "repos/{owner}/{repo}/hooks/{hook_id}/config"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/list-webhook-deliveries",
+      "path": "repos/{owner}/{repo}/hooks/{hook_id}/deliveries"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-webhook-delivery",
+      "path": "repos/{owner}/{repo}/hooks/{hook_id}/deliveries/{delivery_id}"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "repos/redeliver-webhook-delivery",
+      "path": "repos/{owner}/{repo}/hooks/{hook_id}/deliveries/{delivery_id}/attempts"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "repos/ping-webhook",
+      "path": "repos/{owner}/{repo}/hooks/{hook_id}/pings"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "repos/test-push-webhook",
+      "path": "repos/{owner}/{repo}/hooks/{hook_id}/tests"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "repos/disable-immutable-releases",
+      "path": "repos/{owner}/{repo}/immutable-releases"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/check-immutable-releases",
+      "path": "repos/{owner}/{repo}/immutable-releases"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "repos/enable-immutable-releases",
+      "path": "repos/{owner}/{repo}/immutable-releases"
+    },
+    {
+      "group": "migrations",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "migrations/cancel-import",
+      "path": "repos/{owner}/{repo}/import"
+    },
+    {
+      "group": "migrations",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "migrations/get-import-status",
+      "path": "repos/{owner}/{repo}/import"
+    },
+    {
+      "group": "migrations",
+      "host": "api.github.com",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "migrations/update-import",
+      "path": "repos/{owner}/{repo}/import"
+    },
+    {
+      "group": "migrations",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "migrations/start-import",
+      "path": "repos/{owner}/{repo}/import"
+    },
+    {
+      "group": "migrations",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "migrations/get-commit-authors",
+      "path": "repos/{owner}/{repo}/import/authors"
+    },
+    {
+      "group": "migrations",
+      "host": "api.github.com",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "migrations/map-commit-author",
+      "path": "repos/{owner}/{repo}/import/authors/{author_id}"
+    },
+    {
+      "group": "migrations",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "migrations/get-large-files",
+      "path": "repos/{owner}/{repo}/import/large_files"
+    },
+    {
+      "group": "migrations",
+      "host": "api.github.com",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "migrations/set-lfs-preference",
+      "path": "repos/{owner}/{repo}/import/lfs"
+    },
+    {
+      "group": "apps",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "apps/get-repo-installation",
+      "path": "repos/{owner}/{repo}/installation"
+    },
+    {
+      "group": "interactions",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "interactions/remove-restrictions-for-repo",
+      "path": "repos/{owner}/{repo}/interaction-limits"
+    },
+    {
+      "group": "interactions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "interactions/get-restrictions-for-repo",
+      "path": "repos/{owner}/{repo}/interaction-limits"
+    },
+    {
+      "group": "interactions",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "interactions/set-restrictions-for-repo",
+      "path": "repos/{owner}/{repo}/interaction-limits"
+    },
+    {
+      "group": "interactions",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "interactions/remove-pull-request-bypass-list-for-repo",
+      "path": "repos/{owner}/{repo}/interaction-limits/pulls/bypass-list"
+    },
+    {
+      "group": "interactions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "interactions/get-pull-request-bypass-list-for-repo",
+      "path": "repos/{owner}/{repo}/interaction-limits/pulls/bypass-list"
+    },
+    {
+      "group": "interactions",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "interactions/set-pull-request-bypass-list-for-repo",
+      "path": "repos/{owner}/{repo}/interaction-limits/pulls/bypass-list"
+    },
+    {
+      "group": "interactions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "interactions/get-pull-request-creation-cap-for-repo",
+      "path": "repos/{owner}/{repo}/interaction-limits/pulls/creation-cap"
+    },
+    {
+      "group": "interactions",
+      "host": "api.github.com",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "interactions/update-pull-request-creation-cap-for-repo",
+      "path": "repos/{owner}/{repo}/interaction-limits/pulls/creation-cap"
+    },
+    {
+      "group": "collaborators",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/list-invitations",
+      "path": "repos/{owner}/{repo}/invitations"
+    },
+    {
+      "group": "collaborators",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "repos/delete-invitation",
+      "path": "repos/{owner}/{repo}/invitations/{invitation_id}"
+    },
+    {
+      "group": "collaborators",
+      "host": "api.github.com",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "repos/update-invitation",
+      "path": "repos/{owner}/{repo}/invitations/{invitation_id}"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/list-issue-types",
+      "path": "repos/{owner}/{repo}/issue-types"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "issues/list-for-repo",
+      "path": "repos/{owner}/{repo}/issues"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "issues/create",
+      "path": "repos/{owner}/{repo}/issues"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "issues/get",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "issues/update",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "issues/list-issue-artifacts",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/artifacts"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "issues/create-issue-artifact",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/artifacts"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "issues/delete-issue-artifact",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/artifacts/{artifact_number}"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "issues/get-issue-artifact",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/artifacts/{artifact_number}"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "issues/update-issue-artifact",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/artifacts/{artifact_number}"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "issues/remove-assignees",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/assignees"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "issues/add-assignees",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/assignees"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "issues/check-user-can-be-assigned-to-issue",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/assignees/{assignee}"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "issues/list-comments",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/comments"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "issues/create-comment",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/comments"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "issues/list-dependencies-blocked-by",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/dependencies/blocked_by"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "issues/add-blocked-by-dependency",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/dependencies/blocked_by"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "issues/remove-dependency-blocked-by",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/dependencies/blocked_by/{issue_id}"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "issues/list-dependencies-blocking",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/dependencies/blocking"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "issues/list-events",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/events"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "issues/list-issue-field-values-for-issue",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/issue-field-values"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "issues/add-issue-field-values",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/issue-field-values"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "issues/set-issue-field-values",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/issue-field-values"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "issues/delete-issue-field-value",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/issue-field-values/{issue_field_id}"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "issues/remove-all-labels",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/labels"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "issues/list-labels-on-issue",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/labels"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "issues/add-labels",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/labels"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "issues/set-labels",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/labels"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "issues/remove-label",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/labels/{name}"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "issues/unlock",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/lock"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "issues/lock",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/lock"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "issues/get-parent",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/parent"
+    },
+    {
+      "group": "reactions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "reactions/list-for-issue",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/reactions"
+    },
+    {
+      "group": "reactions",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "reactions/create-for-issue",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/reactions"
+    },
+    {
+      "group": "reactions",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "reactions/delete-for-issue",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/reactions/{reaction_id}"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "issues/list-relates-to",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/relates_to"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "issues/add-relates-to",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/relates_to"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "issues/remove-relates-to",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/relates_to/{issue_id}"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "issues/remove-sub-issue",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/sub_issue"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "issues/list-sub-issues",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/sub_issues"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "issues/add-sub-issue",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/sub_issues"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "issues/reprioritize-sub-issue",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/sub_issues/priority"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "issues/list-suggestions",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/suggestions"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "issues/approve-suggestion",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/suggestions/{suggestion_id}/approve"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "issues/dismiss-suggestion",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/suggestions/{suggestion_id}/dismiss"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "issues/list-events-for-timeline",
+      "path": "repos/{owner}/{repo}/issues/{issue_number}/timeline"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "issues/list-comments-for-repo",
+      "path": "repos/{owner}/{repo}/issues/comments"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "issues/delete-comment",
+      "path": "repos/{owner}/{repo}/issues/comments/{comment_id}"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "issues/get-comment",
+      "path": "repos/{owner}/{repo}/issues/comments/{comment_id}"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "issues/update-comment",
+      "path": "repos/{owner}/{repo}/issues/comments/{comment_id}"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "issues/unpin-comment",
+      "path": "repos/{owner}/{repo}/issues/comments/{comment_id}/pin"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "issues/pin-comment",
+      "path": "repos/{owner}/{repo}/issues/comments/{comment_id}/pin"
+    },
+    {
+      "group": "reactions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "reactions/list-for-issue-comment",
+      "path": "repos/{owner}/{repo}/issues/comments/{comment_id}/reactions"
+    },
+    {
+      "group": "reactions",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "reactions/create-for-issue-comment",
+      "path": "repos/{owner}/{repo}/issues/comments/{comment_id}/reactions"
+    },
+    {
+      "group": "reactions",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "reactions/delete-for-issue-comment",
+      "path": "repos/{owner}/{repo}/issues/comments/{comment_id}/reactions/{reaction_id}"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "issues/list-events-for-repo",
+      "path": "repos/{owner}/{repo}/issues/events"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "issues/get-event",
+      "path": "repos/{owner}/{repo}/issues/events/{event_id}"
+    },
+    {
+      "group": "deploy-keys",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/list-deploy-keys",
+      "path": "repos/{owner}/{repo}/keys"
+    },
+    {
+      "group": "deploy-keys",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "repos/create-deploy-key",
+      "path": "repos/{owner}/{repo}/keys"
+    },
+    {
+      "group": "deploy-keys",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "repos/delete-deploy-key",
+      "path": "repos/{owner}/{repo}/keys/{key_id}"
+    },
+    {
+      "group": "deploy-keys",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-deploy-key",
+      "path": "repos/{owner}/{repo}/keys/{key_id}"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "issues/list-labels-for-repo",
+      "path": "repos/{owner}/{repo}/labels"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "issues/create-label",
+      "path": "repos/{owner}/{repo}/labels"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "issues/delete-label",
+      "path": "repos/{owner}/{repo}/labels/{name}"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "issues/get-label",
+      "path": "repos/{owner}/{repo}/labels/{name}"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "issues/update-label",
+      "path": "repos/{owner}/{repo}/labels/{name}"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/list-languages",
+      "path": "repos/{owner}/{repo}/languages"
+    },
+    {
+      "group": "licenses",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "licenses/get-for-repo",
+      "path": "repos/{owner}/{repo}/license"
+    },
+    {
+      "group": "branches",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "repos/merge-upstream",
+      "path": "repos/{owner}/{repo}/merge-upstream"
+    },
+    {
+      "group": "branches",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "repos/merge",
+      "path": "repos/{owner}/{repo}/merges"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "issues/list-milestones",
+      "path": "repos/{owner}/{repo}/milestones"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "issues/create-milestone",
+      "path": "repos/{owner}/{repo}/milestones"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "issues/delete-milestone",
+      "path": "repos/{owner}/{repo}/milestones/{milestone_number}"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "issues/get-milestone",
+      "path": "repos/{owner}/{repo}/milestones/{milestone_number}"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "issues/update-milestone",
+      "path": "repos/{owner}/{repo}/milestones/{milestone_number}"
+    },
+    {
+      "group": "issues",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "issues/list-labels-for-milestone",
+      "path": "repos/{owner}/{repo}/milestones/{milestone_number}/labels"
+    },
+    {
+      "group": "activity",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "activity/list-repo-notifications-for-authenticated-user",
+      "path": "repos/{owner}/{repo}/notifications"
+    },
+    {
+      "group": "activity",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "activity/mark-repo-notifications-as-read",
+      "path": "repos/{owner}/{repo}/notifications"
+    },
+    {
+      "group": "pages",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "repos/delete-pages-site",
+      "path": "repos/{owner}/{repo}/pages"
+    },
+    {
+      "group": "pages",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-pages",
+      "path": "repos/{owner}/{repo}/pages"
+    },
+    {
+      "group": "pages",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "repos/create-pages-site",
+      "path": "repos/{owner}/{repo}/pages"
+    },
+    {
+      "group": "pages",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "repos/update-information-about-pages-site",
+      "path": "repos/{owner}/{repo}/pages"
+    },
+    {
+      "group": "pages",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/list-pages-builds",
+      "path": "repos/{owner}/{repo}/pages/builds"
+    },
+    {
+      "group": "pages",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "repos/request-pages-build",
+      "path": "repos/{owner}/{repo}/pages/builds"
+    },
+    {
+      "group": "pages",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-pages-build",
+      "path": "repos/{owner}/{repo}/pages/builds/{build_id}"
+    },
+    {
+      "group": "pages",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-latest-pages-build",
+      "path": "repos/{owner}/{repo}/pages/builds/latest"
+    },
+    {
+      "group": "pages",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "repos/create-pages-deployment",
+      "path": "repos/{owner}/{repo}/pages/deployments"
+    },
+    {
+      "group": "pages",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-pages-deployment",
+      "path": "repos/{owner}/{repo}/pages/deployments/{pages_deployment_id}"
+    },
+    {
+      "group": "pages",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "repos/cancel-pages-deployment",
+      "path": "repos/{owner}/{repo}/pages/deployments/{pages_deployment_id}/cancel"
+    },
+    {
+      "group": "pages",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-pages-health-check",
+      "path": "repos/{owner}/{repo}/pages/health"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/list-planning-statuses",
+      "path": "repos/{owner}/{repo}/planning-statuses"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "repos/disable-private-vulnerability-reporting",
+      "path": "repos/{owner}/{repo}/private-vulnerability-reporting"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/check-private-vulnerability-reporting",
+      "path": "repos/{owner}/{repo}/private-vulnerability-reporting"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "repos/enable-private-vulnerability-reporting",
+      "path": "repos/{owner}/{repo}/private-vulnerability-reporting"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/custom-properties-for-repos-get-repository-values",
+      "path": "repos/{owner}/{repo}/properties/values"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "repos/custom-properties-for-repos-create-or-update-repository-values",
+      "path": "repos/{owner}/{repo}/properties/values"
+    },
+    {
+      "group": "pulls",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "pulls/list",
+      "path": "repos/{owner}/{repo}/pulls"
+    },
+    {
+      "group": "pulls",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "pulls/create",
+      "path": "repos/{owner}/{repo}/pulls"
+    },
+    {
+      "group": "pulls",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "pulls/get",
+      "path": "repos/{owner}/{repo}/pulls/{pull_number}"
+    },
+    {
+      "group": "pulls",
+      "host": "api.github.com",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "pulls/update",
+      "path": "repos/{owner}/{repo}/pulls/{pull_number}"
+    },
+    {
+      "group": "codespaces",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "codespaces/create-with-pr-for-authenticated-user",
+      "path": "repos/{owner}/{repo}/pulls/{pull_number}/codespaces"
+    },
+    {
+      "group": "pulls",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "pulls/list-review-comments",
+      "path": "repos/{owner}/{repo}/pulls/{pull_number}/comments"
+    },
+    {
+      "group": "pulls",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "pulls/create-review-comment",
+      "path": "repos/{owner}/{repo}/pulls/{pull_number}/comments"
+    },
+    {
+      "group": "pulls",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "pulls/create-reply-for-review-comment",
+      "path": "repos/{owner}/{repo}/pulls/{pull_number}/comments/{comment_id}/replies"
+    },
+    {
+      "group": "pulls",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "pulls/list-commits",
+      "path": "repos/{owner}/{repo}/pulls/{pull_number}/commits"
+    },
+    {
+      "group": "pulls",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "pulls/request-copilot-code-review",
+      "path": "repos/{owner}/{repo}/pulls/{pull_number}/copilot-code-review"
+    },
+    {
+      "group": "pulls",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "pulls/list-files",
+      "path": "repos/{owner}/{repo}/pulls/{pull_number}/files"
+    },
+    {
+      "group": "pulls",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "pulls/check-if-merged",
+      "path": "repos/{owner}/{repo}/pulls/{pull_number}/merge"
+    },
+    {
+      "group": "pulls",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "pulls/merge",
+      "path": "repos/{owner}/{repo}/pulls/{pull_number}/merge"
+    },
+    {
+      "group": "pulls",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "pulls/merge-async",
+      "path": "repos/{owner}/{repo}/pulls/{pull_number}/merge-async"
+    },
+    {
+      "group": "pulls",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "pulls/get-merge-async-result",
+      "path": "repos/{owner}/{repo}/pulls/{pull_number}/merge-async/{uuid}"
+    },
+    {
+      "group": "pulls",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "pulls/remove-requested-reviewers",
+      "path": "repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers"
+    },
+    {
+      "group": "pulls",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "pulls/list-requested-reviewers",
+      "path": "repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers"
+    },
+    {
+      "group": "pulls",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "pulls/request-reviewers",
+      "path": "repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers"
+    },
+    {
+      "group": "pulls",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "pulls/rerequest-reviewers",
+      "path": "repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers/rerequest"
+    },
+    {
+      "group": "pulls",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "pulls/list-reviews",
+      "path": "repos/{owner}/{repo}/pulls/{pull_number}/reviews"
+    },
+    {
+      "group": "pulls",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "pulls/create-review",
+      "path": "repos/{owner}/{repo}/pulls/{pull_number}/reviews"
+    },
+    {
+      "group": "pulls",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "pulls/delete-pending-review",
+      "path": "repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}"
+    },
+    {
+      "group": "pulls",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "pulls/get-review",
+      "path": "repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}"
+    },
+    {
+      "group": "pulls",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "pulls/update-review",
+      "path": "repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}"
+    },
+    {
+      "group": "pulls",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "pulls/list-comments-for-review",
+      "path": "repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}/comments"
+    },
+    {
+      "group": "pulls",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "pulls/dismiss-review",
+      "path": "repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}/dismissals"
+    },
+    {
+      "group": "pulls",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "pulls/submit-review",
+      "path": "repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}/events"
+    },
+    {
+      "group": "pulls",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "pulls/update-branch",
+      "path": "repos/{owner}/{repo}/pulls/{pull_number}/update-branch"
+    },
+    {
+      "group": "pulls",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "pulls/list-review-comments-for-repo",
+      "path": "repos/{owner}/{repo}/pulls/comments"
+    },
+    {
+      "group": "pulls",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "pulls/delete-review-comment",
+      "path": "repos/{owner}/{repo}/pulls/comments/{comment_id}"
+    },
+    {
+      "group": "pulls",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "pulls/get-review-comment",
+      "path": "repos/{owner}/{repo}/pulls/comments/{comment_id}"
+    },
+    {
+      "group": "pulls",
+      "host": "api.github.com",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "pulls/update-review-comment",
+      "path": "repos/{owner}/{repo}/pulls/comments/{comment_id}"
+    },
+    {
+      "group": "reactions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "reactions/list-for-pull-request-review-comment",
+      "path": "repos/{owner}/{repo}/pulls/comments/{comment_id}/reactions"
+    },
+    {
+      "group": "reactions",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "reactions/create-for-pull-request-review-comment",
+      "path": "repos/{owner}/{repo}/pulls/comments/{comment_id}/reactions"
+    },
+    {
+      "group": "reactions",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "reactions/delete-for-pull-request-comment",
+      "path": "repos/{owner}/{repo}/pulls/comments/{comment_id}/reactions/{reaction_id}"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-readme",
+      "path": "repos/{owner}/{repo}/readme"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": ["dir"],
+      "operationId": "repos/get-readme-in-directory",
+      "path": "repos/{owner}/{repo}/readme/{dir}"
+    },
+    {
+      "group": "releases",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/list-releases",
+      "path": "repos/{owner}/{repo}/releases"
+    },
+    {
+      "group": "releases",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "repos/create-release",
+      "path": "repos/{owner}/{repo}/releases"
+    },
+    {
+      "group": "releases",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "repos/delete-release",
+      "path": "repos/{owner}/{repo}/releases/{release_id}"
+    },
+    {
+      "group": "releases",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-release",
+      "path": "repos/{owner}/{repo}/releases/{release_id}"
+    },
+    {
+      "group": "releases",
+      "host": "api.github.com",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "repos/update-release",
+      "path": "repos/{owner}/{repo}/releases/{release_id}"
+    },
+    {
+      "group": "releases",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/list-release-assets",
+      "path": "repos/{owner}/{repo}/releases/{release_id}/assets"
+    },
+    {
+      "group": "reactions",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "reactions/list-for-release",
+      "path": "repos/{owner}/{repo}/releases/{release_id}/reactions"
+    },
+    {
+      "group": "reactions",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "reactions/create-for-release",
+      "path": "repos/{owner}/{repo}/releases/{release_id}/reactions"
+    },
+    {
+      "group": "reactions",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "reactions/delete-for-release",
+      "path": "repos/{owner}/{repo}/releases/{release_id}/reactions/{reaction_id}"
+    },
+    {
+      "group": "releases",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "repos/delete-release-asset",
+      "path": "repos/{owner}/{repo}/releases/assets/{asset_id}"
+    },
+    {
+      "group": "releases",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-release-asset",
+      "path": "repos/{owner}/{repo}/releases/assets/{asset_id}"
+    },
+    {
+      "group": "releases",
+      "host": "api.github.com",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "repos/update-release-asset",
+      "path": "repos/{owner}/{repo}/releases/assets/{asset_id}"
+    },
+    {
+      "group": "releases",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "repos/generate-release-notes",
+      "path": "repos/{owner}/{repo}/releases/generate-notes"
+    },
+    {
+      "group": "releases",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-latest-release",
+      "path": "repos/{owner}/{repo}/releases/latest"
+    },
+    {
+      "group": "releases",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": ["tag"],
+      "operationId": "repos/get-release-by-tag",
+      "path": "repos/{owner}/{repo}/releases/tags/{tag}"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": ["branch"],
+      "operationId": "repos/get-branch-rules",
+      "path": "repos/{owner}/{repo}/rules/branches/{branch}"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-repo-rulesets",
+      "path": "repos/{owner}/{repo}/rulesets"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "repos/create-repo-ruleset",
+      "path": "repos/{owner}/{repo}/rulesets"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "repos/delete-repo-ruleset",
+      "path": "repos/{owner}/{repo}/rulesets/{ruleset_id}"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-repo-ruleset",
+      "path": "repos/{owner}/{repo}/rulesets/{ruleset_id}"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "repos/update-repo-ruleset",
+      "path": "repos/{owner}/{repo}/rulesets/{ruleset_id}"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-repo-ruleset-history",
+      "path": "repos/{owner}/{repo}/rulesets/{ruleset_id}/history"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-repo-ruleset-version",
+      "path": "repos/{owner}/{repo}/rulesets/{ruleset_id}/history/{version_id}"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-repo-rule-suites",
+      "path": "repos/{owner}/{repo}/rulesets/rule-suites"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-repo-rule-suite",
+      "path": "repos/{owner}/{repo}/rulesets/rule-suites/{rule_suite_id}"
+    },
+    {
+      "group": "secret-scanning",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "secret-scanning/list-alerts-for-repo",
+      "path": "repos/{owner}/{repo}/secret-scanning/alerts"
+    },
+    {
+      "group": "secret-scanning",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "secret-scanning/get-alert",
+      "path": "repos/{owner}/{repo}/secret-scanning/alerts/{alert_number}"
+    },
+    {
+      "group": "secret-scanning",
+      "host": "api.github.com",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "secret-scanning/update-alert",
+      "path": "repos/{owner}/{repo}/secret-scanning/alerts/{alert_number}"
+    },
+    {
+      "group": "secret-scanning",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "secret-scanning/list-locations-for-alert",
+      "path": "repos/{owner}/{repo}/secret-scanning/alerts/{alert_number}/locations"
+    },
+    {
+      "group": "secret-scanning",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "secret-scanning/bulk-delete-repo-custom-patterns",
+      "path": "repos/{owner}/{repo}/secret-scanning/custom-patterns"
+    },
+    {
+      "group": "secret-scanning",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "secret-scanning/list-repo-custom-patterns",
+      "path": "repos/{owner}/{repo}/secret-scanning/custom-patterns"
+    },
+    {
+      "group": "secret-scanning",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "secret-scanning/bulk-create-repo-custom-patterns",
+      "path": "repos/{owner}/{repo}/secret-scanning/custom-patterns"
+    },
+    {
+      "group": "secret-scanning",
+      "host": "api.github.com",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "secret-scanning/update-repo-custom-pattern",
+      "path": "repos/{owner}/{repo}/secret-scanning/custom-patterns/{pattern_id}"
+    },
+    {
+      "group": "secret-scanning",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "secret-scanning/create-push-protection-bypass",
+      "path": "repos/{owner}/{repo}/secret-scanning/push-protection-bypasses"
+    },
+    {
+      "group": "secret-scanning",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "secret-scanning/get-scan-history",
+      "path": "repos/{owner}/{repo}/secret-scanning/scan-history"
+    },
+    {
+      "group": "security-advisories",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "security-advisories/list-repository-advisories",
+      "path": "repos/{owner}/{repo}/security-advisories"
+    },
+    {
+      "group": "security-advisories",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "security-advisories/create-repository-advisory",
+      "path": "repos/{owner}/{repo}/security-advisories"
+    },
+    {
+      "group": "security-advisories",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "security-advisories/get-repository-advisory",
+      "path": "repos/{owner}/{repo}/security-advisories/{ghsa_id}"
+    },
+    {
+      "group": "security-advisories",
+      "host": "api.github.com",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "security-advisories/update-repository-advisory",
+      "path": "repos/{owner}/{repo}/security-advisories/{ghsa_id}"
+    },
+    {
+      "group": "security-advisories",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "security-advisories/list-repository-advisory-comments",
+      "path": "repos/{owner}/{repo}/security-advisories/{ghsa_id}/comments"
+    },
+    {
+      "group": "security-advisories",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "security-advisories/create-repository-advisory-comment",
+      "path": "repos/{owner}/{repo}/security-advisories/{ghsa_id}/comments"
+    },
+    {
+      "group": "security-advisories",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "security-advisories/get-repository-advisory-comment",
+      "path": "repos/{owner}/{repo}/security-advisories/{ghsa_id}/comments/{comment_id}"
+    },
+    {
+      "group": "security-advisories",
+      "host": "api.github.com",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "security-advisories/update-repository-advisory-comment",
+      "path": "repos/{owner}/{repo}/security-advisories/{ghsa_id}/comments/{comment_id}"
+    },
+    {
+      "group": "security-advisories",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "security-advisories/create-repository-advisory-cve-request",
+      "path": "repos/{owner}/{repo}/security-advisories/{ghsa_id}/cve"
+    },
+    {
+      "group": "security-advisories",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "security-advisories/create-fork",
+      "path": "repos/{owner}/{repo}/security-advisories/{ghsa_id}/forks"
+    },
+    {
+      "group": "security-advisories",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "security-advisories/create-private-vulnerability-report",
+      "path": "repos/{owner}/{repo}/security-advisories/reports"
+    },
+    {
+      "group": "pulls",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "pull-request-stacks/list",
+      "path": "repos/{owner}/{repo}/stacks"
+    },
+    {
+      "group": "pulls",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "pull-request-stacks/create",
+      "path": "repos/{owner}/{repo}/stacks"
+    },
+    {
+      "group": "pulls",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "pull-request-stacks/get",
+      "path": "repos/{owner}/{repo}/stacks/{stack_number}"
+    },
+    {
+      "group": "pulls",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "pull-request-stacks/add",
+      "path": "repos/{owner}/{repo}/stacks/{stack_number}/add"
+    },
+    {
+      "group": "pulls",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "pull-request-stacks/unstack",
+      "path": "repos/{owner}/{repo}/stacks/{stack_number}/unstack"
+    },
+    {
+      "group": "activity",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "activity/list-stargazers-for-repo",
+      "path": "repos/{owner}/{repo}/stargazers"
+    },
+    {
+      "group": "activity",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "activity/get-stargazer-count-for-repo",
+      "path": "repos/{owner}/{repo}/stargazers/count"
+    },
+    {
+      "group": "activity",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "activity/get-stargazer-history-for-repo",
+      "path": "repos/{owner}/{repo}/stargazers/history"
+    },
+    {
+      "group": "metrics",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-code-frequency-stats",
+      "path": "repos/{owner}/{repo}/stats/code_frequency"
+    },
+    {
+      "group": "metrics",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-commit-activity-stats",
+      "path": "repos/{owner}/{repo}/stats/commit_activity"
+    },
+    {
+      "group": "metrics",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-contributors-stats",
+      "path": "repos/{owner}/{repo}/stats/contributors"
+    },
+    {
+      "group": "metrics",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-participation-stats",
+      "path": "repos/{owner}/{repo}/stats/participation"
+    },
+    {
+      "group": "metrics",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-punch-card-stats",
+      "path": "repos/{owner}/{repo}/stats/punch_card"
+    },
+    {
+      "group": "commits",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": ["sha"],
+      "operationId": "repos/create-commit-status",
+      "path": "repos/{owner}/{repo}/statuses/{sha}"
+    },
+    {
+      "group": "activity",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "activity/list-watchers-for-repo",
+      "path": "repos/{owner}/{repo}/subscribers"
+    },
+    {
+      "group": "activity",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "activity/delete-repo-subscription",
+      "path": "repos/{owner}/{repo}/subscription"
+    },
+    {
+      "group": "activity",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "activity/get-repo-subscription",
+      "path": "repos/{owner}/{repo}/subscription"
+    },
+    {
+      "group": "activity",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "activity/set-repo-subscription",
+      "path": "repos/{owner}/{repo}/subscription"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/list-tags",
+      "path": "repos/{owner}/{repo}/tags"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": ["ref"],
+      "operationId": "repos/download-tarball-archive",
+      "path": "repos/{owner}/{repo}/tarball/{ref}"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/list-teams",
+      "path": "repos/{owner}/{repo}/teams"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-all-topics",
+      "path": "repos/{owner}/{repo}/topics"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "repos/replace-all-topics",
+      "path": "repos/{owner}/{repo}/topics"
+    },
+    {
+      "group": "metrics",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-clones",
+      "path": "repos/{owner}/{repo}/traffic/clones"
+    },
+    {
+      "group": "metrics",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-top-paths",
+      "path": "repos/{owner}/{repo}/traffic/popular/paths"
+    },
+    {
+      "group": "metrics",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-top-referrers",
+      "path": "repos/{owner}/{repo}/traffic/popular/referrers"
+    },
+    {
+      "group": "metrics",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/get-views",
+      "path": "repos/{owner}/{repo}/traffic/views"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "repos/transfer",
+      "path": "repos/{owner}/{repo}/transfer"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "repos/disable-vulnerability-alerts",
+      "path": "repos/{owner}/{repo}/vulnerability-alerts"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "repos/check-vulnerability-alerts",
+      "path": "repos/{owner}/{repo}/vulnerability-alerts"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "repos/enable-vulnerability-alerts",
+      "path": "repos/{owner}/{repo}/vulnerability-alerts"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "GET",
+      "multiSegment": ["ref"],
+      "operationId": "repos/download-zipball-archive",
+      "path": "repos/{owner}/{repo}/zipball/{ref}"
+    },
+    {
+      "group": "repos",
+      "host": "api.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "repos/create-using-template",
+      "path": "repos/{template_owner}/{template_repo}/generate"
+    },
+    {
+      "group": "releases",
+      "host": "uploads.github.com",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "repos/upload-release-asset",
+      "path": "repos/{owner}/{repo}/releases/{release_id}/assets"
+    }
+  ]
+}

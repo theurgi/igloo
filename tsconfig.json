@@ -29,5 +29,5 @@
     "rewriteRelativeImportExtensions": true,
     "sourceMap": true
   },
-  "include": ["src/**/*", "bin/**/*", "vitest.config.ts"]
+  "include": ["src/**/*", "bin/**/*", "scripts/**/*", "vitest.config.ts"]
 }

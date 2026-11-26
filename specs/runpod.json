@@ -1,0 +1,1039 @@
+{
+  "source": "https://api.runpod.io/v2/openapi.json",
+  "sha256": "61739e732dc832c8fc6cb6353b93403cc309650f41905655d640b45442298e9c",
+  "paths": ["v2/**"],
+  "operations": [
+    {
+      "group": "Account",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getAccount",
+      "path": "v2/account"
+    },
+    {
+      "group": "Account",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getAccountLimits",
+      "path": "v2/account/limits"
+    },
+    {
+      "group": "Account",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listSecrets",
+      "path": "v2/account/secrets"
+    },
+    {
+      "group": "Account",
+      "host": "api.runpod.io",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createSecret",
+      "path": "v2/account/secrets"
+    },
+    {
+      "group": "Account",
+      "host": "api.runpod.io",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "deleteSecret",
+      "path": "v2/account/secrets/{id}"
+    },
+    {
+      "group": "Account",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getSecret",
+      "path": "v2/account/secrets/{id}"
+    },
+    {
+      "group": "Account",
+      "host": "api.runpod.io",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "updateSecret",
+      "path": "v2/account/secrets/{id}"
+    },
+    {
+      "group": "Account",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getSshKeys",
+      "path": "v2/account/ssh-keys"
+    },
+    {
+      "group": "Account",
+      "host": "api.runpod.io",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "updateSshKeys",
+      "path": "v2/account/ssh-keys"
+    },
+    {
+      "group": "Audit Logs",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listAuditLogs",
+      "path": "v2/audit-logs"
+    },
+    {
+      "group": "Billing",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listBilling",
+      "path": "v2/billing"
+    },
+    {
+      "group": "Billing",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getBalance",
+      "path": "v2/billing/balance"
+    },
+    {
+      "group": "Billing",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listClusterBilling",
+      "path": "v2/billing/clusters"
+    },
+    {
+      "group": "Billing",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listEndpointBilling",
+      "path": "v2/billing/endpoints"
+    },
+    {
+      "group": "Billing",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listNetworkVolumeBilling",
+      "path": "v2/billing/network-volumes"
+    },
+    {
+      "group": "Billing",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listPodBilling",
+      "path": "v2/billing/pods"
+    },
+    {
+      "group": "Billing",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listServerlessBilling",
+      "path": "v2/billing/serverless"
+    },
+    {
+      "group": "Catalog",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listCpuTypes",
+      "path": "v2/catalog/cpus"
+    },
+    {
+      "group": "Catalog",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getCpuType",
+      "path": "v2/catalog/cpus/{id}"
+    },
+    {
+      "group": "Catalog",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listDataCenters",
+      "path": "v2/catalog/datacenters"
+    },
+    {
+      "group": "Catalog",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getDataCenter",
+      "path": "v2/catalog/datacenters/{id}"
+    },
+    {
+      "group": "Catalog",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listGpuTypes",
+      "path": "v2/catalog/gpus"
+    },
+    {
+      "group": "Catalog",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getGpuType",
+      "path": "v2/catalog/gpus/{id}"
+    },
+    {
+      "group": "Catalog",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listCatalogRepos",
+      "path": "v2/catalog/repos"
+    },
+    {
+      "group": "Catalog",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getCatalogRepo",
+      "path": "v2/catalog/repos/{id}"
+    },
+    {
+      "group": "Catalog",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getCatalogRepoReadme",
+      "path": "v2/catalog/repos/{id}/readme"
+    },
+    {
+      "group": "Catalog",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listCatalogSkills",
+      "path": "v2/catalog/skills"
+    },
+    {
+      "group": "Catalog",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getCatalogSkill",
+      "path": "v2/catalog/skills/{id}"
+    },
+    {
+      "group": "Catalog",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getCatalogSkillReadme",
+      "path": "v2/catalog/skills/{id}/readme"
+    },
+    {
+      "group": "Catalog",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getCatalogSkillVariant",
+      "path": "v2/catalog/skills/{id}/variants/{variantId}"
+    },
+    {
+      "group": "Catalog",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listPublicTemplates",
+      "path": "v2/catalog/templates"
+    },
+    {
+      "group": "Catalog",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getCatalogTemplate",
+      "path": "v2/catalog/templates/{id}"
+    },
+    {
+      "group": "Catalog",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getPublicTemplateReadme",
+      "path": "v2/catalog/templates/{id}/readme"
+    },
+    {
+      "group": "Clusters",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listClusters",
+      "path": "v2/clusters"
+    },
+    {
+      "group": "Clusters",
+      "host": "api.runpod.io",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createCluster",
+      "path": "v2/clusters"
+    },
+    {
+      "group": "Clusters",
+      "host": "api.runpod.io",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "deleteCluster",
+      "path": "v2/clusters/{id}"
+    },
+    {
+      "group": "Clusters",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getCluster",
+      "path": "v2/clusters/{id}"
+    },
+    {
+      "group": "Clusters",
+      "host": "api.runpod.io",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "updateCluster",
+      "path": "v2/clusters/{id}"
+    },
+    {
+      "group": "Clusters",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listClusterPods",
+      "path": "v2/clusters/{id}/pods"
+    },
+    {
+      "group": "Cost Centers",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listCostCenters",
+      "path": "v2/cost-centers"
+    },
+    {
+      "group": "Cost Centers",
+      "host": "api.runpod.io",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createCostCenter",
+      "path": "v2/cost-centers"
+    },
+    {
+      "group": "Cost Centers",
+      "host": "api.runpod.io",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "deleteCostCenter",
+      "path": "v2/cost-centers/{id}"
+    },
+    {
+      "group": "Cost Centers",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getCostCenter",
+      "path": "v2/cost-centers/{id}"
+    },
+    {
+      "group": "Cost Centers",
+      "host": "api.runpod.io",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "updateCostCenter",
+      "path": "v2/cost-centers/{id}"
+    },
+    {
+      "group": "Cost Centers",
+      "host": "api.runpod.io",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "detachCostCenterResource",
+      "path": "v2/cost-centers/{id}/{resourceType}/{resourceId}"
+    },
+    {
+      "group": "Cost Centers",
+      "host": "api.runpod.io",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "attachCostCenterResource",
+      "path": "v2/cost-centers/{id}/{resourceType}/{resourceId}"
+    },
+    {
+      "group": "Cost Centers",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listCostCenterResources",
+      "path": "v2/cost-centers/{id}/resources"
+    },
+    {
+      "group": "Global Volumes",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listGlobalVolumes",
+      "path": "v2/global-volumes"
+    },
+    {
+      "group": "Global Volumes",
+      "host": "api.runpod.io",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createGlobalVolume",
+      "path": "v2/global-volumes"
+    },
+    {
+      "group": "Global Volumes",
+      "host": "api.runpod.io",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "deleteGlobalVolume",
+      "path": "v2/global-volumes/{id}"
+    },
+    {
+      "group": "Global Volumes",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getGlobalVolume",
+      "path": "v2/global-volumes/{id}"
+    },
+    {
+      "group": "Global Volumes",
+      "host": "api.runpod.io",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "updateGlobalVolume",
+      "path": "v2/global-volumes/{id}"
+    },
+    {
+      "group": "Network Volumes",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listNetworkVolumes",
+      "path": "v2/network-volumes"
+    },
+    {
+      "group": "Network Volumes",
+      "host": "api.runpod.io",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createNetworkVolume",
+      "path": "v2/network-volumes"
+    },
+    {
+      "group": "Network Volumes",
+      "host": "api.runpod.io",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "deleteNetworkVolume",
+      "path": "v2/network-volumes/{id}"
+    },
+    {
+      "group": "Network Volumes",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getNetworkVolume",
+      "path": "v2/network-volumes/{id}"
+    },
+    {
+      "group": "Network Volumes",
+      "host": "api.runpod.io",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "updateNetworkVolume",
+      "path": "v2/network-volumes/{id}"
+    },
+    {
+      "group": "Organization",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getOrganization",
+      "path": "v2/organization"
+    },
+    {
+      "group": "Organization",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listOrganizationGroups",
+      "path": "v2/organization/groups"
+    },
+    {
+      "group": "Organization",
+      "host": "api.runpod.io",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createOrganizationGroup",
+      "path": "v2/organization/groups"
+    },
+    {
+      "group": "Organization",
+      "host": "api.runpod.io",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "deleteOrganizationGroup",
+      "path": "v2/organization/groups/{id}"
+    },
+    {
+      "group": "Organization",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getOrganizationGroup",
+      "path": "v2/organization/groups/{id}"
+    },
+    {
+      "group": "Organization",
+      "host": "api.runpod.io",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "updateOrganizationGroup",
+      "path": "v2/organization/groups/{id}"
+    },
+    {
+      "group": "Organization",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listOrganizationGroupMembers",
+      "path": "v2/organization/groups/{id}/members"
+    },
+    {
+      "group": "Organization",
+      "host": "api.runpod.io",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "removeOrganizationGroupMember",
+      "path": "v2/organization/groups/{id}/members/{userId}"
+    },
+    {
+      "group": "Organization",
+      "host": "api.runpod.io",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "addOrganizationGroupMember",
+      "path": "v2/organization/groups/{id}/members/{userId}"
+    },
+    {
+      "group": "Organization",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listOrganizationInvites",
+      "path": "v2/organization/invites"
+    },
+    {
+      "group": "Organization",
+      "host": "api.runpod.io",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createOrganizationInvite",
+      "path": "v2/organization/invites"
+    },
+    {
+      "group": "Organization",
+      "host": "api.runpod.io",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "deleteOrganizationInvite",
+      "path": "v2/organization/invites/{id}"
+    },
+    {
+      "group": "Organization",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getOrganizationInvite",
+      "path": "v2/organization/invites/{id}"
+    },
+    {
+      "group": "Organization",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listOrganizationRoles",
+      "path": "v2/organization/roles"
+    },
+    {
+      "group": "Organization",
+      "host": "api.runpod.io",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createOrganizationRole",
+      "path": "v2/organization/roles"
+    },
+    {
+      "group": "Organization",
+      "host": "api.runpod.io",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "deleteOrganizationRole",
+      "path": "v2/organization/roles/{id}"
+    },
+    {
+      "group": "Organization",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getOrganizationRole",
+      "path": "v2/organization/roles/{id}"
+    },
+    {
+      "group": "Organization",
+      "host": "api.runpod.io",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "updateOrganizationRole",
+      "path": "v2/organization/roles/{id}"
+    },
+    {
+      "group": "Organization",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getOrganizationRoleCapabilities",
+      "path": "v2/organization/roles/capabilities"
+    },
+    {
+      "group": "Organization",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listOrganizationUsers",
+      "path": "v2/organization/users"
+    },
+    {
+      "group": "Organization",
+      "host": "api.runpod.io",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "deleteOrganizationUser",
+      "path": "v2/organization/users/{id}"
+    },
+    {
+      "group": "Organization",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getOrganizationUser",
+      "path": "v2/organization/users/{id}"
+    },
+    {
+      "group": "Organization",
+      "host": "api.runpod.io",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "updateOrganizationUser",
+      "path": "v2/organization/users/{id}"
+    },
+    {
+      "group": "Pods",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listPods",
+      "path": "v2/pods"
+    },
+    {
+      "group": "Pods",
+      "host": "api.runpod.io",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createPod",
+      "path": "v2/pods"
+    },
+    {
+      "group": "Pods",
+      "host": "api.runpod.io",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "deletePod",
+      "path": "v2/pods/{id}"
+    },
+    {
+      "group": "Pods",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getPod",
+      "path": "v2/pods/{id}"
+    },
+    {
+      "group": "Pods",
+      "host": "api.runpod.io",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "updatePod",
+      "path": "v2/pods/{id}"
+    },
+    {
+      "group": "Pods",
+      "host": "api.runpod.io",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "podAction",
+      "path": "v2/pods/{id}/action"
+    },
+    {
+      "group": "Pods",
+      "host": "api.runpod.io",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "execPod",
+      "path": "v2/pods/{id}/exec"
+    },
+    {
+      "group": "Pods",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getPodLogs",
+      "path": "v2/pods/{id}/logs"
+    },
+    {
+      "group": "Pods",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listQueuedPods",
+      "path": "v2/queued-pods"
+    },
+    {
+      "group": "Pods",
+      "host": "api.runpod.io",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "deleteQueuedPod",
+      "path": "v2/queued-pods/{id}"
+    },
+    {
+      "group": "Pods",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getQueuedPod",
+      "path": "v2/queued-pods/{id}"
+    },
+    {
+      "group": "Registries",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listRegistries",
+      "path": "v2/registries"
+    },
+    {
+      "group": "Registries",
+      "host": "api.runpod.io",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createRegistry",
+      "path": "v2/registries"
+    },
+    {
+      "group": "Registries",
+      "host": "api.runpod.io",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "deleteRegistry",
+      "path": "v2/registries/{id}"
+    },
+    {
+      "group": "Registries",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getRegistry",
+      "path": "v2/registries/{id}"
+    },
+    {
+      "group": "Registries",
+      "host": "api.runpod.io",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "updateRegistry",
+      "path": "v2/registries/{id}"
+    },
+    {
+      "group": "Registries",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listDelegations",
+      "path": "v2/registries/delegations"
+    },
+    {
+      "group": "Registries",
+      "host": "api.runpod.io",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createDelegation",
+      "path": "v2/registries/delegations"
+    },
+    {
+      "group": "Registries",
+      "host": "api.runpod.io",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "revokeDelegation",
+      "path": "v2/registries/delegations/{id}"
+    },
+    {
+      "group": "Serverless",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listEndpoints",
+      "path": "v2/serverless"
+    },
+    {
+      "group": "Serverless",
+      "host": "api.runpod.io",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createEndpoint",
+      "path": "v2/serverless"
+    },
+    {
+      "group": "Serverless",
+      "host": "api.runpod.io",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "deleteEndpoint",
+      "path": "v2/serverless/{id}"
+    },
+    {
+      "group": "Serverless",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getEndpoint",
+      "path": "v2/serverless/{id}"
+    },
+    {
+      "group": "Serverless",
+      "host": "api.runpod.io",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "updateEndpoint",
+      "path": "v2/serverless/{id}"
+    },
+    {
+      "group": "Serverless",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listEndpointBuilds",
+      "path": "v2/serverless/{id}/builds"
+    },
+    {
+      "group": "Serverless",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getEndpointBuild",
+      "path": "v2/serverless/{id}/builds/{buildId}"
+    },
+    {
+      "group": "Serverless",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getEndpointColdStartMetrics",
+      "path": "v2/serverless/{id}/metrics/cold-starts"
+    },
+    {
+      "group": "Serverless",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getEndpointRequestMetrics",
+      "path": "v2/serverless/{id}/metrics/requests"
+    },
+    {
+      "group": "Serverless",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getEndpointWorkerMetrics",
+      "path": "v2/serverless/{id}/metrics/workers"
+    },
+    {
+      "group": "Serverless",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listEndpointReleases",
+      "path": "v2/serverless/{id}/releases"
+    },
+    {
+      "group": "Serverless",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listEndpointWorkers",
+      "path": "v2/serverless/{id}/workers"
+    },
+    {
+      "group": "Serverless",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getWorkerLogs",
+      "path": "v2/serverless/{id}/workers/{workerId}/logs"
+    },
+    {
+      "group": "Signup",
+      "host": "api.runpod.io",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createAuthenticationAttempt",
+      "path": "v2/signup/authentication-attempts"
+    },
+    {
+      "group": "Signup",
+      "host": "api.runpod.io",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "resendAuthenticationAttempt",
+      "path": "v2/signup/authentication-attempts/{id}/resend"
+    },
+    {
+      "group": "Signup",
+      "host": "api.runpod.io",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "verifyAuthenticationAttempt",
+      "path": "v2/signup/authentication-attempts/{id}/verify"
+    },
+    {
+      "group": "Tags",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listTags",
+      "path": "v2/tags"
+    },
+    {
+      "group": "Tags",
+      "host": "api.runpod.io",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createTag",
+      "path": "v2/tags"
+    },
+    {
+      "group": "Tags",
+      "host": "api.runpod.io",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "deleteTag",
+      "path": "v2/tags/{id}"
+    },
+    {
+      "group": "Tags",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getTag",
+      "path": "v2/tags/{id}"
+    },
+    {
+      "group": "Tags",
+      "host": "api.runpod.io",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "updateTag",
+      "path": "v2/tags/{id}"
+    },
+    {
+      "group": "Tags",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listTagResources",
+      "path": "v2/tags/{id}/resources"
+    },
+    {
+      "group": "Tags",
+      "host": "api.runpod.io",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "detachTagResource",
+      "path": "v2/tags/{id}/resources/{resourceType}/{resourceId}"
+    },
+    {
+      "group": "Tags",
+      "host": "api.runpod.io",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "attachTagResource",
+      "path": "v2/tags/{id}/resources/{resourceType}/{resourceId}"
+    },
+    {
+      "group": "Templates",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listTemplates",
+      "path": "v2/templates"
+    },
+    {
+      "group": "Templates",
+      "host": "api.runpod.io",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createTemplate",
+      "path": "v2/templates"
+    },
+    {
+      "group": "Templates",
+      "host": "api.runpod.io",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "deleteTemplate",
+      "path": "v2/templates/{id}"
+    },
+    {
+      "group": "Templates",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getTemplate",
+      "path": "v2/templates/{id}"
+    },
+    {
+      "group": "Templates",
+      "host": "api.runpod.io",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "updateTemplate",
+      "path": "v2/templates/{id}"
+    },
+    {
+      "group": "Templates",
+      "host": "api.runpod.io",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getTemplateReadme",
+      "path": "v2/templates/{id}/readme"
+    }
+  ]
+}
