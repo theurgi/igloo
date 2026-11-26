@@ -37,6 +37,8 @@
 
       testVm = import ./nix/test-vm.nix;
 
+      profileCheck = import ./nix/profile-check.nix { inherit cli lib pkgs; };
+
       inherit
         (import ./nix/packages.nix {
           inherit
@@ -58,8 +60,9 @@
       # read, copy, or import into their own user layer under another name.
       brokerProfiles = import ./nix/profiles;
 
-      # `nix flake check` builds the packages, and checks that a content
-      # module cannot reach host execution and can disable the guest core.
+      # `nix flake check` builds the packages, checks that a content module
+      # cannot reach host execution and can disable the guest core, and
+      # checks the broker profiles igloo ships against their services' specs.
       checks.${system} =
         self.packages.${system}
         // import ./nix/checks.nix {
@@ -72,7 +75,8 @@
             pkgs
             testVm
             ;
-        };
+        }
+        // import ./nix/profile-checks.nix { inherit lib pkgs profileCheck; };
 
       devShells.${system}.default = import ./nix/devshell.nix {
         inherit
@@ -88,7 +92,7 @@
       # `nix fmt -- --ci` fails instead where one is not formatted.
       formatter.${system} = pkgs.nixfmt-tree;
 
-      lib = { inherit mkRunner; };
+      lib = { inherit mkRunner profileCheck; };
 
       nixosModules = {
         # The host side of an install — this is what a system configuration
