@@ -195,6 +195,13 @@ often it has been restarted, and how many of the VM's processes were killed for 
 Open a sandbox on the host with the same `/workspace` and `/root`, for when the VM will not boot.
 See [Troubleshooting](troubleshooting.md#igloo-fallback).
 
+### `igloo profile check <name>`
+
+Check a broker profile against its service's spec: what each set allows there, by group, the rules
+that match nothing, the writes nothing allows, and what each host comes to. The profile is named as
+`up` would find it, igloo's, the user layer's or the project's, or given as JSON with `--file`. See
+[Credentials](credentials.md#reviewing-a-profile-against-its-spec).
+
 ### `igloo doctor`
 
 Check the host's prerequisites. See [Install](install.md#check-the-host).

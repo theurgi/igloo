@@ -132,55 +132,59 @@ old values until it stops.
 
 Every module but `index.ts` has its tests beside it, in `src/<Module>.test.ts`.
 
-| Module                         | What it does                                                                                  |
-| ------------------------------ | --------------------------------------------------------------------------------------------- |
-| `index.ts`                     | The CLI's commands, and the one module of it that reads the process environment.              |
-| `Binaries.ts`                  | The external programs igloo runs, each overridable by an `IGLOO_*` variable.                  |
-| `Project.ts`                   | The marker, finding a project, creating one, and every path derived from its root.            |
-| `Templates.ts`                 | A new project's starting files: the user layer's templates, filled in and written by `init`.  |
-| `Cid.ts`                       | The vsock CID, a hash of the project's canonical root.                                        |
-| `Config.ts`                    | Finding, evaluating and composing the layers: the policy, and the content modules.            |
-| `Profiles.ts`                  | Broker profiles as the CLI reads them: a layer's `profiles`, igloo's own, and a grant's sets. |
-| `Evaluation.ts`                | The confinement for every nix evaluation of a layer or policy file, and locked inputs' paths. |
-| `Spec.ts`                      | What a composed configuration means for a VM: credentials, grants, the runner's arguments.    |
-| `Flake.ts`                     | The runner flake.                                                                             |
-| `BuildPlan.ts`                 | What building a runner would run, and which of it igloo refuses.                              |
-| `Vm.ts`                        | The launch, `restart`, `attach`, `down`, `ls`, and the broker's and forwards' command lines.  |
-| `Systemd.ts`                   | The transient user units a VM runs as, and their three confinements.                          |
-| `Virtiofs.ts`                  | One virtio-fs daemon per share: the runner's shares, checked, and each daemon's command line. |
-| `StoreView.ts`, `store-view.c` | The guest's closure-only `/nix/store`, through `igloo-store-view`.                            |
-| `landlock.c`                   | `igloo-landlock`.                                                                             |
-| `Qmp.ts`                       | `down`'s power event, sent only to QEMU's own process.                                        |
-| `Secrets.ts`                   | Fetching credential values into files on the runtime tmpfs. No value is returned from it.     |
-| `Tls.ts`                       | The broker's TLS certificate and the authority the guest trusts, made with `openssl`.         |
-| `broker.ts`                    | The broker: brokered requests, the tunnel, and what the guest is told to reach them.          |
-| `Fallback.ts`                  | `igloo fallback`'s bubblewrap sandbox, for when a VM will not start.                          |
-| `Preflight.ts`                 | `igloo doctor`'s checks, each failure with a remedy.                                          |
-| `BootLog.ts`                   | The record each launch leaves under `.igloo/logs/`.                                           |
-| `NixLog.ts`                    | nix's errors and warnings from a launch, kept in its record.                                  |
-| `LaunchInputs.ts`              | What a VM was launched from, and the report of what has changed since.                        |
-| `Report.ts`                    | `igloo report`: the version, `doctor` and a boot record, with what identifies replaced.       |
-| `Format.ts`                    | `ls`'s table, and how a failure is printed.                                                   |
+| Module                         | What it does                                                                                     |
+| ------------------------------ | ------------------------------------------------------------------------------------------------ |
+| `index.ts`                     | The CLI's commands, and the one module of it that reads the process environment.                 |
+| `Binaries.ts`                  | The external programs igloo runs, each overridable by an `IGLOO_*` variable.                     |
+| `Project.ts`                   | The marker, finding a project, creating one, and every path derived from its root.               |
+| `Templates.ts`                 | A new project's starting files: the user layer's templates, filled in and written by `init`.     |
+| `Cid.ts`                       | The vsock CID, a hash of the project's canonical root.                                           |
+| `Config.ts`                    | Finding, evaluating and composing the layers: the policy, and the content modules.               |
+| `Profiles.ts`                  | Broker profiles as the CLI reads them: a layer's `profiles`, igloo's own, and a grant's sets.    |
+| `ProfileCheck.ts`              | `igloo profile check`: a profile against a spec's operations, each decided by `decideAddressed`. |
+| `SpecIndex.ts`                 | An OpenAPI spec as an index of its operations; imports nothing, for `scripts/spec-index.ts`.     |
+| `Evaluation.ts`                | The confinement for every nix evaluation of a layer or policy file, and locked inputs' paths.    |
+| `Spec.ts`                      | What a composed configuration means for a VM: credentials, grants, the runner's arguments.       |
+| `Flake.ts`                     | The runner flake.                                                                                |
+| `BuildPlan.ts`                 | What building a runner would run, and which of it igloo refuses.                                 |
+| `Vm.ts`                        | The launch, `restart`, `attach`, `down`, `ls`, and the broker's and forwards' command lines.     |
+| `Systemd.ts`                   | The transient user units a VM runs as, and their three confinements.                             |
+| `Virtiofs.ts`                  | One virtio-fs daemon per share: the runner's shares, checked, and each daemon's command line.    |
+| `StoreView.ts`, `store-view.c` | The guest's closure-only `/nix/store`, through `igloo-store-view`.                               |
+| `landlock.c`                   | `igloo-landlock`.                                                                                |
+| `Qmp.ts`                       | `down`'s power event, sent only to QEMU's own process.                                           |
+| `Secrets.ts`                   | Fetching credential values into files on the runtime tmpfs. No value is returned from it.        |
+| `Tls.ts`                       | The broker's TLS certificate and the authority the guest trusts, made with `openssl`.            |
+| `broker.ts`                    | The broker: brokered requests, the tunnel, and what the guest is told to reach them.             |
+| `Fallback.ts`                  | `igloo fallback`'s bubblewrap sandbox, for when a VM will not start.                             |
+| `Preflight.ts`                 | `igloo doctor`'s checks, each failure with a remedy.                                             |
+| `BootLog.ts`                   | The record each launch leaves under `.igloo/logs/`.                                              |
+| `NixLog.ts`                    | nix's errors and warnings from a launch, kept in its record.                                     |
+| `LaunchInputs.ts`              | What a VM was launched from, and the report of what has changed since.                           |
+| `Report.ts`                    | `igloo report`: the version, `doctor` and a boot record, with what identifies replaced.          |
+| `Format.ts`                    | `ls`'s table, and how a failure is printed.                                                      |
 
 And the flake's outputs, the per-system ones for `x86_64-linux` only, each with the file that
 defines it; `flake.nix` wires them together:
 
-| Output                      | Defined in         | What it is                                                                                                                                          |
-| --------------------------- | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `packages.default`, `igloo` | `nix/packages.nix` | The CLI, as `cli` wraps it.                                                                                                                         |
-| `packages.broker`           | `nix/packages.nix` | The broker: `bun` and `src/broker.ts`.                                                                                                              |
-| `packages.landlock`         | `nix/packages.nix` | `igloo-landlock`.                                                                                                                                   |
-| `packages.storeView`        | `nix/packages.nix` | `igloo-store-view`.                                                                                                                                 |
-| `packages.testVm`           | `nix/test-vm.nix`  | A runner that is built and never booted. Building it checks the pins and the boot files.                                                            |
-| `checks`                    | `nix/checks.nix`   | The packages, and `testVm` with content modules that have to be refused, change nothing, or disable the core.                                       |
-| `lib.mkRunner`              | `nix/runner.nix`   | One VM's runner, from policy arguments and content modules.                                                                                         |
-| `brokerProfiles`            | `nix/profiles/`    | The broker profiles igloo ships, as data, one file each; the package carries them as JSON, `IGLOO_PROFILES`.                                        |
-| `nixosModules.default`      | `nix/host.nix`     | The host side: lingering for the users who run igloo.                                                                                               |
-| `nixosModules.guest`        | `nix/guest.nix`    | The guest core every VM starts from, with the packages in `nix/core-packages.nix` and the `igloo.writableStore` option in `nix/writable-store.nix`. |
-| `homeModules.default`       | `nix/home.nix`     | The user layer and templates, built into the store, and the CLI wrapped with `IGLOO_USER_LAYER` naming it.                                          |
-| `overlays.default`          | `flake.nix`        | The CLI as this flake built it, as `pkgs.igloo`.                                                                                                    |
-| `devShells.default`         | `nix/devshell.nix` | The development shell, with the `IGLOO_*` programs pointed at this flake's own builds.                                                              |
-| `formatter`                 | `flake.nix`        | `nix fmt`: nixfmt over the Nix files.                                                                                                               |
+| Output                      | Defined in               | What it is                                                                                                                                          |
+| --------------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages.default`, `igloo` | `nix/packages.nix`       | The CLI, as `cli` wraps it.                                                                                                                         |
+| `packages.broker`           | `nix/packages.nix`       | The broker: `bun` and `src/broker.ts`.                                                                                                              |
+| `packages.landlock`         | `nix/packages.nix`       | `igloo-landlock`.                                                                                                                                   |
+| `packages.storeView`        | `nix/packages.nix`       | `igloo-store-view`.                                                                                                                                 |
+| `packages.testVm`           | `nix/test-vm.nix`        | A runner that is built and never booted. Building it checks the pins and the boot files.                                                            |
+| `checks`                    | `nix/checks.nix`         | The packages, and `testVm` with content modules that have to be refused, change nothing, or disable the core.                                       |
+| `checks.profile-*`          | `nix/profile-checks.nix` | Each profile igloo ships against the index of its service's spec in `specs/`, and three changes to them the check has to fail on.                   |
+| `lib.mkRunner`              | `nix/runner.nix`         | One VM's runner, from policy arguments and content modules.                                                                                         |
+| `lib.profileCheck`          | `nix/profile-check.nix`  | `igloo profile check` as a derivation, from a profile, specs fetched by hash and the groups, for a collection's CI. Never part of a launch.         |
+| `brokerProfiles`            | `nix/profiles/`          | The broker profiles igloo ships, as data, one file each; the package carries them as JSON, `IGLOO_PROFILES`.                                        |
+| `nixosModules.default`      | `nix/host.nix`           | The host side: lingering for the users who run igloo.                                                                                               |
+| `nixosModules.guest`        | `nix/guest.nix`          | The guest core every VM starts from, with the packages in `nix/core-packages.nix` and the `igloo.writableStore` option in `nix/writable-store.nix`. |
+| `homeModules.default`       | `nix/home.nix`           | The user layer and templates, built into the store, and the CLI wrapped with `IGLOO_USER_LAYER` naming it.                                          |
+| `overlays.default`          | `flake.nix`              | The CLI as this flake built it, as `pkgs.igloo`.                                                                                                    |
+| `devShells.default`         | `nix/devshell.nix`       | The development shell, with the `IGLOO_*` programs pointed at this flake's own builds.                                                              |
+| `formatter`                 | `flake.nix`              | `nix fmt`: nixfmt over the Nix files.                                                                                                               |
 
 A running VM's drift report covers every file under `nix/`, found by walking it
 (`LaunchInputs.ofIgloo`), so igloo's Nix lives there or in `flake.nix` and nowhere else; a test
