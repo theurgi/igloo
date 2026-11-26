@@ -18,6 +18,7 @@ import * as Flake from './Flake.ts'
 import * as Format from './Format.ts'
 import * as LaunchInputs from './LaunchInputs.ts'
 import * as Preflight from './Preflight.ts'
+import * as ProfileCheck from './ProfileCheck.ts'
 import * as Profiles from './Profiles.ts'
 import * as Project from './Project.ts'
 import * as Report from './Report.ts'
@@ -622,12 +623,120 @@ const ls = Command.make(
   }),
 ).pipe(Command.withDescription('List the VMs the user manager is running'))
 
+const profileName = Argument.String('name').pipe(
+  Argument.withDescription(
+    'A profile by name, as `up` composes them here: igloo’s, the user layer’s, or this project’s',
+  ),
+  Argument.optional,
+)
+const profileFile = Flag.String('file').pipe(
+  Flag.withDescription('A profile as JSON, in place of a name: one defined outside any layer'),
+  Flag.optional,
+)
+const specFiles = Flag.String('spec').pipe(
+  Flag.withDescription('An OpenAPI spec of a service the profile reaches, as JSON; may repeat'),
+  Flag.atLeast(0),
+)
+const indexFiles = Flag.String('index').pipe(
+  Flag.withDescription('An index `scripts/spec-index.ts` made of a spec; may repeat'),
+  Flag.atLeast(0),
+)
+const groupsFile = Flag.String('groups').pipe(
+  Flag.withDescription(
+    'JSON naming the groups each set is meant to reach, as `{ "pods": [ "Pods" ] }`; an operation a set allows outside them fails',
+  ),
+  Flag.optional,
+)
+const unallowedFile = Flag.String('unallowed').pipe(
+  Flag.withDescription(
+    'JSON naming, per host, the writes nothing allows or denies, as `{ "api.example.com": [ "PUT v1/keys" ] }`; one it does not name fails, as does one it names that is not',
+  ),
+  Flag.optional,
+)
+
+/**
+ * A profile against its service's spec: what each set allows there, by
+ * group, the rules that match nothing, the writes nothing allows, and what
+ * each host comes to. A review tool, which neither a launch nor the broker
+ * runs. It exits non-zero on a failure, so a collection's CI can run it.
+ */
+const profileCheck = Command.make(
+  'check',
+  {
+    file: profileFile,
+    groups: groupsFile,
+    index: indexFiles,
+    name: profileName,
+    spec: specFiles,
+    unallowed: unallowedFile,
+  },
+  Effect.fn(function* (config) {
+    const named = Option.getOrUndefined(config.name)
+    const file = Option.getOrUndefined(config.file)
+    if ((named === undefined) === (file === undefined)) {
+      return yield* new ProfileCheck.ProfileCheckError({
+        message: 'name a profile, or give one as JSON with --file, and not both',
+      })
+    }
+    let checked: { readonly name: string; readonly profile: Profiles.Profile }
+    if (file === undefined) {
+      const project = yield* Project.findIfAny(process.cwd())
+      const composed = yield* Config.resolve(bins, {
+        igloo: yield* Profiles.shipped(env['IGLOO_PROFILES']),
+        project:
+          project === undefined
+            ? undefined
+            : { root: project.root, workspaceDir: project.workspaceDir },
+        userLayerDir,
+      })
+      const profile = composed.profiles.get(named ?? '')
+      if (profile === undefined) {
+        return yield* new ProfileCheck.ProfileCheckError({
+          message: `${named ?? ''} is not a profile ${project === undefined ? 'igloo or the user layer' : 'igloo, the user layer or this project'} defines. Defined: ${[...composed.profiles.keys()].toSorted().join(', ')}.`,
+        })
+      }
+      checked = { name: named ?? '', profile }
+    } else {
+      checked = yield* ProfileCheck.loadProfile(file)
+    }
+    const indexes = [
+      ...(yield* Effect.forEach(config.spec, ProfileCheck.indexSpec)),
+      ...(yield* Effect.forEach(config.index, ProfileCheck.loadIndex)),
+    ]
+    const groups = Option.getOrUndefined(config.groups)
+    const unallowed = Option.getOrUndefined(config.unallowed)
+    const checkedReport = ProfileCheck.check(checked.name, checked.profile, indexes, {
+      ...(groups === undefined
+        ? {}
+        : { groups: yield* ProfileCheck.loadLists(groups, 'the groups') }),
+      ...(unallowed === undefined
+        ? {}
+        : { unallowed: yield* ProfileCheck.loadLists(unallowed, 'the unallowed list') }),
+    })
+    yield* Effect.sync(() => process.stdout.write(ProfileCheck.render(checkedReport)))
+    if (checkedReport.failures.length > 0) {
+      return yield* new ProfileCheck.ProfileCheckError({
+        message: `${checked.name}: ${checkedReport.failures.length === 1 ? 'a check failed' : `${checkedReport.failures.length} checks failed`}, listed above`,
+      })
+    }
+  }),
+).pipe(
+  Command.withDescription(
+    "Check a broker profile against its service's spec: what each set allows, by group, and what matches nothing",
+  ),
+)
+
+const profile = Command.make('profile').pipe(
+  Command.withDescription('Broker profiles'),
+  Command.withSubcommands([profileCheck]),
+)
+
 // The runtime's own report is off because what it prints is a timestamped log
 // record with stack frames into source files, which an installed binary does
 // not have. The exit status is still the runtime's: 1 on a failure, 130 on an
 // interrupt.
 igloo.pipe(
-  Command.withSubcommands([init, up, attach, restart, fallback, down, ls, doctor, report]),
+  Command.withSubcommands([init, up, attach, restart, fallback, down, ls, profile, doctor, report]),
   Command.run({ version: packageJson.version }),
   // oxlint-disable-next-line effecttsgo/strict-effect-provide -- the entry point
   Effect.provide(BunServices.layer),

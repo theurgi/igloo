@@ -1,0 +1,11 @@
+{
+  "models": [
+    "Anthropic Messages",
+    "Chat",
+    "Embeddings",
+    "Images",
+    "Models",
+    "Responses",
+    "Video Generation"
+  ]
+}

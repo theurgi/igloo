@@ -317,6 +317,12 @@ export interface Layers {
 export interface Composed {
   readonly notes: readonly string[]
   readonly policy: Policy
+  /**
+   * The profiles this project's credentials may grant, by name: igloo's, the
+   * user layer's over them, and the project's own. Outside a project, the
+   * first two.
+   */
+  readonly profiles: ReadonlyMap<string, Profiles.Profile>
 }
 
 const bad = (message: string): Result.Result<never, ConfigError> =>
@@ -1445,6 +1451,7 @@ export const compose = (layers: Layers): Result.Result<Composed, ConfigError> =>
         tunnel: network === 'internet' ? 'any' : network === 'restricted' ? asked : [],
         vcpu,
       },
+      profiles: new Map([...forProject].map(([name, { profile }]) => [name, profile])),
     }
   })
 
@@ -1643,7 +1650,7 @@ export const resolve = Effect.fn('Config.resolve')(function* (
     user: userFiles === undefined ? undefined : yield* present(userFiles.policy),
   }
   const layers = yield* readPolicyFiles(bins, policyFiles)
-  const { notes, policy } = yield* Effect.fromResult(
+  const { notes, policy, profiles } = yield* Effect.fromResult(
     compose({
       igloo: input.igloo,
       project: layers.project,
@@ -1668,5 +1675,5 @@ export const resolve = Effect.fn('Config.resolve')(function* (
     if ((yield* present(candidate.file)) !== undefined) content.push(candidate)
   }
 
-  return { content, policy }
+  return { content, policy, profiles }
 })

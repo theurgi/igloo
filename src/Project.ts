@@ -201,6 +201,19 @@ export const refuseLinkedShares = Effect.fnUntraced(function* (project: Project)
  * path, and a symlinked route into a project has to arrive at the same one.
  */
 export const find = Effect.fnUntraced(function* (startDir: string) {
+  const found = yield* findIfAny(startDir)
+  if (found !== undefined) return found
+  return yield* new ProjectError({
+    message: `no igloo project at or above ${startDir} — no ${MARKER} found`,
+  })
+})
+
+/**
+ * `find`, with `undefined` where no directory at or above `startDir` has the
+ * marker, for a command that also runs outside a project. A marker that is
+ * found is refused as `find` refuses it.
+ */
+export const findIfAny = Effect.fnUntraced(function* (startDir: string) {
   const fs = yield* FileSystem.FileSystem
   let current = yield* fs
     .realPath(startDir)
@@ -217,10 +230,7 @@ export const find = Effect.fnUntraced(function* (startDir: string) {
     previous = current
     current = path.dirname(current)
   }
-
-  return yield* new ProjectError({
-    message: `no igloo project at or above ${startDir} — no ${MARKER} found`,
-  })
+  return undefined
 })
 
 /**

@@ -1583,6 +1583,27 @@ describe('Config.compose, on profiles', () => {
     ])
   })
 
+  it('gives the profiles a project may grant: igloo’s, the user layer’s over them, and its own', () => {
+    const profiles = (input: Input) => Result.getOrThrow(Config.compose(layers(input))).profiles
+    const user = exampleProfile()
+    const projects = { ...exampleProfile(), placeholders: ['OWN_API_KEY'] }
+    const inProject = profiles({
+      project: { profiles: { own: projects } },
+      user: { profiles: { runpod: user } },
+    })
+    assert.deepStrictEqual([...inProject.keys()].toSorted(), [
+      'anthropic-messages',
+      'github',
+      'openrouter',
+      'own',
+      'runpod',
+    ])
+    assert.deepStrictEqual(inProject.get('runpod')?.placeholders, user.placeholders)
+    assert.deepStrictEqual(inProject.get('own')?.placeholders, ['OWN_API_KEY'])
+    assert.deepStrictEqual(inProject.get('github'), shipped.get('github'))
+    assert.notInclude([...profiles({ user: {} }).keys()], 'own')
+  })
+
   it('refuses a project defining a name igloo or the user layer defines', () => {
     const igloos = refused({ project: { profiles: { runpod: exampleProfile() } } })
     assert.include(igloos, `${projectPolicyPath}: \`profiles.runpod\` is one of igloo's already`)
