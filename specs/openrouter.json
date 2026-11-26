@@ -1,0 +1,1422 @@
+{
+  "source": "https://openrouter.ai/openapi.json",
+  "sha256": "703e85f394d6be4dab9750f7172284435c9f7875b42684f8b4e245c7b8d15724",
+  "operations": [
+    {
+      "group": "alpha.decisions",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createApiAlphaDecisions",
+      "path": "api/alpha/decisions"
+    },
+    {
+      "group": "alpha.extractions",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createApiAlphaExtractions",
+      "path": "api/alpha/extractions"
+    },
+    {
+      "group": "Analytics",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getUserActivity",
+      "path": "api/v1/activity"
+    },
+    {
+      "group": "Analytics",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getAnalyticsMeta",
+      "path": "api/v1/analytics/meta"
+    },
+    {
+      "group": "Analytics",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "queryAnalytics",
+      "path": "api/v1/analytics/query"
+    },
+    {
+      "group": "TTS",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createAudioSpeech",
+      "path": "api/v1/audio/speech"
+    },
+    {
+      "group": "TTS",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listSpeechModels",
+      "path": "api/v1/audio/speech/models"
+    },
+    {
+      "group": "TTS",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getSpeechModel",
+      "path": "api/v1/audio/speech/models/{author}/{slug}"
+    },
+    {
+      "group": "STT",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createAudioTranscriptions",
+      "path": "api/v1/audio/transcriptions"
+    },
+    {
+      "group": "OAuth",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "exchangeAuthCodeForAPIKey",
+      "path": "api/v1/auth/keys"
+    },
+    {
+      "group": "OAuth",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createAuthKeysCode",
+      "path": "api/v1/auth/keys/code"
+    },
+    {
+      "group": "Batch",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listBatches",
+      "path": "api/v1/batches"
+    },
+    {
+      "group": "Batch",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createBatches",
+      "path": "api/v1/batches"
+    },
+    {
+      "group": "Batch",
+      "host": "openrouter.ai",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "deleteBatch",
+      "path": "api/v1/batches/{id}"
+    },
+    {
+      "group": "Batch",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getBatches",
+      "path": "api/v1/batches/{id}"
+    },
+    {
+      "group": "Benchmarks",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getBenchmarks",
+      "path": "api/v1/benchmarks"
+    },
+    {
+      "group": "BYOK",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listBYOKKeys",
+      "path": "api/v1/byok"
+    },
+    {
+      "group": "BYOK",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createBYOKKey",
+      "path": "api/v1/byok"
+    },
+    {
+      "group": "BYOK",
+      "host": "openrouter.ai",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "deleteBYOKKey",
+      "path": "api/v1/byok/{id}"
+    },
+    {
+      "group": "BYOK",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getBYOKKey",
+      "path": "api/v1/byok/{id}"
+    },
+    {
+      "group": "BYOK",
+      "host": "openrouter.ai",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "updateBYOKKey",
+      "path": "api/v1/byok/{id}"
+    },
+    {
+      "group": "Chat",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "sendChatCompletionRequest",
+      "path": "api/v1/chat/completions"
+    },
+    {
+      "group": "Classifications",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getTaskClassifications",
+      "path": "api/v1/classifications/task"
+    },
+    {
+      "group": "Containers",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listContainerFiles",
+      "path": "api/v1/containers/{container_id}/files"
+    },
+    {
+      "group": "Containers",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getContainerFile",
+      "path": "api/v1/containers/{container_id}/files/{file_id}"
+    },
+    {
+      "group": "Containers",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "downloadContainerFileContent",
+      "path": "api/v1/containers/{container_id}/files/{file_id}/content"
+    },
+    {
+      "group": "Containers",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "promoteContainerFile",
+      "path": "api/v1/containers/{container_id}/files/{file_id}/promote"
+    },
+    {
+      "group": "Credits",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getCredits",
+      "path": "api/v1/credits"
+    },
+    {
+      "group": "Credits",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createCoinbaseCharge",
+      "path": "api/v1/credits/coinbase"
+    },
+    {
+      "group": "Credits",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getCreditPurchasesSetupGuide",
+      "path": "api/v1/credits/purchases"
+    },
+    {
+      "group": "Credits",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createCreditsPurchases",
+      "path": "api/v1/credits/purchases"
+    },
+    {
+      "group": "Credits",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listCreditsPurchases",
+      "path": "api/v1/credits/purchases/{id}"
+    },
+    {
+      "group": "Credits",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listCreditsPurchasesSetup",
+      "path": "api/v1/credits/purchases/setup"
+    },
+    {
+      "group": "Credits",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listCreditsPurchasesSKILL.md",
+      "path": "api/v1/credits/purchases/SKILL.md"
+    },
+    {
+      "group": "Datasets",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getAppRankings",
+      "path": "api/v1/datasets/app-rankings"
+    },
+    {
+      "group": "Datasets",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getRankingsDaily",
+      "path": "api/v1/datasets/rankings-daily"
+    },
+    {
+      "group": "Datasets",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getSessionCost",
+      "path": "api/v1/datasets/session-cost"
+    },
+    {
+      "group": "Decisions",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createDecisions",
+      "path": "api/v1/decisions"
+    },
+    {
+      "group": "Embeddings",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createEmbeddings",
+      "path": "api/v1/embeddings"
+    },
+    {
+      "group": "Embeddings",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listEmbeddingsModels",
+      "path": "api/v1/embeddings/models"
+    },
+    {
+      "group": "Endpoints",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listEndpointsZdr",
+      "path": "api/v1/endpoints/zdr"
+    },
+    {
+      "group": "External Users",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listExternalUsers",
+      "path": "api/v1/external-users"
+    },
+    {
+      "group": "External Users",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createExternalUser",
+      "path": "api/v1/external-users"
+    },
+    {
+      "group": "External Users",
+      "host": "openrouter.ai",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "deleteExternalUser",
+      "path": "api/v1/external-users/{user}"
+    },
+    {
+      "group": "External Users",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getExternalUser",
+      "path": "api/v1/external-users/{user}"
+    },
+    {
+      "group": "External Users",
+      "host": "openrouter.ai",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "updateExternalUser",
+      "path": "api/v1/external-users/{user}"
+    },
+    {
+      "group": "Files",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listFiles",
+      "path": "api/v1/files"
+    },
+    {
+      "group": "Files",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "uploadFile",
+      "path": "api/v1/files"
+    },
+    {
+      "group": "Files",
+      "host": "openrouter.ai",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "deleteFile",
+      "path": "api/v1/files/{file_id}"
+    },
+    {
+      "group": "Files",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getFileMetadata",
+      "path": "api/v1/files/{file_id}"
+    },
+    {
+      "group": "Files",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "downloadFileContent",
+      "path": "api/v1/files/{file_id}/content"
+    },
+    {
+      "group": "Generations",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getGeneration",
+      "path": "api/v1/generation"
+    },
+    {
+      "group": "Generations",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listGenerationContent",
+      "path": "api/v1/generation/content"
+    },
+    {
+      "group": "Generations",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "submitGenerationFeedback",
+      "path": "api/v1/generation/feedback"
+    },
+    {
+      "group": "Guardrails",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listGuardrails",
+      "path": "api/v1/guardrails"
+    },
+    {
+      "group": "Guardrails",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createGuardrail",
+      "path": "api/v1/guardrails"
+    },
+    {
+      "group": "Guardrails",
+      "host": "openrouter.ai",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "deleteGuardrail",
+      "path": "api/v1/guardrails/{id}"
+    },
+    {
+      "group": "Guardrails",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getGuardrail",
+      "path": "api/v1/guardrails/{id}"
+    },
+    {
+      "group": "Guardrails",
+      "host": "openrouter.ai",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "updateGuardrail",
+      "path": "api/v1/guardrails/{id}"
+    },
+    {
+      "group": "Guardrails",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listGuardrailKeyAssignments",
+      "path": "api/v1/guardrails/{id}/assignments/keys"
+    },
+    {
+      "group": "Guardrails",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "bulkAssignKeysToGuardrail",
+      "path": "api/v1/guardrails/{id}/assignments/keys"
+    },
+    {
+      "group": "Guardrails",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "bulkUnassignKeysFromGuardrail",
+      "path": "api/v1/guardrails/{id}/assignments/keys/remove"
+    },
+    {
+      "group": "Guardrails",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listGuardrailMemberAssignments",
+      "path": "api/v1/guardrails/{id}/assignments/members"
+    },
+    {
+      "group": "Guardrails",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "bulkAssignMembersToGuardrail",
+      "path": "api/v1/guardrails/{id}/assignments/members"
+    },
+    {
+      "group": "Guardrails",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "bulkUnassignMembersFromGuardrail",
+      "path": "api/v1/guardrails/{id}/assignments/members/remove"
+    },
+    {
+      "group": "Guardrails",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listKeyAssignments",
+      "path": "api/v1/guardrails/assignments/keys"
+    },
+    {
+      "group": "Guardrails",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listMemberAssignments",
+      "path": "api/v1/guardrails/assignments/members"
+    },
+    {
+      "group": "Guardrail Policies",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listAccountPolicies",
+      "path": "api/v1/guardrails/policies/account"
+    },
+    {
+      "group": "Guardrail Policies",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createAccountPolicy",
+      "path": "api/v1/guardrails/policies/account"
+    },
+    {
+      "group": "Guardrail Policies",
+      "host": "openrouter.ai",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "deleteAccountPolicy",
+      "path": "api/v1/guardrails/policies/account/{id}"
+    },
+    {
+      "group": "Guardrail Policies",
+      "host": "openrouter.ai",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "updateAccountPolicy",
+      "path": "api/v1/guardrails/policies/account/{id}"
+    },
+    {
+      "group": "Guardrail Policies",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getApiKeyPolicyAssignment",
+      "path": "api/v1/guardrails/policies/assignments/api-keys/{hash}"
+    },
+    {
+      "group": "Guardrail Policies",
+      "host": "openrouter.ai",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "changeApiKeyPolicyAssignment",
+      "path": "api/v1/guardrails/policies/assignments/api-keys/{hash}"
+    },
+    {
+      "group": "Guardrail Policies",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getMemberPolicyAssignment",
+      "path": "api/v1/guardrails/policies/assignments/members/{member_id}"
+    },
+    {
+      "group": "Guardrail Policies",
+      "host": "openrouter.ai",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "changeMemberPolicyAssignment",
+      "path": "api/v1/guardrails/policies/assignments/members/{member_id}"
+    },
+    {
+      "group": "Guardrail Policies",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listBudgetPolicies",
+      "path": "api/v1/guardrails/policies/budget"
+    },
+    {
+      "group": "Guardrail Policies",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createBudgetPolicy",
+      "path": "api/v1/guardrails/policies/budget"
+    },
+    {
+      "group": "Guardrail Policies",
+      "host": "openrouter.ai",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "deleteBudgetPolicy",
+      "path": "api/v1/guardrails/policies/budget/{id}"
+    },
+    {
+      "group": "Guardrail Policies",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getBudgetPolicy",
+      "path": "api/v1/guardrails/policies/budget/{id}"
+    },
+    {
+      "group": "Guardrail Policies",
+      "host": "openrouter.ai",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "updateBudgetPolicy",
+      "path": "api/v1/guardrails/policies/budget/{id}"
+    },
+    {
+      "group": "Guardrail Policies",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listModelAvailabilityPolicies",
+      "path": "api/v1/guardrails/policies/model-availability"
+    },
+    {
+      "group": "Guardrail Policies",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createModelAvailabilityPolicy",
+      "path": "api/v1/guardrails/policies/model-availability"
+    },
+    {
+      "group": "Guardrail Policies",
+      "host": "openrouter.ai",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "deleteModelAvailabilityPolicy",
+      "path": "api/v1/guardrails/policies/model-availability/{id}"
+    },
+    {
+      "group": "Guardrail Policies",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getModelAvailabilityPolicy",
+      "path": "api/v1/guardrails/policies/model-availability/{id}"
+    },
+    {
+      "group": "Guardrail Policies",
+      "host": "openrouter.ai",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "updateModelAvailabilityPolicy",
+      "path": "api/v1/guardrails/policies/model-availability/{id}"
+    },
+    {
+      "group": "Guardrail Policies",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listModerationPolicies",
+      "path": "api/v1/guardrails/policies/moderation"
+    },
+    {
+      "group": "Guardrail Policies",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createModerationPolicy",
+      "path": "api/v1/guardrails/policies/moderation"
+    },
+    {
+      "group": "Guardrail Policies",
+      "host": "openrouter.ai",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "deleteModerationPolicy",
+      "path": "api/v1/guardrails/policies/moderation/{id}"
+    },
+    {
+      "group": "Guardrail Policies",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getModerationPolicy",
+      "path": "api/v1/guardrails/policies/moderation/{id}"
+    },
+    {
+      "group": "Guardrail Policies",
+      "host": "openrouter.ai",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "updateModerationPolicy",
+      "path": "api/v1/guardrails/policies/moderation/{id}"
+    },
+    {
+      "group": "Images",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createImages",
+      "path": "api/v1/images"
+    },
+    {
+      "group": "Images",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listImageModels",
+      "path": "api/v1/images/models"
+    },
+    {
+      "group": "Images",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listImageModelEndpoints",
+      "path": "api/v1/images/models/{author}/{slug}/endpoints"
+    },
+    {
+      "group": "API Keys",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getCurrentKey",
+      "path": "api/v1/key"
+    },
+    {
+      "group": "API Keys",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "list",
+      "path": "api/v1/keys"
+    },
+    {
+      "group": "API Keys",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createKeys",
+      "path": "api/v1/keys"
+    },
+    {
+      "group": "API Keys",
+      "host": "openrouter.ai",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "deleteKeys",
+      "path": "api/v1/keys/{hash}"
+    },
+    {
+      "group": "API Keys",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getKey",
+      "path": "api/v1/keys/{hash}"
+    },
+    {
+      "group": "API Keys",
+      "host": "openrouter.ai",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "updateKeys",
+      "path": "api/v1/keys/{hash}"
+    },
+    {
+      "group": "Anthropic Messages",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createMessages",
+      "path": "api/v1/messages"
+    },
+    {
+      "group": "Models",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getModel",
+      "path": "api/v1/model/{author}/{slug}"
+    },
+    {
+      "group": "Models",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getModels",
+      "path": "api/v1/models"
+    },
+    {
+      "group": "Endpoints",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listEndpoints",
+      "path": "api/v1/models/{author}/{slug}/endpoints"
+    },
+    {
+      "group": "Models",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listModelsCount",
+      "path": "api/v1/models/count"
+    },
+    {
+      "group": "Models",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listModelsUser",
+      "path": "api/v1/models/user"
+    },
+    {
+      "group": "OAuth",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listOauthJwks",
+      "path": "api/v1/oauth/jwks"
+    },
+    {
+      "group": "OAuth",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createOauthToken",
+      "path": "api/v1/oauth/token"
+    },
+    {
+      "group": "Observability",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listObservabilityDestinations",
+      "path": "api/v1/observability/destinations"
+    },
+    {
+      "group": "Observability",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createObservabilityDestination",
+      "path": "api/v1/observability/destinations"
+    },
+    {
+      "group": "Observability",
+      "host": "openrouter.ai",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "deleteObservabilityDestination",
+      "path": "api/v1/observability/destinations/{id}"
+    },
+    {
+      "group": "Observability",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getObservabilityDestination",
+      "path": "api/v1/observability/destinations/{id}"
+    },
+    {
+      "group": "Observability",
+      "host": "openrouter.ai",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "updateObservabilityDestination",
+      "path": "api/v1/observability/destinations/{id}"
+    },
+    {
+      "group": "Organization",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listOrganizationMembers",
+      "path": "api/v1/organization/members"
+    },
+    {
+      "group": "Organization",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getOrganizationSettings",
+      "path": "api/v1/organization/settings"
+    },
+    {
+      "group": "Organization",
+      "host": "openrouter.ai",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "updateOrganizationSettings",
+      "path": "api/v1/organization/settings"
+    },
+    {
+      "group": "Presets",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listPresets",
+      "path": "api/v1/presets"
+    },
+    {
+      "group": "Presets",
+      "host": "openrouter.ai",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "deletePreset",
+      "path": "api/v1/presets/{slug}"
+    },
+    {
+      "group": "Presets",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getPreset",
+      "path": "api/v1/presets/{slug}"
+    },
+    {
+      "group": "Presets",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createPresetsChatCompletions",
+      "path": "api/v1/presets/{slug}/chat/completions"
+    },
+    {
+      "group": "Presets",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createPresetsMessages",
+      "path": "api/v1/presets/{slug}/messages"
+    },
+    {
+      "group": "Presets",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createPresetsResponses",
+      "path": "api/v1/presets/{slug}/responses"
+    },
+    {
+      "group": "Presets",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "restorePreset",
+      "path": "api/v1/presets/{slug}/restore"
+    },
+    {
+      "group": "Presets",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listPresetVersions",
+      "path": "api/v1/presets/{slug}/versions"
+    },
+    {
+      "group": "Presets",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getPresetVersion",
+      "path": "api/v1/presets/{slug}/versions/{version}"
+    },
+    {
+      "group": "Private Endpoints",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listPrivateEndpoints",
+      "path": "api/v1/private-endpoints"
+    },
+    {
+      "group": "Private Endpoints",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createPrivateEndpoint",
+      "path": "api/v1/private-endpoints"
+    },
+    {
+      "group": "Private Endpoints",
+      "host": "openrouter.ai",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "deletePrivateEndpoint",
+      "path": "api/v1/private-endpoints/{id}"
+    },
+    {
+      "group": "Private Endpoints",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getPrivateEndpoint",
+      "path": "api/v1/private-endpoints/{id}"
+    },
+    {
+      "group": "Private Endpoints",
+      "host": "openrouter.ai",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "updatePrivateEndpoint",
+      "path": "api/v1/private-endpoints/{id}"
+    },
+    {
+      "group": "Private Endpoints",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "activatePrivateEndpoint",
+      "path": "api/v1/private-endpoints/{id}/activate"
+    },
+    {
+      "group": "Private Endpoints",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "disablePrivateEndpoint",
+      "path": "api/v1/private-endpoints/{id}/disable"
+    },
+    {
+      "group": "Private Endpoints",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "enablePrivateEndpoint",
+      "path": "api/v1/private-endpoints/{id}/enable"
+    },
+    {
+      "group": "Private Endpoints",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "validatePrivateEndpoint",
+      "path": "api/v1/private-endpoints/{id}/validate"
+    },
+    {
+      "group": "Private Providers",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listPrivateProviders",
+      "path": "api/v1/private-providers"
+    },
+    {
+      "group": "Private Providers",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createPrivateProvider",
+      "path": "api/v1/private-providers"
+    },
+    {
+      "group": "Private Providers",
+      "host": "openrouter.ai",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "deletePrivateProvider",
+      "path": "api/v1/private-providers/{slug}"
+    },
+    {
+      "group": "Private Providers",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getPrivateProvider",
+      "path": "api/v1/private-providers/{slug}"
+    },
+    {
+      "group": "Private Providers",
+      "host": "openrouter.ai",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "updatePrivateProvider",
+      "path": "api/v1/private-providers/{slug}"
+    },
+    {
+      "group": "Providers",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listProviders",
+      "path": "api/v1/providers"
+    },
+    {
+      "group": "Rerank",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createRerank",
+      "path": "api/v1/rerank"
+    },
+    {
+      "group": "Responses",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createResponses",
+      "path": "api/v1/responses"
+    },
+    {
+      "group": "SCIM",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listScimGroupMappings",
+      "path": "api/v1/scim/group-mappings"
+    },
+    {
+      "group": "SCIM",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createScimGroupMapping",
+      "path": "api/v1/scim/group-mappings"
+    },
+    {
+      "group": "SCIM",
+      "host": "openrouter.ai",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "deleteScimGroupMapping",
+      "path": "api/v1/scim/group-mappings/{id}"
+    },
+    {
+      "group": "SCIM",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getScimGroupMapping",
+      "path": "api/v1/scim/group-mappings/{id}"
+    },
+    {
+      "group": "SCIM",
+      "host": "openrouter.ai",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "updateScimGroupMapping",
+      "path": "api/v1/scim/group-mappings/{id}"
+    },
+    {
+      "group": "SCIM",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listScimGroups",
+      "path": "api/v1/scim/groups"
+    },
+    {
+      "group": "SCIM",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createScimSyncJob",
+      "path": "api/v1/scim/sync-jobs"
+    },
+    {
+      "group": "SCIM",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getScimSyncJob",
+      "path": "api/v1/scim/sync-jobs/{id}"
+    },
+    {
+      "group": "SystemOne",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createSystemone",
+      "path": "api/v1/systemone"
+    },
+    {
+      "group": "Tools",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listTools",
+      "path": "api/v1/tools"
+    },
+    {
+      "group": "Tools",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getTool",
+      "path": "api/v1/tools/{name}"
+    },
+    {
+      "group": "Vault",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listInternConnections",
+      "path": "api/v1/vault/interns/{internId}/connections"
+    },
+    {
+      "group": "Vault",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listInternEffectiveVaultSecrets",
+      "path": "api/v1/vault/interns/{internId}/effective-secrets"
+    },
+    {
+      "group": "Vault",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listInternVaultSecrets",
+      "path": "api/v1/vault/interns/{internId}/secrets"
+    },
+    {
+      "group": "Vault",
+      "host": "openrouter.ai",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "deleteInternVaultSecret",
+      "path": "api/v1/vault/interns/{internId}/secrets/{name}"
+    },
+    {
+      "group": "Vault",
+      "host": "openrouter.ai",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "storeInternVaultSecret",
+      "path": "api/v1/vault/interns/{internId}/secrets/{name}"
+    },
+    {
+      "group": "Vault",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "copyVaultSecretsToIntern",
+      "path": "api/v1/vault/interns/{internId}/secrets/copy"
+    },
+    {
+      "group": "Vault",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listVaultSecrets",
+      "path": "api/v1/vault/secrets"
+    },
+    {
+      "group": "Vault",
+      "host": "openrouter.ai",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "deleteVaultSecret",
+      "path": "api/v1/vault/secrets/{name}"
+    },
+    {
+      "group": "Vault",
+      "host": "openrouter.ai",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "storeVaultSecret",
+      "path": "api/v1/vault/secrets/{name}"
+    },
+    {
+      "group": "Video Generation",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createVideos",
+      "path": "api/v1/videos"
+    },
+    {
+      "group": "Video Generation",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getVideos",
+      "path": "api/v1/videos/{jobId}"
+    },
+    {
+      "group": "Video Generation",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listVideosContent",
+      "path": "api/v1/videos/{jobId}/content"
+    },
+    {
+      "group": "Video Generation",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listVideosModels",
+      "path": "api/v1/videos/models"
+    },
+    {
+      "group": "Workspaces",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listWorkspaces",
+      "path": "api/v1/workspaces"
+    },
+    {
+      "group": "Workspaces",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "createWorkspace",
+      "path": "api/v1/workspaces"
+    },
+    {
+      "group": "Workspaces",
+      "host": "openrouter.ai",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "deleteWorkspace",
+      "path": "api/v1/workspaces/{id}"
+    },
+    {
+      "group": "Workspaces",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getWorkspace",
+      "path": "api/v1/workspaces/{id}"
+    },
+    {
+      "group": "Workspaces",
+      "host": "openrouter.ai",
+      "method": "PATCH",
+      "multiSegment": [],
+      "operationId": "updateWorkspace",
+      "path": "api/v1/workspaces/{id}"
+    },
+    {
+      "group": "Workspaces",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listWorkspaceMembers",
+      "path": "api/v1/workspaces/{id}/members"
+    },
+    {
+      "group": "Workspaces",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "bulkAddWorkspaceMembers",
+      "path": "api/v1/workspaces/{id}/members/add"
+    },
+    {
+      "group": "Workspaces",
+      "host": "openrouter.ai",
+      "method": "POST",
+      "multiSegment": [],
+      "operationId": "bulkRemoveWorkspaceMembers",
+      "path": "api/v1/workspaces/{id}/members/remove"
+    },
+    {
+      "group": "Workspaces",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "listWorkspaceBudgets",
+      "path": "api/v1/workspaces/{workspace_ref}/budgets"
+    },
+    {
+      "group": "Workspaces",
+      "host": "openrouter.ai",
+      "method": "DELETE",
+      "multiSegment": [],
+      "operationId": "deleteWorkspaceBudget",
+      "path": "api/v1/workspaces/{workspace_ref}/budgets/{interval}"
+    },
+    {
+      "group": "Workspaces",
+      "host": "openrouter.ai",
+      "method": "GET",
+      "multiSegment": [],
+      "operationId": "getWorkspaceBudget",
+      "path": "api/v1/workspaces/{workspace_ref}/budgets/{interval}"
+    },
+    {
+      "group": "Workspaces",
+      "host": "openrouter.ai",
+      "method": "PUT",
+      "multiSegment": [],
+      "operationId": "upsertWorkspaceBudget",
+      "path": "api/v1/workspaces/{workspace_ref}/budgets/{interval}"
+    }
+  ]
+}
