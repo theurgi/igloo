@@ -931,7 +931,7 @@ const ruleMatches = (rule: PathRule, method: string, path: readonly string[]): b
   (rule.method === '*' || rule.method.includes(method)) && pathMatches(rule.path, path)
 
 /** A rule as the log and a refusal name it: `GET,HEAD v2/**`, the root as `/`, a git rule as `git fetch`. */
-const ruleText = (rule: Rule): string =>
+export const ruleText = (rule: Rule): string =>
   'git' in rule
     ? `git ${rule.git}`
     : `${rule.method === '*' ? '*' : rule.method.join(',')} ${rule.path === '' ? '/' : rule.path}`

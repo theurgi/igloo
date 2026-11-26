@@ -1,0 +1,25 @@
+{
+  "clusters": ["Clusters"],
+  "pods": ["Pods"],
+  "read": [
+    "Account",
+    "Audit Logs",
+    "Billing",
+    "Catalog",
+    "Clusters",
+    "Cost Centers",
+    "Global Volumes",
+    "Network Volumes",
+    "Organization",
+    "Pods",
+    "Registries",
+    "Serverless",
+    "Tags",
+    "Templates"
+  ],
+  "registries": ["Registries"],
+  "secrets": ["Account"],
+  "serverless": ["Serverless"],
+  "templates": ["Templates"],
+  "volumes": ["Global Volumes", "Network Volumes"]
+}

@@ -1,0 +1,32 @@
+{
+  "api.runpod.io": [
+    "PUT v2/account/ssh-keys",
+    "POST v2/cost-centers",
+    "DELETE v2/cost-centers/{id}",
+    "PATCH v2/cost-centers/{id}",
+    "DELETE v2/cost-centers/{id}/{resourceType}/{resourceId}",
+    "PUT v2/cost-centers/{id}/{resourceType}/{resourceId}",
+    "POST v2/organization/groups",
+    "DELETE v2/organization/groups/{id}",
+    "PATCH v2/organization/groups/{id}",
+    "DELETE v2/organization/groups/{id}/members/{userId}",
+    "PUT v2/organization/groups/{id}/members/{userId}",
+    "POST v2/organization/invites",
+    "DELETE v2/organization/invites/{id}",
+    "POST v2/organization/roles",
+    "DELETE v2/organization/roles/{id}",
+    "PATCH v2/organization/roles/{id}",
+    "DELETE v2/organization/users/{id}",
+    "PATCH v2/organization/users/{id}",
+    "POST v2/registries/delegations",
+    "DELETE v2/registries/delegations/{id}",
+    "POST v2/signup/authentication-attempts",
+    "POST v2/signup/authentication-attempts/{id}/resend",
+    "POST v2/signup/authentication-attempts/{id}/verify",
+    "POST v2/tags",
+    "DELETE v2/tags/{id}",
+    "PATCH v2/tags/{id}",
+    "DELETE v2/tags/{id}/resources/{resourceType}/{resourceId}",
+    "PUT v2/tags/{id}/resources/{resourceType}/{resourceId}"
+  ]
+}
