@@ -1465,6 +1465,16 @@ describe('Broker.decide, for a model server', () => {
       server: 'llama-swap',
       upstream: 'http://127.0.0.1:8080/v1/responses',
     })
+    assert.deepStrictEqual(routed(local('/local/llama-swap/v1/embeddings')), {
+      operation: 'embeddings',
+      server: 'llama-swap',
+      upstream: 'http://127.0.0.1:8080/v1/embeddings',
+    })
+    assert.deepStrictEqual(routed(local('/local/llama-swap/v1/rerank')), {
+      operation: 'rerank',
+      server: 'llama-swap',
+      upstream: 'http://127.0.0.1:8080/v1/rerank',
+    })
     assert.deepStrictEqual(routed(local('/local/llama-swap/v1/systemone')), {
       operation: 'systemone',
       server: 'llama-swap',
@@ -1490,7 +1500,8 @@ describe('Broker.decide, for a model server', () => {
   it('refuses every endpoint of the server that is not a model call or the listing', () => {
     // A proxy's captures of other clients, its passthrough to the server
     // behind it and its unloading; the server's own settings, slots, model
-    // loading and tools; and the model calls no harness here makes.
+    // loading and tools; the model calls no harness here makes; and other
+    // paths a server serves embeddings and reranking at.
     for (const path of [
       'api/captures/1',
       'logs/stream',
@@ -1506,8 +1517,12 @@ describe('Broker.decide, for a model server', () => {
       'tools',
       'metrics',
       'v1/completions',
-      'v1/embeddings',
       'v1/messages',
+      'embedding',
+      'embeddings',
+      'rerank',
+      'reranking',
+      'v1/reranking',
       'v1/chat/completions/extra',
       'v1',
     ]) {
@@ -1521,6 +1536,8 @@ describe('Broker.decide, for a model server', () => {
     assert.strictEqual(outcome(local('/local')), 403)
     assert.strictEqual(outcome(local('/local/LLAMA-SWAP/v1/chat/completions')), 403)
     assert.strictEqual(outcome(local('/local/llama-swap/v1/chat/completions', 'GET')), 405)
+    assert.strictEqual(outcome(local('/local/llama-swap/v1/embeddings', 'GET')), 405)
+    assert.strictEqual(outcome(local('/local/llama-swap/v1/rerank', 'GET')), 405)
     assert.strictEqual(outcome(local('/local/llama-swap/v1/systemone', 'GET')), 405)
     assert.strictEqual(outcome(local('/local/llama-swap/v1/models')), 405)
   })
@@ -1683,6 +1700,8 @@ describe('Broker, for a model server', () => {
     for (const [endpoint, method] of [
       ['chat/completions', 'POST'],
       ['responses', 'POST'],
+      ['embeddings', 'POST'],
+      ['rerank', 'POST'],
       ['models', 'GET'],
     ] as const) {
       assert.strictEqual(outcome(Broker.decide(servers, method, `${baseUrl}/${endpoint}`)), 'allow')

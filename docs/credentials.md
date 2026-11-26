@@ -665,12 +665,14 @@ is read the way a credential's [source](#sources) is, under the same rules.
 - **Upstream:** `http://127.0.0.1:<port>`. The address is always this machine's loopback, so no
   setting can send a request anywhere else, and a `host`, `url` or any other field is refused. The
   server has to listen on `127.0.0.1`: one listening only on `::1` is not reached.
-- **Endpoints:** `POST v1/chat/completions`, `POST v1/responses` and `GET v1/models`, which
-  OpenAI-compatible servers share, and `POST v1/systemone`, llama.cpp's call of a decision model,
-  which llama-swap passes on from v262. Nothing else. A server's other endpoints are not model
-  calls: llama-swap's other endpoints read other clients' recorded requests and its logs, unload
-  models, and pass any request through to the server behind it; llama-server's own save its state to
-  files and restore it, load and unload models, and change its settings.
+- **Endpoints:** `POST v1/chat/completions`, `POST v1/responses`, `POST v1/embeddings` and
+  `GET v1/models`, which OpenAI-compatible servers share; `POST v1/rerank`, the reranking llama.cpp
+  serves; and `POST v1/systemone`, llama.cpp's call of a decision model, which llama-swap passes on
+  from v262. Nothing else, and one path for each: a server's aliases for the same call, such as
+  `v1/reranking`, are refused. A server's other endpoints are not model calls: llama-swap's other
+  endpoints read other clients' recorded requests and its logs, unload models, and pass any request
+  through to the server behind it; llama-server's own save its state to files and restore it, load
+  and unload models, and change its settings.
 - **Key:** with `key`, the broker sends it as a bearer token; without, it sends no credential. The
   guest's own `Authorization` is dropped either way. A server answering `401` comes back as a `403`
   saying it wants a key.
@@ -690,9 +692,14 @@ server is the server's to decide:
   that in the server's own configuration.
 - **Fetches.** Some servers reach the network for a request, from this machine: past the tunnel's
   address checks, LAN included. llama-server downloads an image, audio or video given as an
-  `http(s)` URL when it runs with a multimodal projector (`--mmproj`), and llama-swap sends a model
-  listed under its `peers` to the remote server named there. Under `restricted`, workspace data can
-  leave that way. Run the server without either if that matters.
+  `http(s)` URL, in a chat message or an embedding or reranking input, when it runs with a
+  multimodal projector (`--mmproj`); from build b12340 it refuses local and private addresses unless
+  it runs with `--media-allow-private-urls`. llama-swap sends a model listed under its `peers` to
+  the remote server named there. Under `restricted`, workspace data can leave that way. Run the
+  server without these if that matters.
+- **Files.** llama-server run with `--media-path` reads a file under that directory, on this
+  machine, for a `file://` URL in the same places, and gives it to the model. Run it without
+  `--media-path`, or point it at a directory the guest may read.
 
 ### Pointing an agent at a model server
 

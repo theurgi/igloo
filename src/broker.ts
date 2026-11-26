@@ -615,7 +615,13 @@ export type FetchOperation = 'fetch' | 'ls-refs'
 export type GitOperation = FetchOperation | 'push' | 'push-refs'
 
 /** The endpoints of a model server a grant may reach. */
-export type ModelServerOperation = 'chat-completions' | 'list-models' | 'responses' | 'systemone'
+export type ModelServerOperation =
+  | 'chat-completions'
+  | 'embeddings'
+  | 'list-models'
+  | 'rerank'
+  | 'responses'
+  | 'systemone'
 
 /**
  * A read on a name the broker answers that no grant covers: git's two fetch
@@ -860,10 +866,15 @@ const modelServerPrefix = 'local'
 
 /**
  * The endpoints a model server serves, and the operation each one is: the
- * ones every OpenAI-compatible server shares, a model call in either shape and
- * the listing a client finds models by; and llama.cpp's call of a decision
- * model, which answers typed questions about a state with probabilities rather
- * than text, and finds its model as a chat completion does.
+ * ones every OpenAI-compatible server shares, a model call in either shape,
+ * embeddings and the listing a client finds models by; a reranking, in the
+ * shape llama.cpp and others serve, which scores documents against a query;
+ * and llama.cpp's call of a decision model, which answers typed questions
+ * about a state with probabilities rather than text. Each call finds its model
+ * as a chat completion does, by the body's `model`.
+ *
+ * Each call has one path here. A server's aliases for the same call are left
+ * out, since one path is all a client needs.
  *
  * A server's other endpoints are left out, because what they reach is not a
  * model call: some read other clients' requests, some save to files on the
@@ -872,7 +883,9 @@ const modelServerPrefix = 'local'
  */
 const modelServerEndpoints: Readonly<Record<string, ModelServerOperation>> = {
   'v1/chat/completions': 'chat-completions',
+  'v1/embeddings': 'embeddings',
   'v1/models': 'list-models',
+  'v1/rerank': 'rerank',
   'v1/responses': 'responses',
   'v1/systemone': 'systemone',
 }
