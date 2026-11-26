@@ -66,7 +66,49 @@ CI runs more than the gate, and so should you when a change touches what it cove
   Each check in `nix/checks.nix` is `testVm` with one content module added that tries to reach host
   execution, through an option policy owns, an overlay or a replaced runner. It has to be refused,
   naming the option, or leave the runner `testVm`'s exactly. One more disables the guest core by
-  `nixosModules.guest`, and has to leave none of it and every pin held.
+  `nixosModules.guest`, and has to leave none of it and every pin held. And `nix/profile-checks.nix`
+  checks each profile igloo ships against its service's spec, as
+  [the next section](#the-profiles-against-their-specs) says.
+
+## The profiles against their specs
+
+`nix flake check` runs `igloo profile check` on every profile in `nix/profiles/`, against the index
+of its service's spec in `specs/`: `specs/<profile>.json`. Beside each index,
+`specs/<profile>.groups.json` names the groups each set is meant to reach, and
+`specs/<profile>.unallowed.json` the writes nothing allows or denies, as they were read. A profile
+with no index is checked all the same, and its hosts reported unchecked: `anthropic-messages`, since
+Anthropic publishes no spec. Three more checks change a profile or an index and have to fail: a set
+reaching a group outside its own, a misspelt pattern, and a write added to a spec.
+
+An index names its spec's URL and the sha256 of the file it was made from. To refresh one, download
+the spec and run the script on it, with the same `--path`s the index names, then format:
+
+```sh
+curl -o /tmp/runpod.json https://api.runpod.io/v2/openapi.json
+bun scripts/spec-index.ts --source https://api.runpod.io/v2/openapi.json --path 'v2/**' /tmp/runpod.json > specs/runpod.json
+bun run format
+```
+
+GitHub's is taken at a commit of `github/rest-api-description`, whose URL the index names, and keeps
+the API's root and `repos/*/*/**`, the paths the `github` profile reaches. OpenRouter's is kept
+whole.
+
+Then run `igloo profile check <profile> --index specs/<profile>.json` with `--groups` and
+`--unallowed`. A failure after a refresh asks whoever made it to decide, not to update the lists to
+match:
+
+- **A set reaches a group outside its own.** Read the operation. If the set should not allow it,
+  narrow the set's rules or refuse it in `deny`, and say why in the profile. If it should, add the
+  group, and say in the commit why it is safe.
+- **A rule matches no operation.** The service moved or dropped it. Change the rule to match, or
+  delete it.
+- **A write nothing allows or denies is new.** Decide whether one of the sets should allow it, as
+  `runpod`'s `pods` came to allow `exec`, or leave it refused and add it to the unallowed list.
+- **The unallowed list names a write that is no longer one.** The service removed it, or a set now
+  allows it. Take it out.
+
+A read that a set newly allows passes, since `read` sets allow by pattern. Read the new reads in the
+diff of the index all the same: the check can't tell whether a read is harmless.
 
 ## The host check
 

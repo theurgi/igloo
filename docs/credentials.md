@@ -317,7 +317,78 @@ What a set allows is plain from its rules:
 The worst a careless or hostile profile can do is let the guest use the key freely at hosts you
 named in your own grant. That is the weakest level, and still better than `deliver`, where the guest
 can copy the key and use it anywhere. Reviewing a profile you did not write means reading what the
-sets you choose allow; reviewing an update means reading what changed.
+sets you choose allow; reviewing an update means reading what changed. `igloo profile check` does
+the reading against the service's own list of operations.
+
+### Reviewing a profile against its spec
+
+Most services publish an OpenAPI spec naming every operation they have. Given one, igloo lists what
+a profile's sets actually allow, so you read operations rather than patterns:
+
+```sh
+curl -o runpod.json https://api.runpod.io/v2/openapi.json
+igloo profile check runpod --spec runpod.json
+```
+
+The profile is named as `up` would find it: igloo's, the user layer's, or, run inside a project, the
+project's. `--file profile.json` checks one that no layer defines, as JSON. `--spec` may be given
+once for each spec the profile's hosts need. For each host it prints:
+
+- **What each set allows**, operation by operation, grouped as the spec groups them (by its tags, or
+  for GitHub by `x-github.category`). An operation in a group you did not expect a set to reach is
+  the thing to look for: GitHub's `pulls/**` also reaches a Codespace made from a pull request,
+  which is why igloo's `github` refuses it in `deny`.
+- **The rules that match no operation**: a typo, or an API that moved. These fail the check.
+- **The writes nothing allows or denies**, which is how you see what a service has added since the
+  profile was written.
+- **The level** the host comes to with every set chosen, as [above](#levels).
+
+Every answer comes from the broker's own decision: each operation, with sample values in its path,
+is put to the same code that decides a real request. Where a slot of the path may hold a `/` (a
+file's path, say), the operation is asked about both ways, and one allowed only one way is marked.
+
+To hold a profile to what you expect, write the groups each set is meant to reach as JSON and pass
+them with `--groups`:
+
+```json
+{ "pods": ["Pods"], "templates": ["Templates"] }
+```
+
+An operation a set allows outside its groups fails the check, which exits non-zero. A set you leave
+out is listed and not held to anything. `--unallowed` takes the writes nothing allows or denies, per
+host, as `{ "api.runpod.io": [ "PUT v2/account/ssh-keys" ] }`: one it doesn't name fails, so a
+refreshed spec that adds a write fails until someone has read it. Neither file is part of the
+profile, which holds only what the broker enforces.
+
+For a collection of profiles, the flake's `lib.profileCheck` builds the same check from a profile,
+specs fetched by hash and the groups, for CI:
+
+```nix
+igloo.lib.profileCheck {
+  name = "example";
+  profile = import ./example.nix;
+  specs = [
+    {
+      url = "https://api.example.com/openapi.json";
+      hash = "sha256-…";
+    }
+  ];
+  groups = {
+    read = [ "Things" ];
+    write = [ "Things" ];
+  };
+}
+```
+
+A spec may name `paths` to keep only those parts of it, as rule paths; a rule outside them is
+reported as unchecked. A host no spec describes is reported as unchecked, not failed:
+`api.anthropic.com`, which publishes no spec, and `github.com`, whose git traffic is no API
+operation. A GraphQL endpoint is one operation whose reach is in its body, so a REST spec says
+nothing about it either.
+
+What it can't tell is whether a read is harmless. It lists every read a set allows, and only you can
+say which of them matter: a field's name is no guide, as `license.key` is a licence's identifier and
+no secret.
 
 ### What a profile cannot do
 
