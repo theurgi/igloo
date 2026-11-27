@@ -167,9 +167,9 @@ refused if it takes longer than 120 seconds, prints nothing, or prints more than
 
 A brokered credential's `profile` says what its key may do at a service: the hosts it is sent to,
 how it is sent at each, and named **sets** of what it may do there. A profile is data the broker
-reads, never code it runs. igloo ships `anthropic-messages`, `github`, `openrouter` and `runpod` as
-profiles (below). Anything else is a profile you define, or import from someone who published one.
-The one upstream policy places otherwise is a
+reads, never code it runs. igloo ships `anthropic-messages`, `github`, `openrouter`, `runpod` and
+`runpod-mcp` as profiles (below). Anything else is a profile you define, or import from someone who
+published one. The one upstream policy places otherwise is a
 [model server on this machine](#model-servers-on-this-machine), and only by its port.
 
 ### Defining and granting
@@ -641,6 +641,37 @@ A Runpod key reaches the whole account, so the bounds that matter most are Runpo
   whatever a query can. Keep a value that matters in a Runpod secret, which no read returns, and
   give it to a pod by reference.
 
+### `runpod-mcp`
+
+Runpod's hosted MCP server, `mcp.runpod.io`, which makes every operation of the REST API a tool, and
+adds a few of its own.
+
+- **Host:** `mcp.runpod.io`, at its root. A Runpod API key is sent as a bearer token, and the server
+  calls Runpod's APIs with it for each tool.
+- **Sets:** `runpod`'s, by tool rather than by path: each generated tool is in the set that allows
+  the REST request it makes, so `read`, `pods`, `clusters`, `serverless`, `templates`, `volumes`,
+  `registries`, `secrets` and `invoke` mean what they mean for `runpod`. `read` also holds the
+  catalog, the Hub, logs and Runpod's guides; `serverless` holds `deploy-hub-repo`, which creates an
+  endpoint from a Hub repository through a GraphQL mutation that `runpod` would refuse, to the same
+  end as `create-endpoint`. One more set:
+  - `feedback`: Runpod's agent-learning tools, `report_feedback`, `save_to_journal`, `ask_question`
+    and `read_journal`, which send what the agent writes from the conversation to Runpod for review,
+    and read the account's earlier notes back into the agent's context.
+  - Refused whatever is chosen: the tools for what `runpod` leaves out, an organization's members,
+    invitations, groups and roles, the account's SSH keys, tags, cost centres and ECR delegations;
+    and any tool the server adds until the profile lists it.
+- **Placeholder:** none. The client sends no key: the broker sends the account's.
+- **Grant:**
+  `hosts = [ "mcp.runpod.io" ]; allow = [ "clusters" "invoke" "pods" "read" "registries" "secrets" "serverless" "templates" "volumes" ];`,
+  adding `"feedback"` only if what the agent writes may go to Runpod. A grant of `runpod-mcp` and
+  one of `runpod` are two credentials, which may hold the same key.
+- **In the guest:** the server's own address, with no header, as
+  `claude mcp add --transport http runpod https://mcp.runpod.io/`.
+
+Runpod's guides are read through the `read-guide` tool; as resources, whose URIs change with each
+release of the guides, they are refused. What [`runpod`](#runpod) says of spending, of what a pod
+does and of what the account holds holds here too.
+
 ## Model servers on this machine
 
 A model server running on this machine, such as llama-server, llama-swap, Ollama, LM Studio or vLLM,
@@ -983,8 +1014,10 @@ that way, since it never enters the guest.
   ([`runpod`](#runpod)).
 - A serverless endpoint of the load-balancing kind is called at a name of its own,
   `<endpoint>.api.runpod.ai`, which the broker does not answer.
-- Runpod's hosted MCP server, `mcp.runpod.io`, is not brokered: every operation of the REST API is
-  one of its tools, those `runpod` refuses among them, and which one a request calls is in its body.
-  Signing in to it from the guest puts a token there, as any
-  [login inside the guest](#logins-inside-the-guest) does.
+- An MCP server that takes only an OAuth sign-in, with no key a profile can send, is not brokered:
+  signing in to it from the guest puts a token there, as any
+  [login inside the guest](#logins-inside-the-guest) does. Runpod's takes an API key as well
+  ([`runpod-mcp`](#runpod-mcp)).
+- The HTTP+SSE transport of MCP's 2024-11-05 revision, a `GET` stream with a separate message
+  endpoint, is not read: an MCP rule serves Streamable HTTP.
 - A credential's value is read only when the VM boots.

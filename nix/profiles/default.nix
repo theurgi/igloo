@@ -8,4 +8,5 @@
   github = import ./github.nix;
   openrouter = import ./openrouter.nix;
   runpod = import ./runpod.nix;
+  runpod-mcp = import ./runpod-mcp.nix;
 }

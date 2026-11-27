@@ -89,12 +89,13 @@ The exception is a name the broker answers: each host of a granted
 [profile](credentials.md#profiles) that its chosen sets reach: `github.com`, `api.github.com` and
 `uploads.github.com` for [`github`](credentials.md#github), `api.anthropic.com` for
 `anthropic-messages`, `openrouter.ai` for `openrouter`, `api.runpod.io` and `api.runpod.ai` for
-[`runpod`](credentials.md#runpod), and those of a profile you define. A host no chosen set reaches
-is not answered. Each is answered by its name alone; there is no path of the broker's port that
-reaches one. A `CONNECT` to one reaches the broker rather than the host, under every mode, and the
-broker is the other end of the TLS, with a certificate from an authority the guest trusts. A read
-the grant does not cover is sent on to the host with no credential where the tunnel would have
-reached that name: under `internet`, or listed under `restricted`.
+[`runpod`](credentials.md#runpod), `mcp.runpod.io` for [`runpod-mcp`](credentials.md#runpod-mcp),
+and those of a profile you define. A host no chosen set reaches is not answered. Each is answered by
+its name alone; there is no path of the broker's port that reaches one. A `CONNECT` to one reaches
+the broker rather than the host, under every mode, and the broker is the other end of the TLS, with
+a certificate from an authority the guest trusts. A read the grant does not cover is sent on to the
+host with no credential where the tunnel would have reached that name: under `internet`, or listed
+under `restricted`.
 
 - **Port 443 only.** No other port, no plain HTTP, no SSH, no UDP, no DNS and no ICMP, so `ping`,
   `dig` and `git` over SSH do not work. A [`github` grant](credentials.md#github) choosing `fetch`
