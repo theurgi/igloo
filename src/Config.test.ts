@@ -1747,7 +1747,7 @@ describe('Config.compose, on a profile’s definition', () => {
   /** What defining `profile` as `example` in a project comes to. */
   const defining = (profile: unknown) => refused({ project: { profiles: { example: profile } } })
 
-  it('refuses a field a profile does not have, MCP’s among them', () => {
+  it('refuses a field a profile does not have', () => {
     for (const field of ['ask', 'mcp', 'via']) {
       assert.include(
         defining(exampleProfile({ [field]: {} })),
@@ -1767,10 +1767,10 @@ describe('Config.compose, on a profile’s definition', () => {
     assert.include(
       defining(
         exampleProfile({
-          allow: { read: { 'api.example.com': [{ mcp: {}, method: 'GET', path: '' }] } },
+          allow: { read: { 'api.example.com': [{ cache: {}, method: 'GET', path: '' }] } },
         }),
       ),
-      "`mcp` is not a rule's field",
+      "`cache` is not a rule's field",
     )
   })
 
@@ -1994,6 +1994,89 @@ describe('Config.compose, on a profile’s definition', () => {
       defining(
         exampleProfile({
           deny: { 'api.example.com': [{ graphql: {}, method: 'POST', path: 'g' }] },
+        }),
+      ),
+      'no place in a `deny` rule',
+    )
+  })
+
+  /** `exampleProfile` whose `read` set at api.example.com is `rules`. */
+  const reading = (rules: unknown) =>
+    exampleProfile({ allow: { read: { 'api.example.com': rules } } })
+
+  it('takes an MCP rule, its prompts and resources empty where it lists none', () => {
+    const project = {
+      profiles: {
+        example: reading([
+          { mcp: { tools: ['get-pod', 'get-pod'] }, method: 'POST', path: 'mcp' },
+          {
+            mcp: { prompts: ['plan'], resources: ['file:///a'], tools: [] },
+            method: ['POST'],
+            path: 'other',
+          },
+        ]),
+      },
+      secrets: {
+        EXAMPLE: {
+          hosts: ['api.example.com'],
+          mode: 'broker',
+          profile: 'example',
+          allow: ['read'],
+          source: { file: '/k' },
+        },
+      },
+    }
+    const grant = grantNamed(composed({ project }), 'EXAMPLE')
+    assert.deepStrictEqual(grant?.hosts['api.example.com']?.allow, [
+      {
+        mcp: { prompts: [], resources: [], tools: ['get-pod'] },
+        method: ['POST'],
+        path: 'mcp',
+        set: 'read',
+      },
+      {
+        mcp: { prompts: ['plan'], resources: ['file:///a'], tools: [] },
+        method: ['POST'],
+        path: 'other',
+        set: 'read',
+      },
+    ])
+  })
+
+  it('refuses an MCP rule other than a POST, with another reader, or without its tools', () => {
+    const rule = (more: Record<string, unknown>) =>
+      defining(reading([{ mcp: { tools: ['t'] }, method: 'POST', path: 'mcp', ...more }]))
+    for (const method of ['GET', ['GET', 'POST'], '*']) {
+      assert.include(rule({ method }), 'is "POST" alone', JSON.stringify(method))
+    }
+    assert.include(rule({ graphql: { withheld: [] } }), 'takes no `graphql` and no `length`')
+    assert.include(rule({ length: 'kept' }), 'takes no `graphql` and no `length`')
+    for (const mcp of [
+      {},
+      { tools: 't' },
+      { tools: [''] },
+      { tools: [1] },
+      { tools: [], ask: [] },
+      [],
+    ]) {
+      assert.include(rule({ mcp }), '`mcp` at "mcp" is `{ tools = [ … ]; }`', JSON.stringify(mcp))
+    }
+    assert.include(
+      defining(
+        slotted({
+          allow: {
+            read: {
+              'api.example.com': [{ mcp: { tools: ['t'] }, method: 'POST', path: 'r/{repo}' }],
+            },
+          },
+        }),
+      ),
+      "one path, not a repository's",
+    )
+    assert.include(
+      defining(
+        exampleProfile({
+          deny: { 'api.example.com': [{ mcp: { tools: [] }, method: 'POST', path: 'mcp' }] },
         }),
       ),
       'no place in a `deny` rule',

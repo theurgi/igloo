@@ -5419,6 +5419,162 @@ describe('Broker.listedModels', () => {
   })
 })
 
+describe('Broker.mcpMessage', () => {
+  const read: Broker.McpChoice = {
+    names: { prompts: [], resources: [], tools: ['get-item'] },
+    rule: 'POST mcp',
+    set: 'read',
+  }
+  const write: Broker.McpChoice = {
+    names: { prompts: ['plan'], resources: ['file:///notes'], tools: ['add-item'] },
+    rule: 'POST mcp',
+    set: 'write',
+  }
+  const reading = (text: string) => Broker.mcpMessage(new TextEncoder().encode(text), [read, write])
+  const sending = (value: Record<string, unknown>) => reading(JSON.stringify(value))
+  const request = (method: string, params?: unknown, id: unknown = 1) =>
+    sending({ id, jsonrpc: '2.0', method, ...(params === undefined ? {} : { params }) })
+
+  it('passes a call to a listed tool, by the set whose rule lists it', () => {
+    assert.deepStrictEqual(request('tools/call', { arguments: { id: 7 }, name: 'get-item' }), {
+      choice: read,
+      method: 'tools/call',
+      name: 'get-item',
+    })
+    assert.deepStrictEqual(request('tools/call', { name: 'add-item' }), {
+      choice: write,
+      method: 'tools/call',
+      name: 'add-item',
+    })
+  })
+
+  it('passes a listed prompt and resource, and nothing of one list by another', () => {
+    assert.property(request('prompts/get', { name: 'plan' }), 'choice')
+    assert.property(request('resources/read', { uri: 'file:///notes' }), 'choice')
+    assert.propertyVal(request('prompts/get', { name: 'get-item' }), 'code', -32602)
+    assert.propertyVal(request('resources/read', { name: 'file:///notes' }), 'code', -32602)
+    assert.propertyVal(request('tools/call', { name: 'plan' }), 'code', -32602)
+  })
+
+  it('refuses a call to a tool no rule lists, as the server would, with its id', () => {
+    for (const name of ['delete-item', 'Get-item', 'get-item ', 'get-item\u0000']) {
+      assert.deepInclude(
+        request('tools/call', { name }, 'a'),
+        { code: -32602, id: 'a', method: 'tools/call' },
+        name,
+      )
+    }
+    for (const params of [undefined, {}, { name: 7 }, ['get-item'], { name: ['get-item'] }]) {
+      assert.propertyVal(request('tools/call', params), 'code', -32602, JSON.stringify(params))
+    }
+  })
+
+  it('passes what lists, describes, starts a connection or carries on a task', () => {
+    for (const method of [
+      'initialize',
+      'ping',
+      'server/discover',
+      'tools/list',
+      'prompts/list',
+      'resources/list',
+      'resources/templates/list',
+      'completion/complete',
+      'subscriptions/listen',
+      'tasks/get',
+      'tasks/result',
+    ]) {
+      assert.deepStrictEqual(request(method, {}), { choice: read, method }, method)
+    }
+  })
+
+  it('refuses a method it does not know, and one sent by the server', () => {
+    for (const method of [
+      'tools/run',
+      'sampling/createMessage',
+      'elicitation/create',
+      'Tools/list',
+    ]) {
+      assert.propertyVal(request(method), 'code', -32601, method)
+    }
+  })
+
+  it('passes a response and a notification', () => {
+    assert.deepStrictEqual(sending({ id: 4, jsonrpc: '2.0', result: {} }), { choice: read })
+    assert.deepStrictEqual(sending({ error: { code: 1, message: 'x' }, id: 4, jsonrpc: '2.0' }), {
+      choice: read,
+    })
+    assert.deepStrictEqual(sending({ jsonrpc: '2.0', method: 'notifications/initialized' }), {
+      choice: read,
+      method: 'notifications/initialized',
+    })
+  })
+
+  it('refuses what is not one message every parser reads alike', () => {
+    for (const text of [
+      'not json',
+      '',
+      '[{"jsonrpc":"2.0","id":1,"method":"tools/list"}]',
+      '"tools/list"',
+      '{"jsonrpc":"2.0","id":1,"method":"tools/list","method":"tools/call"}',
+      '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get-item","n\\u0061me":"x"}}',
+      '﻿{"jsonrpc":"2.0","id":1,"method":"tools/list"}',
+      '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"\\ud800"}}',
+    ]) {
+      assert.propertyVal(reading(text), 'status', 400, text)
+    }
+  })
+
+  it('refuses a message that is not JSON-RPC 2.0, or neither request nor response', () => {
+    for (const value of [
+      { id: 1, method: 'tools/list' },
+      { id: 1, jsonrpc: '1.0', method: 'tools/list' },
+      { id: 1, jsonrpc: '2.0' },
+      { jsonrpc: '2.0', result: {} },
+      { error: {}, id: 1, jsonrpc: '2.0', result: {} },
+      { id: 1, jsonrpc: '2.0', method: 7 },
+      { id: 1, jsonrpc: '2.0', method: 'tools/call', params: { name: 'get-item' }, result: {} },
+      { id: null, jsonrpc: '2.0', method: 'tools/list' },
+      { id: true, jsonrpc: '2.0', method: 'tools/list' },
+      { jsonrpc: '2.0', method: 'tools/call', params: { name: 'delete-item' } },
+    ]) {
+      assert.propertyVal(sending(value), 'status', 400, JSON.stringify(value))
+    }
+  })
+})
+
+describe('Broker.mcpHeaderValue and Broker.saying', () => {
+  it('writes a name as it is where it can be, and in Base64 where it cannot', () => {
+    assert.strictEqual(Broker.mcpHeaderValue('get-item'), 'get-item')
+    assert.strictEqual(Broker.mcpHeaderValue('a b'), 'a b')
+    for (const [name, encoded] of [
+      ['Hello, 世界', '=?base64?SGVsbG8sIOS4lueVjA==?='],
+      [' padded ', '=?base64?IHBhZGRlZCA=?='],
+      ['line1\nline2', '=?base64?bGluZTEKbGluZTI=?='],
+      ['=?base64?literal?=', '=?base64?PT9iYXNlNjQ/bGl0ZXJhbD89?='],
+      ['', '=?base64??='],
+    ] as const) {
+      assert.strictEqual(Broker.mcpHeaderValue(name), encoded, name)
+    }
+  })
+
+  it('sets the method and name a message said, and drops what it said none of', () => {
+    const guest = () => new Headers({ 'Mcp-Method': 'tools/call', 'Mcp-Name': 'delete-item' })
+    const called = Broker.saying(guest(), { method: 'tools/call', name: 'get-item' })
+    assert.deepStrictEqual(
+      [called.get('mcp-method'), called.get('mcp-name')],
+      ['tools/call', 'get-item'],
+    )
+    const listed = Broker.saying(guest(), { method: 'tools/list' })
+    assert.deepStrictEqual(
+      [listed.get('mcp-method'), listed.has('mcp-name')],
+      ['tools/list', false],
+    )
+    const answered = Broker.saying(guest(), {})
+    assert.deepStrictEqual([answered.has('mcp-method'), answered.has('mcp-name')], [false, false])
+    assert.strictEqual(Broker.saying(guest(), undefined).get('mcp-name'), 'delete-item')
+  })
+})
+
 describe('Broker.serveRequests, for a model server whose models are listed', () => {
   const listing: readonly Broker.Grant[] = [
     {
@@ -5651,6 +5807,19 @@ const example: Broker.ProfileGrant = {
         { method: ['DELETE', 'PATCH'], path: 'v1/items/*', set: 'write' },
         { method: '*', path: 'open/**', set: 'open' },
         { graphql: { withheld: ['apiKeys'] }, method: ['POST'], path: 'graphql', set: 'read' },
+        {
+          mcp: { prompts: [], resources: [], tools: ['get-item'] },
+          method: ['POST'],
+          path: 'mcp',
+          set: 'read',
+        },
+        {
+          mcp: { prompts: ['plan'], resources: ['file:///notes'], tools: ['add-item'] },
+          method: ['POST'],
+          path: 'mcp',
+          set: 'write',
+        },
+        { method: ['DELETE', 'GET'], path: 'mcp', set: 'read' },
       ],
       deny: [{ method: '*', path: 'v1/items/*/keys/**' }],
       send: 'bearer',
@@ -5697,8 +5866,8 @@ describe('Broker.parseGrants, for a profile grant', () => {
     assert.include(message(grantJson({ ask: ['read'] })), 'sets ask')
     assert.include(message(grantJson({}, { cache: 'none' })), 'sets cache')
     assert.include(
-      message(grantJson({}, { allow: [{ mcp: {}, method: ['GET'], path: 'v1', set: 'r' }] })),
-      'sets mcp',
+      message(grantJson({}, { allow: [{ cache: {}, method: ['GET'], path: 'v1', set: 'r' }] })),
+      'sets cache',
     )
     assert.include(
       message(grantJson({}, { deny: [{ method: ['GET'], path: 'v1', set: 'read' }] })),
@@ -6078,6 +6247,38 @@ describe('Broker.decideAddressed, for a profile grant', () => {
     )
   })
 
+  it('carries every set’s MCP rule at an endpoint, and reads nothing but a POST', () => {
+    const post = addressed('POST', 'https://api.example.com/mcp?x=1')
+    assert.deepStrictEqual(
+      post._tag === 'Profile' ? [post.upstream, post.mcp, post.set] : post._tag,
+      [
+        'https://api.example.com/mcp?x=1',
+        [
+          {
+            names: { prompts: [], resources: [], tools: ['get-item'] },
+            rule: 'POST mcp',
+            set: 'read',
+          },
+          {
+            names: { prompts: ['plan'], resources: ['file:///notes'], tools: ['add-item'] },
+            rule: 'POST mcp',
+            set: 'write',
+          },
+        ],
+        'read',
+      ],
+    )
+    for (const method of ['GET', 'DELETE']) {
+      const other = addressed(method, 'https://api.example.com/mcp')
+      assert.deepStrictEqual(
+        other._tag === 'Profile' ? [other.mcp, other.rule] : other._tag,
+        [undefined, 'DELETE,GET mcp'],
+        method,
+      )
+    }
+    assert.strictEqual(outcome(addressed('PUT', 'https://api.example.com/mcp')), 405)
+  })
+
   it('answers only the hosts the grant names, and not in the path form', () => {
     assert.strictEqual(outcome(addressed('GET', 'https://www.example.com/v1/items')), 421)
     assert.deepStrictEqual(Broker.tlsNames(exampleGrants), [
@@ -6230,6 +6431,145 @@ describe('Broker.serveTls, for a profile grant', () => {
       assert.strictEqual((await server.fetch(graphql('mutation { a }'))).status, 403)
       assert.strictEqual(sent.length, 1)
     }))
+
+  /** A POST to the example's MCP endpoint, of `body`, with `headers` over a JSON type. */
+  const mcp = (body: string, headers: Record<string, string> = {}) =>
+    new Request('https://api.example.com/mcp', {
+      body,
+      headers: { 'Content-Type': 'application/json', ...headers },
+      method: 'POST',
+    })
+  const toolCall = (name: string, id: number | string = 1, more = '') =>
+    `{"jsonrpc":"2.0","id":${JSON.stringify(id)},"method":"tools/call","params":{"name":${JSON.stringify(name)}${more}}}`
+
+  it('sends a call to a listed tool as it came, under the headers its body says', () =>
+    servingTls(upstream(), async server => {
+      sent.length = 0
+      const body = toolCall('get-item', 1, ',"arguments":{"id":12345678901234567890,"a":"\\u00e9"}')
+      const answered = await server.fetch(
+        mcp(body, { 'Mcp-Method': 'tools/list', 'Mcp-Name': 'add-item', 'Mcp-Param-Id': '7' }),
+      )
+      assert.strictEqual(answered.status, 200)
+      assert.strictEqual(sent[0]?.url, 'https://api.example.com/mcp')
+      assert.strictEqual(sent[0]?.body, body)
+      const headers = new Headers(sent[0]?.init.headers)
+      assert.deepStrictEqual(
+        ['authorization', 'mcp-method', 'mcp-name', 'mcp-param-id'].map(name => headers.get(name)),
+        ['Bearer k-real', 'tools/call', 'get-item', '7'],
+      )
+    }))
+
+  it('answers a call to a tool no rule lists as the server would, sending nothing', () =>
+    servingTls(upstream(), async server => {
+      sent.length = 0
+      const refused = await server.fetch(
+        mcp(toolCall('delete-item', 'x'), { 'Mcp-Name': 'get-item' }),
+      )
+      assert.strictEqual(refused.status, 200)
+      assert.strictEqual(refused.headers.get('Content-Type'), 'application/json')
+      assert.deepStrictEqual(await refused.json(), {
+        error: {
+          code: -32602,
+          message: 'broker: this VM\'s policy does not allow the tool "delete-item"',
+        },
+        id: 'x',
+        jsonrpc: '2.0',
+      })
+      const unknown = await server.fetch(mcp(toolCall('x', 2).replace('tools/call', 'tools/run')))
+      assert.deepStrictEqual(await unknown.json(), {
+        error: {
+          code: -32601,
+          message: 'broker: this VM\'s policy does not allow the MCP method "tools/run"',
+        },
+        id: 2,
+        jsonrpc: '2.0',
+      })
+      assert.strictEqual(sent.length, 0)
+    }))
+
+  it('refuses over HTTP what is not one MCP message it can read', () =>
+    servingTls(upstream(), async server => {
+      sent.length = 0
+      const status = async (request: Request) => (await server.fetch(request)).status
+      assert.strictEqual(await status(mcp(`[${toolCall('get-item')}]`)), 400)
+      assert.strictEqual(await status(mcp('not json')), 400)
+      assert.strictEqual(
+        await status(mcp(toolCall('get-item'), { 'Content-Type': 'text/plain' })),
+        415,
+      )
+      assert.strictEqual(
+        await status(mcp(toolCall('get-item'), { 'Content-Encoding': 'gzip' })),
+        415,
+      )
+      const over = toolCall(
+        'get-item',
+        1,
+        `,"arguments":{"a":"${'x'.repeat(Broker.mcpBodyLimit)}"}`,
+      )
+      assert.strictEqual(await status(mcp(over)), 413)
+      assert.strictEqual(sent.length, 0)
+    }))
+
+  it('passes a response and a notification, and a GET and a DELETE unread', () =>
+    servingTls(upstream(), async server => {
+      sent.length = 0
+      const response = '{"jsonrpc":"2.0","id":3,"result":{}}'
+      assert.strictEqual((await server.fetch(mcp(response, { 'Mcp-Method': 'x' }))).status, 200)
+      const notification = '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+      assert.strictEqual((await server.fetch(mcp(notification))).status, 200)
+      for (const method of ['GET', 'DELETE']) {
+        const request = new Request('https://api.example.com/mcp', {
+          headers: { 'Mcp-Session-Id': 's' },
+          method,
+        })
+        assert.strictEqual((await server.fetch(request)).status, 200, method)
+      }
+      assert.deepStrictEqual(
+        sent.map(({ body, init }) => [
+          init.method,
+          body,
+          new Headers(init.headers).get('mcp-method'),
+        ]),
+        [
+          ['POST', response, null],
+          ['POST', notification, 'notifications/initialized'],
+          ['GET', undefined, null],
+          ['DELETE', undefined, null],
+        ],
+      )
+    }))
+
+  it('logs the set whose MCP rule allowed a call, and the tool a refused one named', () =>
+    auditing(audited =>
+      servingTls(upstream(), async server => {
+        await server.fetch(mcp(toolCall('add-item')))
+        await server.fetch(mcp(toolCall('delete-item')))
+        assert.deepStrictEqual(untimed(audited, 'allow'), [
+          {
+            credential: 'EXAMPLE_KEY',
+            event: 'allow',
+            host: 'api.example.com',
+            id: 1,
+            mcp: 'tools/call',
+            name: 'add-item',
+            profile: 'example',
+            rule: 'POST mcp',
+            set: 'write',
+          },
+        ])
+        assert.deepStrictEqual(untimed(audited, 'deny'), [
+          {
+            event: 'deny',
+            host: 'api.example.com',
+            id: 2,
+            mcp: 'tools/call',
+            name: 'delete-item',
+            reason: 'this VM\'s policy does not allow the tool "delete-item"',
+            status: 200,
+          },
+        ])
+      }),
+    ))
 
   it('logs the profile, the set and the rule that allowed a request', () =>
     auditing(audited =>

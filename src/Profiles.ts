@@ -34,6 +34,7 @@ import {
   isProfileNameForm,
   isSend,
   namesRepo,
+  readMcpNames,
   repoSegment,
   rulePathProblem,
   ruleMethods,
@@ -109,14 +110,15 @@ const readRule = (
   }
   for (const key of Object.keys(rule)) {
     if (key === 'method' || key === 'path') continue
-    if ((key === 'graphql' || key === 'length') && allowed) continue
+    const option = key === 'graphql' || key === 'length' || key === 'mcp'
+    if (option && allowed) continue
     return Result.fail(
-      key === 'graphql' || key === 'length'
-        ? `${where}: \`${key}\` ${key === 'graphql' ? 'reads a body' : 'sends a body'} a set allows, so it has no place in a \`deny\` rule, which refuses whatever it matches.`
-        : `${where}: \`${key}\` is not a rule's field. A rule takes \`method\` and \`path\`${allowed ? ', `graphql` for a GraphQL request, `length = "kept"` for an upload, or `git` alone' : ''}.`,
+      option
+        ? `${where}: \`${key}\` ${key === 'length' ? 'sends a body' : 'reads a body'} a set allows, so it has no place in a \`deny\` rule, which refuses whatever it matches.`
+        : `${where}: \`${key}\` is not a rule's field. A rule takes \`method\` and \`path\`${allowed ? ', `graphql` for a GraphQL request, `mcp` for an MCP server’s endpoint, `length = "kept"` for an upload, or `git` alone' : ''}.`,
     )
   }
-  const { graphql, length, method, path } = rule
+  const { graphql, length, mcp, method, path } = rule
   if (typeof path !== 'string') {
     return Result.fail(
       `${where}: a rule's \`path\` is a string of segments, as in "v2/pods/*", or "" for the host's root.`,
@@ -159,6 +161,30 @@ const readRule = (
     )
   }
   const kept = length === undefined ? {} : { length: 'kept' as const }
+  if (mcp !== undefined) {
+    if (graphql !== undefined || length !== undefined) {
+      return Result.fail(
+        `${where}: the MCP rule at ${JSON.stringify(path)} reads its body and sends it as it came, so it takes no \`graphql\` and no \`length\`.`,
+      )
+    }
+    const names = readMcpNames(mcp)
+    if (names === undefined) {
+      return Result.fail(
+        `${where}: \`mcp\` at ${JSON.stringify(path)} is \`{ tools = [ … ]; }\`, the tools a call may name, with \`prompts\` and \`resources\` beside it if it likes, each a list of names, a resource's its URI.`,
+      )
+    }
+    if (methods === '*' || methods.length !== 1 || methods[0] !== 'POST') {
+      return Result.fail(
+        `${where}: the MCP rule at ${JSON.stringify(path)} reads a message's body, so its \`method\` is "POST" alone. A rule of its own allows a GET or a DELETE at the endpoint.`,
+      )
+    }
+    if (path.split('/').includes(repoSegment)) {
+      return Result.fail(
+        `${where}: the MCP rule at ${JSON.stringify(path)} names \`{repo}\`, and an MCP server's endpoint is one path, not a repository's.`,
+      )
+    }
+    return Result.succeed({ mcp: names, method: methods, path })
+  }
   if (graphql === undefined) return Result.succeed({ ...kept, method: methods, path })
   if (length !== undefined) {
     return Result.fail(

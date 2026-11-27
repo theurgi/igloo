@@ -12,8 +12,8 @@
  * repository is in its paths, and the rules of the sets a credential chose
  * there, for the whole account or per repository, which this file reads and
  * never runs (`ProfileGrant`). What is code is what many services share: git's
- * smart HTTP (`gitReader`), GraphQL's reader (`graphqlQuery`), and the
- * repository slot (`grantedRepo`); and one exception named for whose behaviour
+ * smart HTTP (`gitReader`), GraphQL's reader (`graphqlQuery`), MCP's
+ * (`mcpMessage`), and the repository slot (`grantedRepo`); and one exception named for whose behaviour
  * it is, GitHub's page links (`pagesOf`). Beside them, a `model-server` grant
  * calls a model server on this host's loopback, at a port the grant names. In
  * each case the upstream request is *constructed* — from the grant's own copy
@@ -29,19 +29,22 @@
  * was addressed to as well, which stands as the path's first segment; a
  * profile's hosts are answered by name alone. Its body is streamed upstream as
  * it arrives and never read: what a service does with it, the tools a provider
- * runs on a model's behalf included, is the service's. Two bodies are read: a
- * GraphQL request at a rule with GraphQL's reader, where a query and a
+ * runs on a model's behalf included, is the service's. Three bodies are read:
+ * a GraphQL request at a rule with GraphQL's reader, where a query and a
  * mutation share a path, so only the body can say which it is
- * (`graphqlQuery`); and a call to a model server whose grant lists its
- * models, which names the model the server loads only in its body
+ * (`graphqlQuery`); a message to an MCP server's endpoint at a rule with
+ * MCP's reader, where every tool is called at one path, so only the body can
+ * say which (`mcpMessage`); and a call to a model server whose grant lists
+ * its models, which names the model the server loads only in its body
  * (`modelCall`).
  *
  * No other body's size is limited. A body is streamed, so the broker holds
  * little of it at once however large it is, and the upstream's own limit is
  * the one that applies: a service's refusal reaches the guest as the service
  * gave it. A body that never ends is ended by `headerTimeoutMs`, or by an
- * upstream that answers before it has all of it. The two bodies read are held
- * whole, and so are held to `graphqlBodyLimit` and `modelBodyLimit`.
+ * upstream that answers before it has all of it. The three bodies read are held
+ * whole, and so are held to `graphqlBodyLimit`, `mcpBodyLimit` and
+ * `modelBodyLimit`.
  *
  * Deliberately free of dependencies. It is packaged from this file alone, so its
  * closure is the runtime and nothing else, and a compromise reaches no library
@@ -53,7 +56,7 @@
  * error. Names are, because a name is what an operator needs to see.
  */
 
-import { isUtf8 } from 'node:buffer'
+import { Buffer, isUtf8 } from 'node:buffer'
 import { createSocket } from 'node:dgram'
 import { lstatSync, readdirSync, readFileSync, unlinkSync } from 'node:fs'
 
@@ -119,14 +122,57 @@ export const repoSegment = '{repo}'
  *
  * `graphql` makes it a GraphQL request's rule: the body is read, and sent only
  * if it holds queries alone and names no field in `withheld` (`graphqlQuery`).
+ * `mcp` makes it the rule of an MCP server's endpoint: the body is read, and
+ * sent only if it is one message that the rule's names allow (`mcpMessage`).
  * `length: 'kept'` sends a body with the length the guest stated and holds it
  * to that (`uploadLength`), for a service that takes an upload only with one.
  */
 export interface PathRule {
   readonly graphql?: { readonly withheld: readonly string[] }
   readonly length?: 'kept'
+  readonly mcp?: McpNames
   readonly method: '*' | readonly string[]
   readonly path: string
+}
+
+/**
+ * What an MCP rule lets a message name, each compared exactly with what the
+ * message says: the tools it may call and the prompts it may get, by name,
+ * and the resources it may read, by URI.
+ */
+export interface McpNames {
+  readonly prompts: readonly string[]
+  readonly resources: readonly string[]
+  readonly tools: readonly string[]
+}
+
+/** The lists an MCP rule may set, of which `tools` is the one it must. */
+const mcpLists: ReadonlySet<string> = new Set(['prompts', 'resources', 'tools'])
+
+/** One of an MCP rule's lists, each name once, or `undefined` if it is not one; `[]` if unset. */
+const mcpList = (value: unknown): readonly string[] | undefined =>
+  value === undefined
+    ? []
+    : Array.isArray(value) && value.every(name => typeof name === 'string' && name !== '')
+      ? [...new Set(value as readonly string[])]
+      : undefined
+
+/**
+ * An MCP rule's names, read from the `mcp` a rule sets, or `undefined` for a
+ * value that is not one: an object of `tools` and, if it likes, `prompts`
+ * and `resources`, each a list of non-empty strings.
+ */
+export const readMcpNames = (raw: unknown): McpNames | undefined => {
+  if (!isObject(raw) || Array.isArray(raw)) return undefined
+  if (Object.keys(raw).some(key => !mcpLists.has(key)) || raw['tools'] === undefined) {
+    return undefined
+  }
+  const prompts = mcpList(raw['prompts'])
+  const resources = mcpList(raw['resources'])
+  const tools = mcpList(raw['tools'])
+  return prompts === undefined || resources === undefined || tools === undefined
+    ? undefined
+    : { prompts, resources, tools }
 }
 
 /**
@@ -353,7 +399,7 @@ const readRule = (
 ): { readonly rule: ChosenRule | PathRule } | { readonly message: string } => {
   if (!isObject(raw) || Array.isArray(raw)) return { message: 'a rule is an object' }
   const fields = new Set(
-    chosen ? ['git', 'graphql', 'length', 'method', 'path', 'set'] : ['method', 'path'],
+    chosen ? ['git', 'graphql', 'length', 'mcp', 'method', 'path', 'set'] : ['method', 'path'],
   )
   const unread = Object.keys(raw).find(key => !fields.has(key))
   if (unread !== undefined) {
@@ -361,7 +407,7 @@ const readRule = (
       message: `a${chosen ? 'n allow' : ' deny'} rule sets ${unread}, which this broker does not read`,
     }
   }
-  const { git, graphql, length, method, path, set } = raw
+  const { git, graphql, length, mcp, method, path, set } = raw
   const named = (rule: Rule): { readonly rule: ChosenRule } | { readonly message: string } =>
     typeof set === 'string' && isProfileNameForm(set)
       ? { rule: { ...rule, set } }
@@ -429,9 +475,32 @@ const readRule = (
       message: `the GraphQL rule at ${JSON.stringify(path)} sends the body it wrote, so no length the guest stated`,
     }
   }
+  let names: McpNames | undefined
+  if (mcp !== undefined) {
+    if (methods === '*' || methods.length !== 1 || methods[0] !== 'POST') {
+      return { message: `the MCP rule at ${JSON.stringify(path)} is for POST alone` }
+    }
+    if (reader !== undefined || length !== undefined) {
+      return {
+        message: `the MCP rule at ${JSON.stringify(path)} reads its body, so it takes no graphql and no length`,
+      }
+    }
+    if (path.split('/').includes(repoSegment)) {
+      return {
+        message: `the MCP rule at ${JSON.stringify(path)} is one endpoint, not a repository's`,
+      }
+    }
+    names = readMcpNames(mcp)
+    if (names === undefined) {
+      return {
+        message: `the MCP rule at ${JSON.stringify(path)} takes tools, and prompts and resources if it likes, each a list of names, and nothing else`,
+      }
+    }
+  }
   const rule: PathRule = {
     ...(reader === undefined ? {} : { graphql: reader }),
     ...(length === undefined ? {} : { length }),
+    ...(names === undefined ? {} : { mcp: names }),
     method: methods,
     path,
   }
@@ -642,6 +711,13 @@ export type AnonymousOperation = FetchOperation | 'read'
 
 export type Operation = AnonymousOperation | GitOperation | ModelServerOperation
 
+/** An MCP rule a request matched: what it lets a message name, its set, and it as text. */
+export interface McpChoice {
+  readonly names: McpNames
+  readonly rule: string
+  readonly set: string
+}
+
 /**
  * Where a request is going, once it is known to be one this broker serves.
  *
@@ -675,6 +751,12 @@ export type Decision =
       readonly host: string
       /** Set for a rule that sends a body with the length the guest stated (`uploadLength`). */
       readonly length?: 'kept'
+      /**
+       * Set for a request at an MCP endpoint: every MCP rule the request
+       * matched, of whichever set, since the body alone says which one allows
+       * it. `rule` and `set` are the first's until the body is read.
+       */
+      readonly mcp?: readonly McpChoice[]
       /** Set at a host whose page links are put back under `repo` (`pagesOf`). */
       readonly pages?: 'github'
       readonly profile: string
@@ -1071,7 +1153,10 @@ const routeProfile = (
     },
   )
   const matching = named.filter(({ rule }) => rule.method === '*' || rule.method.includes(method))
-  const chosen = matching.find(({ rule }) => rule.graphql === undefined) ?? matching[0]
+  // A rule that reads no body allows more than one that does, so it is the
+  // one taken where both match.
+  const chosen =
+    matching.find(({ rule }) => rule.graphql === undefined && rule.mcp === undefined) ?? matching[0]
   if (chosen === undefined) {
     // A path a chosen rule names, by other methods: a `*` rule would have
     // matched any.
@@ -1107,12 +1192,21 @@ const routeProfile = (
           ...rest.slice(repo.start + width),
         ]
   const filter = rule.graphql === undefined ? new URLSearchParams(query).toString() : ''
+  // An MCP endpoint's rules in every set are one list of what a message may
+  // name: a tool one set allows and another doesn't is allowed.
+  const mcp =
+    rule.mcp === undefined
+      ? undefined
+      : matching.flatMap(({ rule: each }) =>
+          each.mcp === undefined ? [] : [{ names: each.mcp, rule: ruleText(each), set: each.set }],
+        )
   return {
     _tag: 'Profile',
     credential: grant.credential,
     ...(rule.graphql === undefined ? {} : { graphql: rule.graphql }),
     host: lowered,
     ...(rule.length === undefined ? {} : { length: rule.length }),
+    ...(mcp === undefined ? {} : { mcp }),
     ...(at.pages === undefined || repo === undefined ? {} : { pages: at.pages }),
     profile: grant.profile,
     ...(at.redirects === undefined ? {} : { redirects: at.redirects }),
@@ -1863,28 +1957,31 @@ const strictText = (bytes: Uint8Array): string | undefined => {
  * UTF-8, which says what the body is held to anyway. A body is sent as it
  * came, and a server reads an encoded one as it came too, so a call with any
  * `Content-Encoding` would be read here as one thing and there as another.
+ *
+ * An MCP message is held to the same, as `what`, for the same reasons: it is
+ * read as JSON and sent as it came.
  */
-export const modelCallHeaders = (guest: Headers): string | undefined => {
-  if (guest.has('content-encoding')) {
-    return 'a call to a model server whose models are listed is sent with no Content-Encoding'
-  }
+export const modelCallHeaders = (
+  guest: Headers,
+  what = 'a call to a model server whose models are listed',
+): string | undefined => {
+  if (guest.has('content-encoding')) return `${what} is sent with no Content-Encoding`
   const [type, ...parameters] = (guest.get('content-type') ?? '').split(';')
   if (
     type?.trim() !== 'application/json' ||
     parameters.length > 1 ||
     !parameters.every(parameter => /^charset=(?:utf-8|"utf-8")$/i.test(parameter.trim()))
   ) {
-    return 'a call to a model server whose models are listed is sent as application/json'
+    return `${what} is sent as application/json`
   }
   return undefined
 }
 
 /**
- * A model name as a refusal and the log give it: whole, but for one so long
- * that only its start says anything.
+ * A name a request gave, a model or a tool, as a refusal and the log give
+ * it: whole, but for one so long that only its start says anything.
  */
-const shownModel = (model: string): string =>
-  model.length > 200 ? `${model.slice(0, 200)}…` : model
+const shown = (name: string): string => (name.length > 200 ? `${name.slice(0, 200)}…` : name)
 
 /**
  * The model a call names, if it is one of `models`, or why the call is
@@ -1926,12 +2023,208 @@ export const modelCall = (
   }
   if (!models.includes(model)) {
     return {
-      model: shownModel(model),
-      reason: `this VM's policy does not list ${JSON.stringify(shownModel(model))} among the server's models, which are ${models.join(', ')}`,
+      model: shown(model),
+      reason: `this VM's policy does not list ${JSON.stringify(shown(model))} among the server's models, which are ${models.join(', ')}`,
       status: 403,
     }
   }
   return { model }
+}
+
+/**
+ * The most of an MCP message's body that is read, in bytes: more than a
+ * GraphQL request's, since a tool's arguments can carry a file.
+ */
+export const mcpBodyLimit = 4 * 1024 * 1024
+
+/**
+ * The requests at an MCP endpoint that name nothing a rule lists, and pass
+ * whatever its lists hold: those that set up a connection, list or describe
+ * what the server has, or carry on a call already allowed, a task's.
+ * Methods of every revision since 2025-03-26 are here, since a server
+ * answers the ones of its own.
+ */
+const mcpPassed: ReadonlySet<string> = new Set([
+  'completion/complete',
+  'initialize',
+  'logging/setLevel',
+  'ping',
+  'prompts/list',
+  'resources/list',
+  'resources/subscribe',
+  'resources/templates/list',
+  'resources/unsubscribe',
+  'server/discover',
+  'subscriptions/listen',
+  'tasks/cancel',
+  'tasks/get',
+  'tasks/list',
+  'tasks/result',
+  'tasks/update',
+  'tools/list',
+])
+
+/**
+ * The requests whose `params` name something a rule lists: the list each is
+ * held to, the field of `params` holding the name, and what the name is of.
+ */
+const mcpNamed: ReadonlyMap<
+  string,
+  { readonly field: string; readonly list: keyof McpNames; readonly what: string }
+> = new Map([
+  ['prompts/get', { field: 'name', list: 'prompts', what: 'prompt' }],
+  ['resources/read', { field: 'uri', list: 'resources', what: 'resource' }],
+  ['tools/call', { field: 'name', list: 'tools', what: 'tool' }],
+])
+
+/**
+ * What the reader made of an MCP message: one that isn't a single message
+ * it can read, refused over HTTP; a request it refuses, answered as the
+ * server answers one it won't run, with a JSON-RPC error carrying the
+ * request's `id` and `code`; or one it allows, with the rule that does, and
+ * the method and name the headers say.
+ */
+export type McpVerdict =
+  | { readonly reason: string; readonly status: 400 }
+  | {
+      readonly code: -32601 | -32602
+      readonly id: number | string
+      readonly method: string
+      readonly name?: string
+      readonly reason: string
+    }
+  | { readonly choice: McpChoice; readonly method?: string; readonly name?: string }
+
+/**
+ * Whether one MCP message may be sent, by `choices`, the MCP rules its
+ * request matched.
+ *
+ * The body is sent as it came, as a model call's is, so nothing here admits
+ * a text two parsers could read differently (`scanCall`), and the one object
+ * left is read with `JSON.parse`. A batch is refused: no revision since
+ * 2025-06-18 sends one.
+ *
+ * A JSON-RPC response or notification is passed: a response answers a
+ * request the server sent, and a notification, a method under
+ * `notifications/` with no `id`, runs nothing. A request is passed if its
+ * method is one `mcpPassed` holds, or if it is one `mcpNamed` holds and its
+ * name is one a choice's list holds, compared exactly; the first such choice
+ * is the one that allows it. Any other method is refused.
+ */
+export const mcpMessage = (raw: Uint8Array, choices: readonly McpChoice[]): McpVerdict => {
+  const [first] = choices
+  if (first === undefined) return { reason: 'no MCP rule allows a message here', status: 400 }
+  const scanned = scanCall(raw)
+  if (scanned === 'invalid') {
+    return { reason: 'an MCP message is sent as JSON in UTF-8, and this one is not', status: 400 }
+  }
+  if (scanned === 'not-object') {
+    return {
+      reason: 'an MCP message is one JSON-RPC object, and a batch is not sent',
+      status: 400,
+    }
+  }
+  if (scanned === 'repeated') {
+    return {
+      reason:
+        'an MCP message names a key twice in one object, which two parsers can read differently',
+      status: 400,
+    }
+  }
+  const parsed: unknown = JSON.parse(utf8.decode(raw))
+  // An object, which `scanCall` has seen to.
+  const message = isObject(parsed) ? parsed : {}
+  const has = (key: string): boolean => Object.hasOwn(message, key)
+  const { id, method, params } = message
+  if (message['jsonrpc'] !== '2.0') {
+    return { reason: 'an MCP message is JSON-RPC 2.0, and says so in jsonrpc', status: 400 }
+  }
+  if (!has('method')) {
+    return has('id') && has('result') !== has('error')
+      ? { choice: first }
+      : {
+          reason:
+            'an MCP message is a request, a notification, or a response with one result or error',
+          status: 400,
+        }
+  }
+  if (typeof method !== 'string' || has('result') || has('error')) {
+    return {
+      reason: 'an MCP request or notification names its method as a string, and has no result',
+      status: 400,
+    }
+  }
+  if (!has('id')) {
+    return method.startsWith('notifications/')
+      ? { choice: first, method }
+      : {
+          reason: `an MCP notification's method is under notifications/, and ${JSON.stringify(shown(method))} is not`,
+          status: 400,
+        }
+  }
+  if (typeof id !== 'string' && typeof id !== 'number') {
+    return { reason: "an MCP request's id is a string or a number", status: 400 }
+  }
+  if (mcpPassed.has(method)) return { choice: first, method }
+  const named = mcpNamed.get(method)
+  if (named === undefined) {
+    return {
+      code: -32601,
+      id,
+      method,
+      reason: `this VM's policy does not allow the MCP method ${JSON.stringify(shown(method))}`,
+    }
+  }
+  const name = isObject(params) && !Array.isArray(params) ? params[named.field] : undefined
+  if (typeof name !== 'string') {
+    return {
+      code: -32602,
+      id,
+      method,
+      reason: `${method} names its ${named.what} in params.${named.field}, as a string, and this one does not`,
+    }
+  }
+  const choice = choices.find(({ names }) => names[named.list].includes(name))
+  if (choice === undefined) {
+    return {
+      code: -32602,
+      id,
+      method,
+      name: shown(name),
+      reason: `this VM's policy does not allow the ${named.what} ${JSON.stringify(shown(name))}`,
+    }
+  }
+  return { choice, method, name }
+}
+
+/**
+ * A value as an `Mcp-Name` header carries it: as it is if it is visible
+ * ASCII and spaces, starting and ending with neither, and not in the form
+ * of the encoding below; otherwise `=?base64?…?=` around its UTF-8 in
+ * Base64, as the Streamable HTTP transport writes it.
+ */
+export const mcpHeaderValue = (value: string): string =>
+  /^[\x21-\x7e](?:[\x20-\x7e]*[\x21-\x7e])?$/.test(value) && !/^=\?base64\?.*\?=$/.test(value)
+    ? value
+    : `=?base64?${Buffer.from(value, 'utf8').toString('base64')}?=`
+
+/**
+ * `headers` with `Mcp-Method` and `Mcp-Name` set from what an MCP message
+ * `said`, the method and name the reader read from its body, and dropped
+ * where it said none; or as they were, for a request that isn't one. So a
+ * server or anything before it that goes by the headers goes by what was
+ * allowed.
+ */
+export const saying = (
+  headers: Headers,
+  said: { readonly method?: string; readonly name?: string } | undefined,
+): Headers => {
+  if (said === undefined) return headers
+  if (said.method === undefined) headers.delete('mcp-method')
+  else headers.set('Mcp-Method', said.method)
+  if (said.name === undefined) headers.delete('mcp-name')
+  else headers.set('Mcp-Name', mcpHeaderValue(said.name))
+  return headers
 }
 
 /** One UTF-8 decoder, for a string already known to be well formed. */
@@ -3128,6 +3421,19 @@ const refusal = (status: number, message: string, json = false): Response =>
 const transient = (status: number, message: string, json: boolean): Response =>
   answer(status, message, json, {})
 
+/**
+ * A request an MCP endpoint's rules refuse, answered as a server answers one
+ * it won't run: a JSON-RPC error carrying the request's `id`, which a client
+ * shows as the call failing. Sent with a 200, since a client may read a 4xx
+ * from an MCP endpoint as a server of an older revision, or as a call to sign
+ * in.
+ */
+const mcpRefusal = (id: number | string, code: number, message: string): Response =>
+  new Response(
+    `${JSON.stringify({ error: { code, message: `broker: ${message}` }, id, jsonrpc: '2.0' })}\n`,
+    { headers: { 'Content-Type': 'application/json' }, status: 200 },
+  )
+
 /** How a constructed request is sent: `fetch`, unless a test stands in for the provider. */
 type Upstream = (url: string, init: RequestInit) => Promise<Response>
 
@@ -3226,6 +3532,48 @@ const handle = async (
     model = call.model
   }
 
+  // A message to an MCP endpoint is read whole, and sent as it came only if
+  // the rules it matched allow it, from whichever set's rule does, under the
+  // method and name it says rather than the ones its headers might.
+  let said: Extract<McpVerdict, { readonly choice: McpChoice }> | undefined
+  if (decision._tag === 'Profile' && decision.mcp !== undefined) {
+    const refused = modelCallHeaders(request.headers, 'an MCP message')
+    const whole =
+      refused === undefined
+        ? await readWhole(request.body, mcpBodyLimit, request.headers)
+        : undefined
+    const verdict: McpVerdict | { readonly reason: string; readonly status: number } =
+      refused !== undefined
+        ? { reason: refused, status: 415 }
+        : whole === undefined
+          ? { reason: `an MCP message is at most ${String(mcpBodyLimit)} bytes`, status: 413 }
+          : mcpMessage(whole, decision.mcp)
+    if ('status' in verdict) {
+      audit({
+        event: 'deny',
+        host: decision.host,
+        id,
+        reason: verdict.reason,
+        status: verdict.status,
+      })
+      return refusal(verdict.status, verdict.reason, json)
+    }
+    if ('code' in verdict) {
+      audit({
+        event: 'deny',
+        host: decision.host,
+        id,
+        mcp: verdict.method,
+        ...(verdict.name === undefined ? {} : { name: verdict.name }),
+        reason: verdict.reason,
+        status: 200,
+      })
+      return mcpRefusal(verdict.id, verdict.code, verdict.reason)
+    }
+    held = whole
+    said = verdict
+  }
+
   // Which credential pays and what it was expected to cover, both settled by
   // the path: a request under a repository is for that one.
   const scope = decision._tag === 'Profile' ? decision.repo : undefined
@@ -3243,9 +3591,11 @@ const handle = async (
       ? {
           // What git asked for, which its rule alone does not say.
           ...(decision.git === undefined ? {} : { operation: decision.git }),
+          ...(said?.method === undefined ? {} : { mcp: said.method }),
+          ...(said?.name === undefined ? {} : { name: said.name }),
           profile: decision.profile,
-          rule: decision.rule,
-          set: decision.set,
+          rule: said?.choice.rule ?? decision.rule,
+          set: said?.choice.set ?? decision.set,
         }
       : { operation: decision.operation }),
     ...(model === undefined ? {} : { model }),
@@ -3276,7 +3626,7 @@ const handle = async (
     upstream = await send(decision.upstream, {
       // Streamed as it arrives, never read, and held to its length where it is
       // sent with one — but for a GraphQL request's, read and written above,
-      // and a model call's that was read above.
+      // and a model call's or an MCP message's that was read above.
       body: !carriesBody(decision)
         ? undefined
         : (written ??
@@ -3284,7 +3634,7 @@ const handle = async (
           (length === undefined || request.body === null
             ? request.body
             : heldTo(request.body, length))),
-      headers: upstreamHeaders(decision, token, request.headers),
+      headers: saying(upstreamHeaders(decision, token, request.headers), said),
       method: request.method,
       // Never followed. A redirect chosen by the upstream is a destination this
       // grant did not authorize, and following one would send the credential to
