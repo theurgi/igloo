@@ -6937,6 +6937,58 @@ describe('the shipped profiles, against what each serves', () => {
     })
   })
 
+  it('runpod-mcp: each tool by its own set alone, and none runpod leaves out', () => {
+    const profile = shippedProfile('runpod-mcp')
+    /** What a grant choosing `sets` makes of a call to `tool`: its set, or the error's code. */
+    const calling = (sets: readonly string[], tool: string) => {
+      const grant = {
+        credential: 'RUNPOD_API_KEY',
+        ...Profiles.grantOf('runpod-mcp', profile, sets),
+      }
+      const decision = Broker.decideAddressed([grant], 'POST', 'https://mcp.runpod.io/')
+      if (decision._tag !== 'Profile' || decision.mcp === undefined) return decision._tag
+      const body = { id: 1, jsonrpc: '2.0', method: 'tools/call', params: { name: tool } }
+      const verdict = Broker.mcpMessage(
+        new TextEncoder().encode(JSON.stringify(body)),
+        decision.mcp,
+      )
+      return 'choice' in verdict ? verdict.choice.set : 'code' in verdict ? verdict.code : 400
+    }
+    const sets = Object.keys(profile.allow)
+    assert.sameMembers(sets, [
+      'clusters',
+      'feedback',
+      'invoke',
+      'pods',
+      'read',
+      'registries',
+      'secrets',
+      'serverless',
+      'templates',
+      'volumes',
+    ])
+    for (const set of sets) {
+      const rules = profile.allow[set]?.['mcp.runpod.io'] ?? []
+      for (const tool of rules.flatMap(rule => ('mcp' in rule ? (rule.mcp?.tools ?? []) : []))) {
+        assert.strictEqual(calling(sets, tool), set, tool)
+        assert.strictEqual(calling([set], tool), set, tool)
+        const others = sets.filter(each => each !== set)
+        assert.strictEqual(calling(others, tool), -32602, `${tool} without ${set}`)
+      }
+    }
+    for (const tool of [
+      'add-organization-group-member',
+      'create-organization-invite',
+      'update-ssh-keys',
+      'create-tag',
+      'create-cost-center',
+      'create-delegation',
+      'start-pod',
+    ]) {
+      assert.strictEqual(calling(sets, tool), -32602, tool)
+    }
+  })
+
   it('openrouter and anthropic-messages: each endpoint, and nothing else', async () => {
     const grantsOf = [
       shippedGrant('openrouter', 'OPENROUTER_KEY'),

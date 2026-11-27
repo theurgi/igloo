@@ -1623,6 +1623,7 @@ describe('Config.compose, on profiles', () => {
       'openrouter',
       'own',
       'runpod',
+      'runpod-mcp',
     ])
     assert.deepStrictEqual(inProject.get('runpod')?.placeholders, user.placeholders)
     assert.deepStrictEqual(inProject.get('own')?.placeholders, ['OWN_API_KEY'])
