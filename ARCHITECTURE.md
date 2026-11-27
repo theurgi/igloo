@@ -28,7 +28,7 @@ checked there, and a claim here that the code does not bear out is a bug in one 
   and an HTTPS tunnel on another, and constructs every upstream request itself. For the hosts its
   profile grants reach, it answers TLS on a third socket, which the tunnel hands those connections
   to. What a profile grant allows is data it is sent, never code it runs: its code is for protocols,
-  git's smart HTTP and GraphQL, for what a repository is, and for holding a model server to the
+  git's smart HTTP, GraphQL and MCP, for what a repository is, and for holding a model server to the
   models its grant lists. It is packaged from that one file and Bun, and imports nothing: not
   Effect, and nothing else in `src/`.
 - **`igloo-landlock`** (`src/landlock.c`). Runs a command under a Landlock ruleset: TCP connections
@@ -271,51 +271,68 @@ store are as they were.
 
 A request is authorized by its method and its path, with git's `service` parameter for a ref
 advertisement, and by nothing else it carries (`decide`), but for a GraphQL request at a rule with
-GraphQL's reader and a call to a model server whose grant lists its models, below. On the TLS
-listener, the name a request was addressed to is read as well, and only as one of the hosts the
-broker's grants reach: it stands as the path's first segment, and the rest is `decide`'s
-(`decideAddressed`). The upstream URL is built from the grant's own copy of what it allows. For a
-profile grant, a request to one of its hosts, by name alone, that a rule of a chosen set allows and
-no `deny` rule matches, to that host and the request's path (`routeProfile`): a rule is methods and
-a path whose fixed segments are compared as written. A rule naming `{repo}` applies only to a
-repository the grant lists for the rule's set, matched in the form the profile's `repository` gives,
-by its number of segments and ignoring case where the service does, and the upstream names the
-repository as the grant spells it, never as the request did (`grantedRepo`). A rule with git's
-reader serves git's ref advertisement and its two pack endpoints for such a repository, each by the
-method git uses, a push only for a repository listed for `push`, refused at its ref advertisement as
-well as at the push, to `https://<host>/<repository>.git/<endpoint>` (`gitReader`). For a model
-server, a request on loopback, at the port its grant names (`routeModelServer`). Nothing the guest
-sends reaches the upstream URL but a profile request's path and its query: the query rebuilt so that
-each name and value is encoded, and the path's segments as the URL parser left them, with every `.`
-and `..` resolved, so that the path sent is the one the rule was matched against. A GraphQL request
-at a profile's rule goes without its query, since a server may take an operation from it in place of
-the body that was read. A path holding a percent-escape or an empty segment is refused, but for the
-one ending a host's root, and so is a profile request no chosen rule allows or a `deny` rule
-matches: for igloo's `github`, every write past what its sets list, a repository's settings,
-collaborators, webhooks, deploy keys, Actions secrets and variables and runner registration among
-them, and a Codespace made from a pull request, its `deny` rule; for igloo's `runpod`, what reaches
-past what the account runs to who may use it, its organization's members, invitations, groups and
-roles, the account's SSH keys, sign-in attempts, tags, cost centres and ECR delegations. Which sets
-a profile grant holds, for the whole account and for each repository, and so which hosts and rules,
-is the credential's choice, made in policy (`Config.compose`); a set not chosen and a host no chosen
-set reaches never reach the broker (`Profiles.grantOf`). A grant is read strictly: a field the
-broker does not read, a host that is an address or one label, a key sent in a header the broker
-drops, sets or frames a request by, a host two grants name, a rule naming a repository in a grant
-with none or in a `deny` rule, and a repository listing a set none of whose rules names one are
-refused, and the broker does not start (`parseGrants`).
+GraphQL's reader, a message at a rule with MCP's reader, and a call to a model server whose grant
+lists its models, below. On the TLS listener, the name a request was addressed to is read as well,
+and only as one of the hosts the broker's grants reach: it stands as the path's first segment, and
+the rest is `decide`'s (`decideAddressed`). The upstream URL is built from the grant's own copy of
+what it allows. For a profile grant, a request to one of its hosts, by name alone, that a rule of a
+chosen set allows and no `deny` rule matches, to that host and the request's path (`routeProfile`):
+a rule is methods and a path whose fixed segments are compared as written. A rule naming `{repo}`
+applies only to a repository the grant lists for the rule's set, matched in the form the profile's
+`repository` gives, by its number of segments and ignoring case where the service does, and the
+upstream names the repository as the grant spells it, never as the request did (`grantedRepo`). A
+rule with git's reader serves git's ref advertisement and its two pack endpoints for such a
+repository, each by the method git uses, a push only for a repository listed for `push`, refused at
+its ref advertisement as well as at the push, to `https://<host>/<repository>.git/<endpoint>`
+(`gitReader`). For a model server, a request on loopback, at the port its grant names
+(`routeModelServer`). Nothing the guest sends reaches the upstream URL but a profile request's path
+and its query: the query rebuilt so that each name and value is encoded, and the path's segments as
+the URL parser left them, with every `.` and `..` resolved, so that the path sent is the one the
+rule was matched against. A GraphQL request at a profile's rule goes without its query, since a
+server may take an operation from it in place of the body that was read. A path holding a
+percent-escape or an empty segment is refused, but for the one ending a host's root, and so is a
+profile request no chosen rule allows or a `deny` rule matches: for igloo's `github`, every write
+past what its sets list, a repository's settings, collaborators, webhooks, deploy keys, Actions
+secrets and variables and runner registration among them, and a Codespace made from a pull request,
+its `deny` rule; for igloo's `runpod`, what reaches past what the account runs to who may use it,
+its organization's members, invitations, groups and roles, the account's SSH keys, sign-in attempts,
+tags, cost centres and ECR delegations. Which sets a profile grant holds, for the whole account and
+for each repository, and so which hosts and rules, is the credential's choice, made in policy
+(`Config.compose`); a set not chosen and a host no chosen set reaches never reach the broker
+(`Profiles.grantOf`). A grant is read strictly: a field the broker does not read, a host that is an
+address or one label, a key sent in a header the broker drops, sets or frames a request by, a host
+two grants name, a rule naming a repository in a grant with none or in a `deny` rule, and a
+repository listing a set none of whose rules names one are refused, and the broker does not start
+(`parseGrants`).
 
-A GraphQL request at a rule with GraphQL's reader is the one body the broker reads, since a query
-and a mutation share its path, and a mutation can mint the account a key the guest would then hold.
-It is read whole, up to `graphqlBodyLimit`, and sent only if it is one JSON object of `query`,
-`variables` and `operationName` alone, whose document holds queries and fragments and no other
-definition, and names no field in the rule's `withheld`, which return a credential the account holds
+A GraphQL request at a rule with GraphQL's reader is one body the broker reads, since a query and a
+mutation share its path, and a mutation can mint the account a key the guest would then hold. It is
+read whole, up to `graphqlBodyLimit`, and sent only if it is one JSON object of `query`, `variables`
+and `operationName` alone, whose document holds queries and fragments and no other definition, and
+names no field in the rule's `withheld`, which return a credential the account holds
 (`graphqlQuery`, `graphqlRefusal`). The document is read with the GraphQL spec's lexer, so a word in
 a string or a comment decides nothing; where it reads more loosely than the spec, the server refuses
 the document whole. What is sent is the object it read, written again as `application/json`, so a
 second parser reading the text differently cannot matter, and `extensions`, which can carry a
 persisted query, is refused with anything else. A query is trusted to read, as GraphQL defines it.
 
-A call to a model server whose grant lists `models` is the other body the broker reads, since the
+A message to an MCP server's endpoint at a rule with MCP's reader is another, since every tool a
+server has is called by a `POST` to that one path, a payment or a key's creation among them. It is
+read whole, up to `mcpBodyLimit`, held to what a model call's body is held to below
+(`modelCallHeaders`, `scanCall`), and sent as it came only if it is one JSON-RPC 2.0 object, never a
+batch: a response; a notification, under `notifications/`; a request whose method sets up a
+connection, lists or describes, or carries on a task; or a call to a tool, a get of a prompt or a
+read of a resource that one of the endpoint's MCP rules in a chosen set names, compared exactly
+(`mcpMessage`). Any other request is answered as a server answers one it won't run, with a JSON-RPC
+error carrying its `id`, which a client shows as the call failing rather than as a reason to sign
+in. `Mcp-Method` and `Mcp-Name` are set from what the body says and dropped where it says none, so
+nothing that routes by them is told one tool while the body calls another (`saying`,
+`mcpHeaderValue`). A `GET` or a `DELETE` at the endpoint takes a rule of its own and goes unread. A
+tool is named by the server, so one whose single tool takes an action as an argument cannot be
+narrowed. What a tool does, and what its description and results put before the agent, is the
+server's: the reader bounds which of its tools the key is used for, not what the server says.
+
+A call to a model server whose grant lists `models` is the third body the broker reads, since the
 model a server loads, stopping another to do it, is named only in its body. It is read whole, up to
 `modelBodyLimit`, and refused unless its `model` is one the grant lists, compared exactly
 (`modelCall`); and `v1/models` answers with only those, a listing of any other shape refused
@@ -383,10 +400,10 @@ runs: a pod the guest creates reaches whatever its own network does, with whatev
 it.
 
 **Held by:** `broker.ts`: `parseGrants`, `decide`, `decideAddressed`, `routeProfile`, `gitReader`,
-`grantedRepo`, `routeModelServer`, `graphqlQuery`, `graphqlRefusal`, `modelCall`,
-`modelCallHeaders`, `scanCall`, `listedModels`, `upstreamHeaders`, `uploadLength`, `heldTo`,
-`relay`, `responseHeaders`, `pagesOf`, `handle`; `Profiles.grantOf`; `Config.compose`;
-`Systemd.start`.
+`grantedRepo`, `routeModelServer`, `graphqlQuery`, `graphqlRefusal`, `mcpMessage`, `saying`,
+`mcpHeaderValue`, `modelCall`, `modelCallHeaders`, `scanCall`, `listedModels`, `upstreamHeaders`,
+`uploadLength`, `heldTo`, `relay`, `responseHeaders`, `pagesOf`, `handle`; `Profiles.grantOf`;
+`Config.compose`; `Systemd.start`.
 
 ### The tunnel reaches only public addresses, on port 443
 

@@ -275,6 +275,19 @@ igloo's profiles and the user layer's; one a project declares may grant its own 
   fields listed, each one that would return a credential. The request has to be one JSON object of
   `query`, `variables` and `operationName`, at most 256 KiB, and goes as the object the broker read,
   written again as JSON, without the URL's query.
+- **`mcp = { tools = [ … ]; }`** on a `POST` rule makes it an MCP server's endpoint, where every
+  tool is called at one path: the broker reads the body and sends it, as it came, only if it is one
+  JSON-RPC message that calls a tool listed, compared exactly with the name the server gives it.
+  `prompts = [ … ];` and `resources = [ … ];` beside `tools` allow getting a prompt by name and
+  reading a resource by its URI. A response, a notification, and a request that starts a connection,
+  lists, describes or carries on a task pass whatever is listed; any other method is refused. A
+  refused call is answered as the server answers one it won't run, a JSON-RPC error carrying the
+  request's `id`, so the agent sees the tool fail. The message has to be `application/json`, at most
+  4 MiB, one object rather than a batch, and JSON that every parser reads alike: no key twice in one
+  object. `Mcp-Method` and `Mcp-Name` go upstream as the body says, whatever the guest sent. Every
+  set's MCP rules at an endpoint count together, so a tool one set lists is allowed whichever others
+  are chosen. A `GET` or a `DELETE` at the endpoint takes a rule of its own, and goes unread. A
+  server whose one tool takes the action as an argument cannot be narrowed this way.
 - **`length = "kept"`** on a rule sends a body with the `Content-Length` the guest stated, and holds
   it to that, for a service that takes an upload only with its length. Any other body goes in
   chunks.
@@ -397,8 +410,9 @@ no secret.
   each host a project's grant reaches through a profile has to be in `tunnelCeiling`, whichever
   layer defined the profile; igloo's own, as igloo ships them, are exempt.
 - **Name an address, a port or plain HTTP.**
-- **Read a body**, but GraphQL's, or follow a redirect: a redirect is refused, or passed back where
-  a host returns them, and an upstream `401` comes back as the broker's `403` naming the credential.
+- **Read a body**, but GraphQL's and an MCP message's, or follow a redirect: a redirect is refused,
+  or passed back where a host returns them, and an upstream `401` comes back as the broker's `403`
+  naming the credential.
 - **Ask, budget or rate-limit.** A rule allows or denies.
 
 Every profile host is answered by its own name. A client keeps its default address and needs only a
@@ -844,6 +858,12 @@ On every brokered request:
   ([`runpod`](#runpod)).
 - **What a Runpod read returns.** Either API returns what the account holds in plain text,
   environment variables included, to a read the grant allows.
+- **What an MCP server says.** An MCP rule bounds which of a server's tools the key is used for, and
+  so what an agent the server misled can do with it, per project. It cannot stop the server
+  misleading the agent: a tool's description and results go into the model's context, so a server
+  can put instructions there; a server can change what a tool does after the profile listed it; its
+  annotations, `readOnlyHint` and `destructiveHint`, are its own claims, which a profile may be
+  reviewed by and never relies on; and the server sees whatever the agent sends it.
 
 ## Pointing an agent at the broker
 
