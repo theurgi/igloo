@@ -668,6 +668,12 @@ adds a few of its own.
 - **In the guest:** the server's own address, with no header, as
   `claude mcp add --transport http runpod https://mcp.runpod.io/`.
 
+A call to a tool the grant leaves out fails as a tool does, with the broker's reason. A request the
+broker refuses over HTTP, at a path no rule allows or with a key Runpod refuses, comes back as a
+`403`, which Claude Code takes for a server that needs signing in, and offers a sign-in in `/mcp`.
+It cannot complete: the broker refuses the server's `register` and `token` endpoints, so no Runpod
+token reaches the guest that way. Check the server's address and the key instead.
+
 Runpod's guides are read through the `read-guide` tool; as resources, whose URIs change with each
 release of the guides, they are refused. What [`runpod`](#runpod) says of spending, of what a pod
 does and of what the account holds holds here too.
